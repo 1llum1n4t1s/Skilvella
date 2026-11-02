@@ -17,13 +17,7 @@
 
 起動後、[管理画面](http://127.0.0.1:7465/)を開きます。MCPの接続URLは `http://127.0.0.1:7465/mcp` です。
 
-ソースからビルドする場合は、[開発手順](docs/DEVELOPMENT.md)の環境を用意し、リポジトリで実行してください。
-
-```sh
-cargo build --release --locked
-```
-
-Windowsは `target\release\skilvella.exe`、macOS / Linuxは `./target/release/skilvella` を起動し、[管理画面](http://127.0.0.1:7465/)を開きます。実行時のRust・Node.js・Python・外部DBサーバーは不要です。終了は起動したターミナルの `Ctrl+C` です。
+Linux向けなど、ソースからビルドする場合は[開発手順](docs/DEVELOPMENT.md)を参照してください。生成される実行ファイルは、Windowsでは `target\release\skilvella.exe`、macOS / Linuxでは `./target/release/skilvella` です。実行時のRust・Node.js・Python・外部DBサーバーは不要です。終了は起動したターミナルの `Ctrl+C` です。
 
 初回起動では、管理対象フォルダーを自動判定します。既存の `~/.agents/skills`、`$CODEX_HOME/skills`、`~/.codex/skills` の順に確認し、見つからない場合はデータフォルダーの隣に `<データフォルダー名>-skills` を作成します。以前から登録済みのソースがある場合は、その設定を優先して引き継ぎます。
 
@@ -84,4 +78,4 @@ skilvella --help
 
 ライセンスは[MIT](LICENSE)。同梱htmxのライセンスは[こちら](static/htmx-LICENSE.txt)です。
 
-アプリアイコンの透過PNG・ICO・ICNSと各サイズのPNGは [`static/icons`](static/icons) にあります。faviconと管理画面には反映済みです。プロセスや将来のタスクトレイで使用するための素材も同梱しています。
+開発に参加する方は[開発手順](docs/DEVELOPMENT.md)、[設計](DESIGN.md)、[作業規約](AGENTS.md)を参照してください。
