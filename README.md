@@ -9,7 +9,15 @@
 
 ## 起動
 
-現在はソースからビルドします。[開発手順](docs/DEVELOPMENT.md)の環境を用意し、リポジトリで実行してください。
+[GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest)から、お使いのOS向けの配布物を取得して展開してください。
+
+- Windows x64: `Skilvella-windows-x86_64.zip` 内の `skilvella.exe` を起動します。
+- Mac Apple Silicon: `Skilvella-macos-aarch64.tar.gz` を展開し、ターミナルで `./skilvella` を起動します。
+- `SHA256SUMS.txt` に配布物のSHA-256を掲載しています。初回の配布物はコード署名・Macの公証を含みません。
+
+起動後、[管理画面](http://127.0.0.1:7465/)を開きます。MCPの接続URLは `http://127.0.0.1:7465/mcp` です。
+
+ソースからビルドする場合は、[開発手順](docs/DEVELOPMENT.md)の環境を用意し、リポジトリで実行してください。
 
 ```sh
 cargo build --release --locked
