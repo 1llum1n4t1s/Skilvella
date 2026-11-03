@@ -166,7 +166,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         .clone();
     for path in [
         "/sources".to_owned(),
-        "/".into(),
+        "/?repository_source=test&repository=".into(),
         "/skills/new".into(),
         format!("/skills/{skill_id}"),
     ] {
@@ -183,7 +183,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
             "{path}: missing escaped display name"
         );
         assert!(!body.contains(display_name));
-        if path == "/" || path == "/skills/new" {
+        if path.starts_with("/?repository_source=") || path == "/skills/new" {
             assert!(body.contains("value=\"test\""));
         }
     }

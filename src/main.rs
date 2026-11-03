@@ -93,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
         codex_home.as_deref(),
     )?);
     state
-        .run(move |lib| lib.initialize_directory(&home, codex_home.as_deref()))
+        .run_mut(move |lib| lib.initialize_directory(&home, codex_home.as_deref()))
         .await
         .context("Could not initialize the skill directory")?;
     let port = listener.local_addr()?.port();

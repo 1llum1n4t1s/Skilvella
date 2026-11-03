@@ -59,7 +59,7 @@ pub fn start(state: AppState) -> tokio::task::JoinHandle<()> {
                 // 再登録後に走査する。走査中の変更通知は次の走査へ残す。
                 tokio::time::sleep(Duration::from_millis(450)).await;
                 while rx.try_recv().is_ok() {}
-                if let Err(error) = state.run(|lib| lib.scan()).await {
+                if let Err(error) = state.run_mut(|lib| lib.scan()).await {
                     eprintln!("Automatic scan failed: {error}");
                 }
             }

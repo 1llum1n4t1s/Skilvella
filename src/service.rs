@@ -94,6 +94,7 @@ pub async fn run(
         let mut state = AppState::new(library.clone());
         state.shutdown = shutdown.clone();
         let watcher = watch.then(|| skilvella::watch::start(state.clone()));
+        let codex_index = start_codex_index(state.library.clone());
         let (router, cancel_mcp) = skilvella::server::router_with_shutdown(state, port);
         let (stop_http, requested) = oneshot::channel();
         let mut server = tokio::spawn(async move {
@@ -108,6 +109,7 @@ pub async fn run(
             result = &mut server => {
                 cancel_mcp();
                 stop_watcher(watcher).await;
+                stop_codex_index(codex_index).await;
                 result??;
                 return Ok(());
             }
@@ -120,12 +122,45 @@ pub async fn run(
         let _ = stop_http.send(());
         let result = server.await;
         stop_watcher(watcher).await;
+        stop_codex_index(codex_index).await;
         result.context("The HTTP service task failed")??;
         match command {
             Command::Restart => println!("Skilvella service restarting on port {port}"),
             Command::Quit => return Ok(()),
         }
     }
+}
+
+fn start_codex_index(library: Library) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    let (stop, mut stopped) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut previous_error = String::new();
+        loop {
+            let library = library.clone();
+            // 更新操作と同じLibrary経路を使い、同期を再帰的に呼び出さない。
+            let result = tokio::task::spawn_blocking(move || library.sync_codex_entries()).await;
+            let error = match result {
+                Ok(Ok(())) => String::new(),
+                Ok(Err(error)) => format!("{error:#}"),
+                Err(error) => error.to_string(),
+            };
+            if !error.is_empty() && error != previous_error {
+                eprintln!("Codex index synchronization failed: {error}");
+            }
+            previous_error = error;
+            tokio::select! {
+                _ = &mut stopped => break,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {},
+            }
+        }
+    });
+    (stop, task)
+}
+
+async fn stop_codex_index(index: (oneshot::Sender<()>, tokio::task::JoinHandle<()>)) {
+    let _ = index.0.send(());
+    // ファイル更新中のspawn_blockingを途中で放置せず、完了を待つ。
+    let _ = index.1.await;
 }
 
 async fn stop_watcher(watcher: Option<tokio::task::JoinHandle<()>>) {
@@ -182,6 +217,10 @@ mod tests {
                 },
             )
             .unwrap();
+        library.set_codex_policy(&skill.id, false, true).unwrap();
+        library.set_codex_enabled(true).unwrap();
+        let codex_entry =
+            PathBuf::from(library.codex_settings().unwrap().path).join("restart-fixture/SKILL.md");
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -265,6 +304,17 @@ mod tests {
         })
         .await
         .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if fs::read_to_string(&codex_entry).is_ok_and(|text| text.contains("after restart"))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("The built-in index did not follow the watched source after restart");
         control.quit();
         tokio::time::timeout(Duration::from_secs(5), service)
             .await

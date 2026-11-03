@@ -14,6 +14,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(index))
         .route("/sources", get(sources))
         .route("/settings", get(settings))
+        .route("/settings/codex", post(set_codex_enabled))
         .route("/settings/updates/check", post(check_update))
         .route("/settings/updates/install", post(install_update))
         .route("/sources/add", post(add_source))
@@ -28,6 +29,7 @@ pub fn router() -> Router<AppState> {
         .route("/skills/{id}", get(detail))
         .route("/skills/{id}/content", post(save))
         .route("/skills/{id}/metadata", post(metadata))
+        .route("/skills/{id}/codex", post(set_codex_policy))
         .route("/skills/{id}/restore", post(restore))
         .route("/preview", post(preview))
         .route("/assets/{name}", get(asset))
@@ -38,12 +40,82 @@ pub fn router() -> Router<AppState> {
 struct SettingsPage {
     csrf: String,
     version: &'static str,
+    codex: CodexSyncSettings,
+}
+impl SettingsPage {
+    fn display_codex_path(&self) -> String {
+        display_path(&self.codex.path)
+    }
 }
 async fn settings(State(state): State<AppState>) -> Response {
-    render(SettingsPage {
-        csrf: state.csrf.to_string(),
-        version: env!("CARGO_PKG_VERSION"),
-    })
+    match state.run(|lib| lib.codex_settings()).await {
+        Ok(codex) => render(SettingsPage {
+            csrf: state.csrf.to_string(),
+            version: env!("CARGO_PKG_VERSION"),
+            codex,
+        }),
+        Err(e) => failure(e),
+    }
+}
+#[derive(Deserialize)]
+struct CodexSettingsForm {
+    csrf: String,
+    enabled: bool,
+}
+async fn set_codex_enabled(
+    State(state): State<AppState>,
+    Form(form): Form<CodexSettingsForm>,
+) -> Response {
+    if let Some(response) = csrf_error(&state, &form.csrf) {
+        return response;
+    }
+    match state
+        .run_mut(move |lib| lib.set_codex_enabled(form.enabled))
+        .await
+    {
+        Ok(_) => Redirect::to("/settings#codex").into_response(),
+        Err(e) => failure(e),
+    }
+}
+#[derive(Deserialize)]
+struct CodexPolicyForm {
+    csrf: String,
+    mode: String,
+}
+fn codex_mode(mode: &str) -> Option<crate::model::CodexSkillPolicy> {
+    let (automatic, command) = match mode {
+        "search" => (false, false),
+        "command" => (false, true),
+        "automatic" => (true, true),
+        _ => return None,
+    };
+    Some(crate::model::CodexSkillPolicy { automatic, command })
+}
+async fn set_codex_policy(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Form(form): Form<CodexPolicyForm>,
+) -> Response {
+    if let Some(response) = csrf_error(&state, &form.csrf) {
+        return response;
+    }
+    let Some(policy) = codex_mode(&form.mode) else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Codexでの使い方を選択してください。",
+        );
+    };
+    let key = id.clone();
+    match state
+        .run_mut(move |lib| lib.set_codex_policy(&key, policy.automatic, policy.command))
+        .await
+    {
+        Ok(_) => redirect(
+            &format!("/skills/{}", encoded(&id)),
+            "Codex設定を保存しました。同期状態を確認してください。",
+        ),
+        Err(e) => failure(e),
+    }
 }
 async fn check_update(State(state): State<AppState>, Form(form): Form<Token>) -> Response {
     if let Some(response) = csrf_error(&state, &form.csrf) {
@@ -152,13 +224,28 @@ struct Notice {
 struct IndexPage {
     csrf: String,
     query: SearchQuery,
+    selection: RepositorySelection,
+    groups: Vec<RepositoryGroup>,
+    selected: bool,
+    reset: String,
     results: SearchResults,
     sources: Vec<Source>,
+    codex: CodexSyncSettings,
     message: String,
     previous: String,
     next: String,
 }
 impl IndexPage {
+    fn group_url(&self, group: &RepositoryGroup) -> String {
+        if group.unknown {
+            return "/sources".into();
+        }
+        format!(
+            "/?repository_source={}&repository={}",
+            encoded(&group.source),
+            encoded(&group.repository)
+        )
+    }
     fn source_label(&self, alias: &str) -> String {
         self.sources
             .iter()
@@ -170,19 +257,40 @@ impl IndexPage {
 async fn index(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
+    Query(selection): Query<RepositorySelection>,
     Query(notice): Query<Notice>,
 ) -> Response {
     let mut query = query;
     query.limit = 50;
+    query.source = selection.repository_source.clone();
     let q = query.clone();
+    let selected = !selection.repository_source.is_empty();
+    let scope = selection.clone();
     match state
-        .run(move |lib| Ok((lib.search(q, false)?, lib.sources()?)))
+        .run(move |lib| {
+            let groups = lib.repository_groups()?;
+            let results = if selected {
+                lib.search_repository(q, scope)?
+            } else {
+                SearchResults {
+                    skills: Vec::new(),
+                    total: groups.iter().map(|g| g.count).sum(),
+                    indexed_at: String::new(),
+                }
+            };
+            Ok((results, groups, lib.sources()?, lib.codex_settings()?))
+        })
         .await
     {
-        Ok((results, sources)) => {
+        Ok((results, groups, sources, codex)) => {
+            let reset = format!(
+                "/?repository_source={}&repository={}",
+                encoded(&selection.repository_source),
+                encoded(&selection.repository)
+            );
             let page_url = |offset| {
                 format!(
-                    "/?q={}&source={}&tag={}&category={}&status={}&offset={offset}",
+                    "{reset}&q={}&source={}&tag={}&category={}&status={}&offset={offset}",
                     encoded(&query.q),
                     encoded(&query.source),
                     encoded(&query.tag),
@@ -203,8 +311,13 @@ async fn index(
             render(IndexPage {
                 csrf: state.csrf.to_string(),
                 query,
+                selection,
+                groups,
+                selected,
+                reset,
                 results,
                 sources,
+                codex,
                 message: notice.message,
                 previous,
                 next,
@@ -237,24 +350,7 @@ impl SourcesPage {
     }
 
     fn display_path(&self, path: impl AsRef<str>) -> String {
-        let path = path.as_ref();
-        #[cfg(windows)]
-        {
-            if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
-                return format!(r"\\{unc}");
-            }
-            if let Some(drive) = path.strip_prefix(r"\\?\") {
-                let bytes = drive.as_bytes();
-                if bytes.len() >= 3
-                    && bytes[0].is_ascii_alphabetic()
-                    && bytes[1] == b':'
-                    && bytes[2] == b'\\'
-                {
-                    return drive.to_owned();
-                }
-            }
-        }
-        path.to_owned()
+        display_path(path.as_ref())
     }
 
     fn destination_for(&self, source: &Source) -> String {
@@ -267,6 +363,25 @@ impl SourcesPage {
                 .into_owned()
         }
     }
+}
+fn display_path(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{unc}");
+        }
+        if let Some(drive) = path.strip_prefix(r"\\?\") {
+            let bytes = drive.as_bytes();
+            if bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'\\'
+            {
+                return drive.to_owned();
+            }
+        }
+    }
+    path.to_owned()
 }
 
 async fn sources(State(state): State<AppState>, Query(n): Query<Notice>) -> Response {
@@ -286,7 +401,7 @@ async fn set_source_name(
         return response;
     }
     match state
-        .run(move |lib| lib.set_source_display_name(&form.alias, &form.display_name))
+        .run_mut(move |lib| lib.set_source_display_name(&form.alias, &form.display_name))
         .await
     {
         Ok(()) => redirect("/sources", "表示名を保存しました。"),
@@ -355,7 +470,7 @@ async fn set_directory(State(state): State<AppState>, Form(form): Form<Directory
     let mode = form.mode.clone();
     let path = form.path.clone();
     match state
-        .run(move |library| library.set_directory(&mode, &path))
+        .run_mut(move |library| library.set_directory(&mode, &path))
         .await
     {
         Ok(report) => {
@@ -401,7 +516,7 @@ async fn add_source(State(state): State<AppState>, Form(f): Form<SourceForm>) ->
     }
     let move_source = f.action == "move";
     match state
-        .run(move |lib| {
+        .run_mut(move |lib| {
             let report = lib.add_source(&alias, std::path::Path::new(&path))?;
             let migration = move_source.then(|| {
                 let destination = lib.dedicated_directory()?.join(&alias);
@@ -443,7 +558,7 @@ async fn migrate_source(State(state): State<AppState>, Form(f): Form<MigrationFo
     let alias = f.alias.clone();
     let destination = f.destination.clone();
     let result = state
-        .run(move |lib| lib.migrate_source(&alias, std::path::Path::new(&destination)))
+        .run_mut(move |lib| lib.migrate_source(&alias, std::path::Path::new(&destination)))
         .await;
     state.rescan.notify_one();
     match result {
@@ -459,7 +574,7 @@ async fn remove_source(State(state): State<AppState>, Form(f): Form<SourceForm>)
     if let Some(r) = csrf_error(&state, &f.csrf) {
         return r;
     }
-    match state.run(move |lib| lib.remove_source(&f.alias)).await {
+    match state.run_mut(move |lib| lib.remove_source(&f.alias)).await {
         Ok(_) => {
             state.rescan.notify_one();
             redirect(
@@ -480,14 +595,33 @@ fn scan_message(r: ScanReport) -> String {
         r.indexed, r.errors, r.missing
     )
 }
-async fn scan(State(state): State<AppState>, Form(f): Form<Token>) -> Response {
+#[derive(Deserialize)]
+struct RepositoryToken {
+    csrf: String,
+    #[serde(flatten)]
+    selection: RepositorySelection,
+}
+fn repository_redirect(selection: &RepositorySelection, message: &str) -> Response {
+    if selection.repository_source.is_empty() {
+        redirect("/", message)
+    } else {
+        Redirect::to(&format!(
+            "/?repository_source={}&repository={}&message={}",
+            encoded(&selection.repository_source),
+            encoded(&selection.repository),
+            encoded(message)
+        ))
+        .into_response()
+    }
+}
+async fn scan(State(state): State<AppState>, Form(f): Form<RepositoryToken>) -> Response {
     if let Some(r) = csrf_error(&state, &f.csrf) {
         return r;
     }
-    match state.run(|lib| lib.scan()).await {
+    match state.run_mut(|lib| lib.scan()).await {
         Ok(r) => {
             state.rescan.notify_one();
-            redirect("/", &scan_message(r))
+            repository_redirect(&f.selection, &scan_message(r))
         }
         Err(e) => failure(e),
     }
@@ -495,12 +629,16 @@ async fn scan(State(state): State<AppState>, Form(f): Form<Token>) -> Response {
 #[derive(Deserialize)]
 struct BulkForm {
     csrf: String,
+    #[serde(flatten)]
+    selection: RepositorySelection,
     #[serde(default)]
     selected: String,
     #[serde(default)]
     published: String,
     #[serde(default)]
     tags: String,
+    #[serde(default)]
+    codex_mode: String,
 }
 async fn bulk(State(state): State<AppState>, Form(f): Form<BulkForm>) -> Response {
     if let Some(r) = csrf_error(&state, &f.csrf) {
@@ -525,17 +663,28 @@ async fn bulk(State(state): State<AppState>, Form(f): Form<BulkForm>) -> Respons
         _ => return error(StatusCode::BAD_REQUEST, "公開状態が不正です。"),
     };
     let add_tags = tags(&f.tags);
-    if published.is_none() && add_tags.is_empty() {
+    let codex = if f.codex_mode.is_empty() {
+        None
+    } else {
+        let Some(policy) = codex_mode(&f.codex_mode) else {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "Codexでの使い方を選択してください。",
+            );
+        };
+        Some(policy)
+    };
+    if published.is_none() && add_tags.is_empty() && codex.is_none() {
         return error(
             StatusCode::BAD_REQUEST,
-            "変更する公開状態または追加タグを指定してください。",
+            "変更する公開状態・追加タグ・Codexでの使い方のいずれかを指定してください。",
         );
     }
     match state
-        .run(move |lib| lib.bulk_metadata(&ids, published, &add_tags))
+        .run_mut(move |lib| lib.bulk_settings(&ids, published, &add_tags, codex))
         .await
     {
-        Ok(_) => redirect("/", "選択したスキルを更新しました。"),
+        Ok(_) => repository_redirect(&f.selection, "選択したスキルを更新しました。"),
         Err(e) => failure(e),
     }
 }
@@ -543,7 +692,9 @@ async fn bulk(State(state): State<AppState>, Form(f): Form<BulkForm>) -> Respons
 #[template(path = "detail.html")]
 struct DetailPage {
     csrf: String,
+    codex: CodexSyncSettings,
     source_label: String,
+    library_url: String,
     detail: SkillDetail,
     preview: String,
     tag_text: String,
@@ -577,11 +728,20 @@ async fn detail_page(
         .run(move |lib| {
             let detail = lib.detail(&key, false)?;
             let source_label = lib.source_label(&detail.summary.source)?;
-            Ok((detail, source_label))
+            let library_url = match lib.repository_selection(&detail.summary) {
+                Ok(selection) => format!(
+                    "/?repository_source={}&repository={}",
+                    encoded(&selection.repository_source),
+                    encoded(&selection.repository)
+                ),
+                Err(_) => "/sources".into(),
+            };
+            let codex = lib.codex_settings()?;
+            Ok((detail, source_label, codex, library_url))
         })
         .await
     {
-        Ok((mut detail, source_label)) => {
+        Ok((mut detail, source_label, codex, library_url)) => {
             let dirty = draft.is_some();
             if let Some((content, revision)) = draft {
                 detail.content = content;
@@ -591,7 +751,9 @@ async fn detail_page(
             let tag_text = detail.summary.tags.join(", ");
             render(DetailPage {
                 csrf: state.csrf.to_string(),
+                codex,
                 source_label,
+                library_url,
                 detail,
                 preview,
                 tag_text,
@@ -628,7 +790,7 @@ async fn save(
     let key = id.clone();
     let content = f.content.clone();
     let revision = f.revision.clone();
-    match state.run(move|lib|lib.save_content(&key,&revision,&content)).await {Ok(_)=>redirect(&format!("/skills/{}",encoded(&id)),"SKILL.md を保存しました。"),Err(e)=>detail_page(&state,id,format!("保存できませんでした: {e:#}。下書きは下の編集欄に保持しています。競合時は下書きをコピーしてから「最新版を開く」で最新内容へ統合してください。"),Some((f.content,f.revision))).await}
+    match state.run_mut(move|lib|lib.save_content(&key,&revision,&content)).await {Ok(_)=>redirect(&format!("/skills/{}",encoded(&id)),"SKILL.md を保存しました。"),Err(e)=>detail_page(&state,id,format!("保存できませんでした: {e:#}。下書きは下の編集欄に保持しています。競合時は下書きをコピーしてから「最新版を開く」で最新内容へ統合してください。"),Some((f.content,f.revision))).await}
 }
 #[derive(Deserialize)]
 struct MetadataForm {
@@ -654,7 +816,10 @@ async fn metadata(
         category: f.category,
         published: f.published.as_deref() == Some("true"),
     };
-    match state.run(move |lib| lib.set_metadata(&key, value)).await {
+    match state
+        .run_mut(move |lib| lib.set_metadata(&key, value))
+        .await
+    {
         Ok(_) => redirect(
             &format!("/skills/{}", encoded(&id)),
             "管理情報を保存しました。",
@@ -678,7 +843,7 @@ async fn restore(
     }
     let key = id.clone();
     match state
-        .run(move |lib| lib.restore(&key, f.history_id, &f.revision))
+        .run_mut(move |lib| lib.restore(&key, f.history_id, &f.revision))
         .await
     {
         Ok(_) => redirect(
@@ -742,7 +907,7 @@ async fn create(State(state): State<AppState>, Form(f): Form<CreateForm>) -> Res
     let dir = f.relative_dir.clone();
     let content = f.content.clone();
     match state
-        .run(move |lib| lib.create_skill(&source, &dir, &content))
+        .run_mut(move |lib| lib.create_skill(&source, &dir, &content))
         .await
     {
         Ok(id) => {

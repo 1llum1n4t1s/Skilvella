@@ -1,5 +1,19 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodexSkillPolicy {
+    pub automatic: bool,
+    pub command: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CodexSyncSettings {
+    pub enabled: bool,
+    pub path: String,
+    pub last_error: String,
+    pub exported: usize,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DirectorySettings {
     pub mode: String,
@@ -60,6 +74,7 @@ pub struct HistoryEntry {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct SkillDetail {
+    pub codex_policy: CodexSkillPolicy,
     pub summary: SkillSummary,
     pub needs_rescan: bool,
     pub content: String,
@@ -78,6 +93,22 @@ pub struct SearchQuery {
     pub status: String,
     pub limit: usize,
     pub offset: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct RepositorySelection {
+    pub repository_source: String,
+    pub repository: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct RepositoryGroup {
+    pub source: String,
+    pub repository: String,
+    pub count: usize,
+    pub missing: usize,
+    pub unknown: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

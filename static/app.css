@@ -213,7 +213,7 @@ code, .path { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; o
 .note { color: var(--muted); font-size: 12px; line-height: 1.8; }
 .notice { border: 1px solid var(--line); border-left: 3px solid var(--published); background: var(--published-bg); color: var(--ink); padding: 13px 17px; border-radius: 3px; line-height: 1.8; margin: 0 0 22px; overflow-wrap: anywhere; }
 .notice.warning { background: var(--warning-bg); border-color: var(--warning-line); border-left-color: var(--warning); color: var(--warning); }
-.bulk { display: flex; align-items: end; gap: 16px; padding: 16px 18px; background: var(--soft); border: 1px solid var(--line); border-radius: 4px 10px 0 0; }
+.bulk { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; padding: 16px 18px; background: var(--soft); border: 1px solid var(--line); border-radius: 4px 10px 0 0; }
 .bulk>strong { align-self: center; min-width: 80px; color: var(--accent); font-size: 13px; }
 .bulk label { max-width: 240px; flex: 1; font-size: 11px; }
 .bulk button { margin-left: auto; }
@@ -346,3 +346,7 @@ tbody tr:hover { background: var(--violet-soft); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
 }
+
+.repository-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
+.repository-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; border: 1px solid var(--line); background: var(--paper); text-decoration: none; overflow-wrap: anywhere; }
+.repository-card:hover, .repository-card:focus-visible { border-color: var(--accent); background: var(--raised); }
