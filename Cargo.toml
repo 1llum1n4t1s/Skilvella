@@ -13,6 +13,9 @@ askama = { version = "0.16.1", default-features = false, features = ["derive", "
 axum = { version = "0.8.9", default-features = false, features = ["form", "http1", "json", "query", "tokio"] }
 comrak = { version = "0.59.0", default-features = false }
 notify = "8"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 rmcp = { version = "3.8.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 saphyr = "0.3.3"
@@ -23,15 +26,15 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSImage", "NSResponder", "NSRunningApplication", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSWorkspace", "objc2-core-foundation"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSDate", "NSGeometry", "NSObject", "NSRunLoop", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSImage", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSWorkspace", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSDate", "NSGeometry", "NSObject", "NSRunLoop", "NSString", "NSTimer", "NSURL"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13", default-features = false, features = ["json"] }

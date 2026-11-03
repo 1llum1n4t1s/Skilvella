@@ -1,16 +1,9 @@
 use anyhow::{Context, bail};
 use skilvella::{AppState, library::Library};
-use std::{
-    env,
-    net::Ipv4Addr,
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{env, net::Ipv4Addr, path::PathBuf};
 
 mod desktop;
+mod service;
 
 struct Options {
     data_dir: PathBuf,
@@ -43,7 +36,7 @@ fn options() -> anyhow::Result<Option<Options>> {
             Some("--no-tray") => options.tray = false,
             Some("--help" | "-h") => {
                 println!(
-                    "Skilvella {}\n\nUsage: skilvella [--data-dir PATH] [--port PORT] [--no-watch] [--no-tray]\n\nBrowser: http://127.0.0.1:7465/\nMCP:     http://127.0.0.1:7465/mcp\n\nWindows/macOS: click the tray/menu bar icon to open the browser.\nUse --no-tray for headless operation.\nThe server always binds to IPv4 loopback. Default data directory: {}",
+                    "Skilvella {}\n\nUsage: skilvella [--data-dir PATH] [--port PORT] [--no-watch] [--no-tray]\n\nBrowser: http://127.0.0.1:7465/\nMCP:     http://127.0.0.1:7465/mcp\n\nWindows/macOS: left-click the tray/menu bar icon to open the browser.\nRight-click for Open manager, Check for updates, Restart service, and Quit.\nUse --no-tray for headless operation.\nThe server always binds to IPv4 loopback. Default data directory: {}",
                     env!("CARGO_PKG_VERSION"),
                     options.data_dir.display()
                 );
@@ -82,6 +75,9 @@ fn default_data_dir() -> anyhow::Result<PathBuf> {
 }
 #[tokio::main(worker_threads = 2)]
 async fn main() -> anyhow::Result<()> {
+    if skilvella::update::run_installer_if_requested()? {
+        return Ok(());
+    }
     let Some(options) = options()? else {
         return Ok(());
     };
@@ -101,47 +97,29 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Could not initialize the skill directory")?;
     let port = listener.local_addr()?.port();
-    let watcher = if options.watch {
-        Some(skilvella::watch::start(state.clone()))
-    } else {
-        None
-    };
     println!(
         "Skilvella {}\nBrowser: http://127.0.0.1:{port}/\nMCP:     http://127.0.0.1:{port}/mcp\nData:    {}\nStop: Ctrl+C",
         env!("CARGO_PKG_VERSION"),
         options.data_dir.display()
     );
-    let stopped = Arc::new(AtomicBool::new(false));
-    let server_stopped = StopDesktopOnDrop(stopped.clone());
-    let server = tokio::spawn(async move {
-        // サーバーのエラーやパニック時にも、OSのイベントループを終了させる。
-        let _server_stopped = server_stopped;
-        axum::serve(listener, skilvella::server::router(state, port))
-            .with_graceful_shutdown(async {
-                let _ = tokio::signal::ctrl_c().await;
-            })
-            .await
-    });
+    let (control, commands) = service::Control::new();
+    let server = tokio::spawn(service::run(
+        listener.into_std()?,
+        state.library,
+        options.watch,
+        control.clone(),
+        commands,
+        state.shutdown,
+    ));
     if options.tray {
         // AppKitはメインスレッドで動かす。HTTPはTokioのワーカースレッドで継続する。
-        if let Err(error) = desktop::run(&format!("http://127.0.0.1:{port}/"), stopped) {
+        if let Err(error) = desktop::run(&format!("http://127.0.0.1:{port}/"), control) {
             eprintln!("Could not create the tray icon: {error:#}. The server is still running.");
         }
     }
     let result = server.await?;
-    if let Some(watcher) = watcher {
-        watcher.abort();
-    }
     result?;
     Ok(())
-}
-
-struct StopDesktopOnDrop(Arc<AtomicBool>);
-
-impl Drop for StopDesktopOnDrop {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::Release);
-    }
 }
 
 fn user_home() -> anyhow::Result<PathBuf> {

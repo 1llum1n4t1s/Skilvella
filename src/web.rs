@@ -13,6 +13,9 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(index))
         .route("/sources", get(sources))
+        .route("/settings", get(settings))
+        .route("/settings/updates/check", post(check_update))
+        .route("/settings/updates/install", post(install_update))
         .route("/sources/add", post(add_source))
         .route("/sources/migrate", post(migrate_source))
         .route("/sources/remove", post(remove_source))
@@ -28,6 +31,53 @@ pub fn router() -> Router<AppState> {
         .route("/preview", post(preview))
         .route("/assets/{name}", get(asset))
         .route("/favicon.ico", get(favicon))
+}
+#[derive(Template)]
+#[template(path = "settings.html")]
+struct SettingsPage {
+    csrf: String,
+    version: &'static str,
+}
+async fn settings(State(state): State<AppState>) -> Response {
+    render(SettingsPage {
+        csrf: state.csrf.to_string(),
+        version: env!("CARGO_PKG_VERSION"),
+    })
+}
+async fn check_update(State(state): State<AppState>, Form(form): Form<Token>) -> Response {
+    if let Some(response) = csrf_error(&state, &form.csrf) {
+        return response;
+    }
+    match tokio::task::spawn_blocking(crate::update::check).await {
+        Ok(Ok(info)) => axum::Json(info).into_response(),
+        Ok(Err(error)) => update_failure(error.to_string()),
+        Err(error) => update_failure(error.to_string()),
+    }
+}
+fn update_failure(message: String) -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        axum::Json(serde_json::json!({"error": message})),
+    )
+        .into_response()
+}
+async fn install_update(State(state): State<AppState>, Form(form): Form<Token>) -> Response {
+    if let Some(response) = csrf_error(&state, &form.csrf) {
+        return response;
+    }
+    let result = tokio::task::spawn_blocking(|| {
+        let prepared = crate::update::prepare_install()?;
+        crate::update::spawn_installer(prepared)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => {
+            state.shutdown.notify_one();
+            axum::Json(serde_json::json!({"restarting": true})).into_response()
+        }
+        Ok(Err(error)) => update_failure(error.to_string()),
+        Err(error) => update_failure(error.to_string()),
+    }
 }
 fn render(t: impl Template) -> Response {
     match t.render() {
@@ -162,19 +212,39 @@ struct SourcesPage {
     alias: String,
     path: String,
     directory: DirectorySettings,
-    directory_mode: String,
     directory_path: String,
+    directory_editing: bool,
     dedicated_root: String,
     migration_alias: String,
     migration_destination: String,
 }
 
 impl SourcesPage {
-    fn directory_example(&self) -> String {
-        std::path::PathBuf::from(&self.dedicated_root)
-            .join("ソース名")
-            .to_string_lossy()
-            .into_owned()
+    fn has_directory_source(&self) -> bool {
+        self.sources
+            .iter()
+            .any(|source| source.alias == self.directory.source_alias)
+    }
+
+    fn display_path(&self, path: impl AsRef<str>) -> String {
+        let path = path.as_ref();
+        #[cfg(windows)]
+        {
+            if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+                return format!(r"\\{unc}");
+            }
+            if let Some(drive) = path.strip_prefix(r"\\?\") {
+                let bytes = drive.as_bytes();
+                if bytes.len() >= 3
+                    && bytes[0].is_ascii_alphabetic()
+                    && bytes[1] == b':'
+                    && bytes[2] == b'\\'
+                {
+                    return drive.to_owned();
+                }
+            }
+        }
+        path.to_owned()
     }
 
     fn destination_for(&self, source: &Source) -> String {
@@ -214,8 +284,14 @@ async fn source_page_with_directory(
         .await
     {
         Ok((sources, directory, dedicated_root)) => {
-            let (directory_mode, directory_path) =
-                draft.unwrap_or_else(|| (directory.mode.clone(), directory.custom_path.clone()));
+            let directory_editing = draft.is_some();
+            let directory_path = draft.map(|(_, path)| path).unwrap_or_else(|| {
+                if directory.path.is_empty() {
+                    directory.custom_path.clone()
+                } else {
+                    directory.path.clone()
+                }
+            });
             let (migration_alias, migration_destination) = migration.unwrap_or_default();
             render(SourcesPage {
                 csrf: state.csrf.to_string(),
@@ -224,8 +300,8 @@ async fn source_page_with_directory(
                 alias,
                 path,
                 directory,
-                directory_mode,
                 directory_path,
+                directory_editing,
                 dedicated_root: dedicated_root.to_string_lossy().into_owned(),
                 migration_alias,
                 migration_destination,
@@ -697,6 +773,14 @@ async fn asset(Path(name): Path<String>) -> Response {
         "app.js" => (
             "text/javascript; charset=utf-8",
             include_bytes!("../static/app.js"),
+        ),
+        "i18n.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../static/i18n.js"),
+        ),
+        "theme.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../static/theme.js"),
         ),
         "htmx.min.js" => (
             "text/javascript; charset=utf-8",

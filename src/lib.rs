@@ -2,6 +2,7 @@ pub mod library;
 pub mod mcp;
 pub mod model;
 pub mod server;
+pub mod update;
 pub mod watch;
 pub mod web;
 
@@ -13,6 +14,7 @@ pub struct AppState {
     pub library: Library,
     pub csrf: Arc<str>,
     pub rescan: Arc<tokio::sync::Notify>,
+    pub shutdown: Arc<tokio::sync::Notify>,
 }
 
 impl AppState {
@@ -21,6 +23,7 @@ impl AppState {
             library,
             csrf: uuid::Uuid::new_v4().to_string().into(),
             rescan: Arc::new(tokio::sync::Notify::new()),
+            shutdown: Arc::new(tokio::sync::Notify::new()),
         }
     }
 

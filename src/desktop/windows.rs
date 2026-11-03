@@ -1,12 +1,11 @@
 use std::cell::Cell;
 use std::mem::size_of;
 use std::ptr::{null, null_mut};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use crate::service::Control;
 use anyhow::{Context, Result, bail};
-use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
 };
@@ -20,6 +19,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const ICON_MESSAGE: u32 = WM_APP + 1;
 const STOP_TIMER: usize = 1;
+const OPEN_MANAGER: usize = 1;
+const RESTART_SERVICE: usize = 2;
+const QUIT: usize = 3;
+const CHECK_UPDATES: usize = 4;
 
 struct ComApartment;
 
@@ -57,12 +60,88 @@ impl Drop for WindowClass {
 struct TrayState {
     icon: Icon,
     url: Vec<u16>,
-    stopped: Arc<AtomicBool>,
+    updates_url: Vec<u16>,
+    control: Control,
     taskbar_created: u32,
     last_click: Cell<Option<Instant>>,
 }
 
 impl TrayState {
+    fn open_manager(&self, window: HWND) {
+        self.open_url(window, &self.url);
+    }
+
+    fn open_url(&self, window: HWND, url: &[u16]) {
+        // URLはnull終端され、同期呼出しの間はstateが所有する。
+        let result =
+            unsafe { ShellExecuteW(window, null(), url.as_ptr(), null(), null(), SW_SHOWNORMAL) };
+        if result as isize <= 32 {
+            eprintln!(
+                "管理画面をブラウザーで開けませんでした（Windowsコード: {}）",
+                result as isize
+            );
+        }
+    }
+
+    fn show_menu(&self, window: HWND) -> Result<()> {
+        // メニューはこのスレッドが所有し、選択・取消のどちらでも解放する。
+        let menu = Menu(unsafe { CreatePopupMenu() });
+        if menu.0.is_null() {
+            return Err(std::io::Error::last_os_error())
+                .context("トレイメニューを作成できませんでした");
+        }
+        let restarting = self.control.is_restarting();
+        let restart_label = if restarting {
+            "サービスを再起動中…"
+        } else {
+            "サービスを再起動"
+        };
+        for (id, label, flags) in [
+            (OPEN_MANAGER, "管理画面を開く", MF_STRING),
+            (CHECK_UPDATES, "更新を確認", MF_STRING),
+            (
+                RESTART_SERVICE,
+                restart_label,
+                MF_STRING | if restarting { MF_GRAYED } else { 0 },
+            ),
+            (0, "", MF_SEPARATOR),
+            (QUIT, "終了", MF_STRING),
+        ] {
+            if unsafe { AppendMenuW(menu.0, flags, id, wide(label).as_ptr()) } == 0 {
+                return Err(std::io::Error::last_os_error())
+                    .context("トレイメニュー項目を作成できませんでした");
+            }
+        }
+        let mut position = POINT::default();
+        if unsafe { GetCursorPos(&mut position) } == 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("メニューの表示位置を取得できませんでした");
+        }
+        // 通知アイコンのメニューは所有ウィンドウを前面にし、外側クリックで閉じられるようにする。
+        let selected = unsafe {
+            SetForegroundWindow(window);
+            let selected = TrackPopupMenu(
+                menu.0,
+                TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                position.x,
+                position.y,
+                0,
+                window,
+                null(),
+            );
+            PostMessageW(window, WM_NULL, 0, 0);
+            selected as usize
+        };
+        match selected {
+            OPEN_MANAGER => self.open_manager(window),
+            CHECK_UPDATES => self.open_url(window, &self.updates_url),
+            RESTART_SERVICE => self.control.restart(),
+            QUIT => self.control.quit(),
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn notification(&self, window: HWND) -> NOTIFYICONDATAW {
         let mut data = NOTIFYICONDATAW {
             cbSize: size_of::<NOTIFYICONDATAW>() as u32,
@@ -73,7 +152,12 @@ impl TrayState {
             hIcon: self.icon.0,
             ..Default::default()
         };
-        for (target, value) in data.szTip.iter_mut().zip("Skilvella".encode_utf16()) {
+        for (target, value) in data
+            .szTip
+            .iter_mut()
+            .take(127)
+            .zip("Skilvella\n".encode_utf16().chain(self.url.iter().copied()))
+        {
             *target = value;
         }
         data
@@ -85,6 +169,16 @@ impl TrayState {
             bail!("Windowsのタスクトレイにアイコンを登録できませんでした");
         }
         Ok(())
+    }
+}
+
+struct Menu(HMENU);
+
+impl Drop for Menu {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { DestroyMenu(self.0) };
+        }
     }
 }
 
@@ -104,8 +198,8 @@ impl Drop for TrayWindow<'_> {
     }
 }
 
-pub fn run(url: &str, stopped: Arc<AtomicBool>) -> Result<()> {
-    if stopped.load(Ordering::Acquire) {
+pub fn run(url: &str, control: Control) -> Result<()> {
+    if control.is_stopped() {
         return Ok(());
     }
     // ShellExecuteWがCOMを使うURLハンドラーにも対応できるようSTAを用意する。
@@ -151,7 +245,8 @@ pub fn run(url: &str, stopped: Arc<AtomicBool>) -> Result<()> {
     let state = Box::new(TrayState {
         icon: load_icon()?,
         url: wide(url),
-        stopped,
+        updates_url: wide(&format!("{url}settings?check_updates=1#updates")),
+        control,
         taskbar_created,
         last_click: Cell::new(None),
     });
@@ -238,31 +333,25 @@ unsafe extern "system" fn window_proc(
                         .is_none_or(|last| now.duration_since(last).as_millis() > interval)
                     {
                         state.last_click.set(Some(now));
-                        let result = ShellExecuteW(
-                            window,
-                            null(),
-                            state.url.as_ptr(),
-                            null(),
-                            null(),
-                            SW_SHOWNORMAL,
-                        );
-                        if result as isize <= 32 {
-                            eprintln!(
-                                "管理画面をブラウザーで開けませんでした（Windowsコード: {}）",
-                                result as isize
-                            );
-                        }
+                        state.open_manager(window);
+                    }
+                    return 0;
+                }
+                ICON_MESSAGE if matches!(lparam as u32, WM_RBUTTONUP | WM_CONTEXTMENU) => {
+                    if let Err(error) = state.show_menu(window) {
+                        eprintln!("{error:#}");
                     }
                     return 0;
                 }
                 WM_TIMER if wparam == STOP_TIMER => {
-                    if state.stopped.load(Ordering::Acquire) {
+                    if state.control.is_stopped() {
+                        EndMenu();
                         PostQuitMessage(0);
                     }
                     return 0;
                 }
                 WM_CLOSE => {
-                    PostQuitMessage(0);
+                    state.control.quit();
                     return 0;
                 }
                 WM_NCDESTROY => {

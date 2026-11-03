@@ -11,6 +11,11 @@ use rmcp::transport::streamable_http_server::{
 };
 
 pub fn router(state: AppState, port: u16) -> Router {
+    router_with_shutdown(state, port).0
+}
+
+/// MCPの長時間接続も停止できる、デスクトップ常駐用のルーター。
+pub fn router_with_shutdown(state: AppState, port: u16) -> (Router, impl FnOnce()) {
     let hosts = vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")];
     let origins: Vec<_> = hosts.iter().map(|host| format!("http://{host}")).collect();
     let mcp_state = state.clone();
@@ -19,13 +24,14 @@ pub fn router(state: AppState, port: u16) -> Router {
     config.legacy_session_mode = false;
     config.allowed_hosts = hosts.clone();
     config.allowed_origins = origins.clone();
+    let cancellation = config.cancellation_token.clone();
     let service = StreamableHttpService::new(
         move || Ok(SkillServer::new(mcp_state.clone())),
         LocalSessionManager::default().into(),
         config,
     );
     // URL エンコードされた UTF-8 本文は最大3倍になる。本文自体の上限は保存層で検査する。
-    web::router()
+    let router = web::router()
         .nest_service("/mcp", service)
         .layer(DefaultBodyLimit::max(6 * 1024 * 1024 + 64 * 1024))
         .layer(middleware::from_fn(move |request: Request, next: Next| {
@@ -33,7 +39,8 @@ pub fn router(state: AppState, port: u16) -> Router {
             let origins = origins.clone();
             async move { local_boundary(request, next, &hosts, &origins).await }
         }))
-        .with_state(state)
+        .with_state(state);
+    (router, move || cancellation.cancel())
 }
 async fn local_boundary(
     request: Request,

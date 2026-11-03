@@ -41,7 +41,6 @@ async fn headless_process_serves_ui_and_mcp_on_the_bound_port() {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             if let Some(url) = line.strip_prefix("Browser: ") {
                 let _ = sender.send(url.to_owned());
-                break;
             }
         }
     });

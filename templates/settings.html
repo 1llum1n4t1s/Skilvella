@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block translate_title %}true{% endblock %}
+{% block settings_current %}page{% endblock %}
+{% block title %}設定 · Skilvella{% endblock %}
+{% block content %}
+<div class="heading"><h1><!--i18n-->設定<!--/i18n--></h1></div>
+<section class="panel stack"><h2><!--i18n-->表示<!--/i18n--></h2>
+<label><!--i18n-->言語<!--/i18n--><select data-language-selector disabled><option value="auto"><!--i18n-->自動（ブラウザーに合わせる）<!--/i18n--></option><option value="en" lang="en">English</option><option value="ja" lang="ja">日本語</option><option value="zh-CN" lang="zh-CN">简体中文</option><option value="zh-TW" lang="zh-TW">繁體中文</option><option value="ko" lang="ko">한국어</option><option value="es" lang="es">Español</option><option value="fr" lang="fr">Français</option><option value="de" lang="de">Deutsch</option><option value="pt-BR" lang="pt-BR">Português (Brasil)</option></select></label>
+<label><!--i18n-->テーマ<!--/i18n--><select data-theme-selector disabled><option value="auto"><!--i18n-->自動<!--/i18n--></option><option value="light"><!--i18n-->ライト<!--/i18n--></option><option value="dark"><!--i18n-->ダーク<!--/i18n--></option></select></label>
+<p class="note"><!--i18n-->表示設定はこのブラウザーに保存されます。<!--/i18n--></p><p class="notice" data-preference-status role="status" hidden></p>
+<noscript><p><!--i18n-->表示設定と更新の確認にはJavaScriptが必要です。<!--/i18n--></p></noscript>
+</section>
+<section class="panel stack" id="updates" data-updates data-csrf="{{ csrf }}"><h2><!--i18n-->アプリの更新<!--/i18n--></h2>
+<p><!--i18n-->現在のバージョン: <!--/i18n--><strong>{{ version }}</strong></p>
+<p data-update-status role="status" aria-live="polite"><!--i18n-->更新を確認できます。<!--/i18n--></p>
+<div class="actions"><button type="button" data-update-check><!--i18n-->更新を確認<!--/i18n--></button><button type="button" class="primary" data-update-install hidden><!--i18n-->更新をインストール<!--/i18n--></button><a class="button" href="https://github.com/1llum1n4t1s/Skilvella/releases" target="_blank" rel="noreferrer" data-update-release hidden><!--i18n-->リリースを開く<!--/i18n--></a></div>
+<p class="note"><!--i18n-->更新をインストールするとアプリを再起動します。編集中の内容を保存してから実行してください。<!--/i18n--></p>
+</section>
+{% endblock %}

@@ -9,6 +9,6 @@ mod macos;
 pub use macos::run;
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub fn run(_: &str, _: std::sync::Arc<std::sync::atomic::AtomicBool>) -> anyhow::Result<()> {
+pub fn run(_: &str, _: crate::service::Control) -> anyhow::Result<()> {
     Ok(())
 }

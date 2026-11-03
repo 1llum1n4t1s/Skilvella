@@ -339,7 +339,10 @@ async fn directory_settings_forms_and_icons_work_over_http() {
         .text()
         .await
         .unwrap();
-    assert!(page.contains("自動判定") && page.contains("現在の対象:"));
+    assert!(page.contains("参照するフォルダー（絶対パス）") && page.contains("現在の場所"));
+    assert!(!page.contains("<select name=\"mode\""));
+    let expected_path: PathBuf = native.components().collect();
+    assert!(page.contains(&format!("value=\"{}\"", expected_path.to_string_lossy())));
     assert!(page.contains("/favicon.ico") && page.contains("/assets/icon-32.png"));
     let icon = client
         .get(format!("{url}/favicon.ico"))
