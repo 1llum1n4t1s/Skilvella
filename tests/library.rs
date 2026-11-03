@@ -81,6 +81,47 @@ fn publication_metadata_history_and_restore_survive_rescan_and_reopen() {
     assert_eq!(file.total_lines, 3);
 }
 #[test]
+fn yaml_errors_show_file_location_and_cause_without_exposing_invalid_skills() {
+    let (_base, library, source) = fixture();
+    let id = id(&library);
+    publish(&library, &id);
+    let duplicate = "---\r\nname: broken\r\ndescription: duplicate\r\nmetadata:\r\n  role: specialist\r\n  role: orchestrator\r\n---\r\n";
+    fs::write(source.join("alpha/SKILL.md"), duplicate).unwrap();
+    assert_eq!(library.scan().unwrap().errors, 1);
+    let indexed = library.search(SearchQuery::default(), false).unwrap();
+    let error = indexed.skills[0].error.as_ref().unwrap();
+    assert!(error.contains("SKILL.md の6行目・3列目"), "{error}");
+    assert!(error.contains("項目名が重複") && error.contains("role: orchestrator"));
+    assert_eq!(
+        library.detail(&id, false).unwrap().summary.error.as_ref(),
+        Some(error)
+    );
+    assert_eq!(
+        library.search(SearchQuery::default(), true).unwrap().total,
+        0
+    );
+    assert!(library.detail(&id, true).is_err());
+    assert!(library.read_file(&id, "reference.txt", 1, 3).is_err());
+
+    let malformed = "---\nname: broken\ndescription: [unclosed\n---\n";
+    let current = library.detail(&id, false).unwrap();
+    let error = library
+        .save_content(&id, &current.revision, malformed)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("行目・") && error.contains("列目"),
+        "{error}"
+    );
+    assert!(error.contains("YAMLヘッダーのエラー"));
+    assert!(!error.ends_with("列目）: "));
+    assert_eq!(
+        fs::read_to_string(source.join("alpha/SKILL.md")).unwrap(),
+        duplicate
+    );
+}
+
+#[test]
 fn invalid_missing_and_external_edit_conflicts_do_not_expose_content() {
     let (_base, library, source) = fixture();
     let id = id(&library);

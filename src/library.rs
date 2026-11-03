@@ -1644,7 +1644,32 @@ fn parse(content: &str) -> Result<(String, String)> {
         yaml.push('\n');
     }
     ensure!(closed, "Unclosed YAML frontmatter");
-    let docs = saphyr::Yaml::load_from_str(&yaml).context("Invalid YAML frontmatter")?;
+    let docs = saphyr::Yaml::load_from_str(&yaml).map_err(|error| {
+        // YAMLから除いた先頭の「---」を補い、SKILL.md上の位置を表示する。
+        let line = error.marker().line() + 1;
+        let column = error.marker().col() + 1;
+        let reason = if error.info() == "duplicated key in mapping" {
+            "項目名が重複しています。同じ階層では項目名を1つにしてください"
+        } else {
+            error.info()
+        };
+        let excerpt: String = content
+            .lines()
+            .nth(line - 1)
+            .unwrap_or_default()
+            .trim()
+            .chars()
+            .take(160)
+            .collect();
+        anyhow::anyhow!(
+            "YAMLヘッダーのエラー（SKILL.md の{line}行目・{column}列目）: {reason}{}",
+            if excerpt.is_empty() {
+                String::new()
+            } else {
+                format!("。該当行: {excerpt}")
+            }
+        )
+    })?;
     ensure!(docs.len() == 1, "Expected one YAML document");
     let doc = &docs[0];
     let name = doc["name"]
