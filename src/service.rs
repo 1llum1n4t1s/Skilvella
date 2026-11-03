@@ -73,6 +73,39 @@ impl Drop for StopOnDrop {
     }
 }
 
+#[derive(Clone)]
+struct ServiceListener {
+    inner: Arc<tokio::sync::Mutex<tokio::net::TcpListener>>,
+    address: std::net::SocketAddr,
+}
+
+impl ServiceListener {
+    fn new(listener: TcpListener) -> std::io::Result<Self> {
+        let address = listener.local_addr()?;
+        listener.set_nonblocking(true)?;
+        Ok(Self {
+            inner: Arc::new(tokio::sync::Mutex::new(tokio::net::TcpListener::from_std(
+                listener,
+            )?)),
+            address,
+        })
+    }
+}
+
+impl axum::serve::Listener for ServiceListener {
+    type Io = tokio::net::TcpStream;
+    type Addr = std::net::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        // Axumのacceptエラー処理を維持し、再起動時は待受の所有権だけを共有する。
+        axum::serve::Listener::accept(&mut *self.inner.lock().await).await
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        Ok(self.address)
+    }
+}
+
 pub async fn run(
     listener: TcpListener,
     library: Library,
@@ -82,15 +115,16 @@ pub async fn run(
     shutdown: Arc<tokio::sync::Notify>,
 ) -> Result<()> {
     let _stopped = StopOnDrop(control.clone());
-    let port = listener.local_addr()?.port();
+    // Windowsのtry_cloneは継承可能なソケットを作り得るため、OSハンドルを複製しない。
+    // https://github.com/rust-lang/rust/issues/70719
+    let listener = ServiceListener::new(listener)?;
+    let port = listener.address.port();
     let signal = tokio::signal::ctrl_c();
     tokio::pin!(signal);
     loop {
         // 待受ソケットは保持し、port=0でも再起動前と同じURLを維持する。
         // Libraryも共有し、処理中の保存・移行の操作ロックを維持する。
-        let incoming = listener.try_clone()?;
-        incoming.set_nonblocking(true)?;
-        let listener = tokio::net::TcpListener::from_std(incoming)?;
+        let incoming = listener.clone();
         let mut state = AppState::new(library.clone());
         state.shutdown = shutdown.clone();
         let watcher = watch.then(|| skilvella::watch::start(state.clone()));
@@ -98,7 +132,7 @@ pub async fn run(
         let (router, cancel_mcp) = skilvella::server::router_with_shutdown(state, port);
         let (stop_http, requested) = oneshot::channel();
         let mut server = tokio::spawn(async move {
-            axum::serve(listener, router)
+            axum::serve(incoming, router)
                 .with_graceful_shutdown(async {
                     let _ = requested.await;
                 })
@@ -175,6 +209,26 @@ mod tests {
     use super::*;
     use skilvella::model::{SearchQuery, SkillMetadata};
     use std::{fs, path::PathBuf, time::Duration};
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn service_sockets_are_not_inherited_by_the_update_helper() {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let listener = ServiceListener::new(listener).unwrap();
+        let mut incoming = listener.clone();
+        let socket = incoming.inner.lock().await.as_raw_socket();
+        let client = std::net::TcpStream::connect(incoming.address).unwrap();
+        let (accepted, _) = axum::serve::Listener::accept(&mut incoming).await;
+        for socket in [socket, accepted.as_raw_socket()] {
+            let mut flags = 0;
+            assert_ne!(unsafe { GetHandleInformation(socket as _, &mut flags) }, 0);
+            assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+        }
+        drop(client);
+    }
 
     fn csrf(html: &str) -> &str {
         html.split("name=\"csrf\" value=\"")
