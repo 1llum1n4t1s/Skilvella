@@ -440,6 +440,34 @@ async fn directory_settings_forms_and_icons_work_over_http() {
         .unwrap();
     assert!(page.contains("参照するフォルダー（絶対パス）") && page.contains("現在の場所"));
     assert!(!page.contains("<select name=\"mode\""));
+    assert!(!page.contains("/sources/migrate") && !page.contains("name=\"destination\""));
+    assert_eq!(
+        post(
+            &client,
+            &format!("{url}/sources/migrate"),
+            &[("csrf", &token)]
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        post(
+            &client,
+            &format!("{url}/sources/add"),
+            &[
+                ("csrf", &token),
+                ("alias", "obsolete-move"),
+                ("path", &native.to_string_lossy()),
+                ("action", "move")
+            ]
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert!(native.join("example/SKILL.md").is_file());
+
     let expected_path: PathBuf = native.components().collect();
     assert!(page.contains(&format!("value=\"{}\"", expected_path.to_string_lossy())));
     assert!(page.contains("/favicon.ico") && page.contains("/assets/icon-32.png"));

@@ -1,6 +1,9 @@
 "use strict";
 (() => {
 const catalog = {
+  "Codexの探索先かどうか確認できません。フォルダーやドライブへの接続・読み取り権限を確認してください。": ["Unable to determine whether Codex scans this folder. Check its connection and read permissions.", "无法确定 Codex 是否扫描此文件夹。请检查连接和读取权限。", "無法確定 Codex 是否掃描此資料夾。請檢查連線與讀取權限。", "Codex가 이 폴더를 탐색하는지 확인할 수 없습니다. 연결과 읽기 권한을 확인하세요.", "No se puede determinar si Codex explora esta carpeta. Compruebe la conexión y los permisos de lectura.", "Impossible de déterminer si Codex analyse ce dossier. Vérifiez la connexion et les droits de lecture.", "Es lässt sich nicht feststellen, ob Codex diesen Ordner durchsucht. Prüfen Sie Verbindung und Leserechte.", "Não foi possível determinar se o Codex examina esta pasta. Verifique a conexão e as permissões de leitura."],
+  "Codexもこのフォルダーを直接読み込みます。二重読み込みを避けるには、Codexの標準探索先以外にスキルを配置して、そのフォルダーを登録してください。": ["Codex also reads this folder directly. To avoid loading skills twice, place them outside the standard Codex discovery paths and register that folder.", "Codex 也会直接读取此文件夹。为避免重复加载，请将技能放在 Codex 标准扫描路径之外，然后注册该文件夹。", "Codex 也會直接讀取此資料夾。為避免重複載入，請將技能放在 Codex 標準探索路徑之外，再註冊該資料夾。", "Codex도 이 폴더를 직접 읽습니다. 중복 로드를 피하려면 Codex 기본 탐색 경로 밖에 스킬을 배치하고 해당 폴더를 등록하세요.", "Codex también lee esta carpeta directamente. Para evitar cargas duplicadas, coloque las habilidades fuera de las rutas estándar de Codex y registre esa carpeta.", "Codex lit également ce dossier directement. Pour éviter les doublons, placez les compétences hors des chemins de recherche standard de Codex et enregistrez ce dossier.", "Codex liest diesen Ordner auch direkt. Legen Sie Skills außerhalb der standardmäßigen Codex-Suchpfade ab und registrieren Sie diesen Ordner, um doppeltes Laden zu vermeiden.", "O Codex também lê esta pasta diretamente. Para evitar carregamento duplicado, coloque as habilidades fora dos caminhos padrão do Codex e registre essa pasta."],
+  "MCP公開だけではCodexの標準探索から外れません。二重読み込みを避けるには、標準探索先以外にスキルを配置して登録してください。": ["MCP publication does not exclude skills from standard Codex discovery. To avoid loading skills twice, place them outside the standard discovery paths and register their folder.", "通过 MCP 发布不会使技能脱离 Codex 的标准扫描范围。为避免重复加载，请将技能放在标准扫描路径之外并注册其文件夹。", "透過 MCP 發布不會將技能排除於 Codex 的標準探索範圍。為避免重複載入，請將技能放在標準探索路徑之外並註冊其資料夾。", "MCP 공개만으로는 Codex 기본 탐색에서 제외되지 않습니다. 중복 로드를 피하려면 기본 탐색 경로 밖에 스킬을 배치하고 등록하세요.", "Publicar por MCP no excluye las habilidades de la búsqueda estándar de Codex. Para evitar cargas duplicadas, colóquelas fuera de esas rutas y registre su carpeta.", "La publication MCP ne retire pas les compétences de la recherche standard de Codex. Pour éviter les doublons, placez-les hors de ces chemins et enregistrez leur dossier.", "Die MCP-Freigabe schließt Skills nicht von der standardmäßigen Codex-Suche aus. Legen Sie sie außerhalb dieser Suchpfade ab und registrieren Sie ihren Ordner, um doppeltes Laden zu vermeiden.", "A publicação MCP não exclui as habilidades da busca padrão do Codex. Para evitar carregamento duplicado, coloque-as fora desses caminhos e registre a pasta."],
   "取得元を確認できません": ["Source unavailable", "无法确认来源", "無法確認來源", "원본을 확인할 수 없습니다", "No se puede verificar el origen", "Source non vérifiable", "Quelle nicht überprüfbar", "Não foi possível verificar a origem"],
   "ソースの接続・権限を確認して再スキャンしてください。": ["Check the source connection and permissions, then rescan.", "请检查来源连接和权限，然后重新扫描。", "請檢查來源連線與權限，然後重新掃描。", "원본 연결과 권한을 확인한 후 다시 스캔하세요.", "Compruebe la conexión y los permisos del origen y vuelva a escanear.", "Vérifiez la connexion et les autorisations de la source, puis relancez l’analyse.", "Prüfen Sie Verbindung und Berechtigungen der Quelle und scannen Sie erneut.", "Verifique a conexão e as permissões da origem e faça uma nova varredura."],
 
@@ -928,16 +931,6 @@ const catalog = {
     "/mcp (gleicher Host wie diese Seite)",
     "/mcp (mesmo servidor desta página)"
   ],
-  "移動前の確認事項": [
-    "Before moving",
-    "移动前须知",
-    "移動前須知",
-    "이동 전 확인 사항",
-    "Antes de mover",
-    "Avant le déplacement",
-    "Vor dem Verschieben",
-    "Antes de mover"
-  ],
   "管理中のフォルダー": [
     "Managed folders",
     "管理的文件夹",
@@ -977,26 +970,6 @@ const catalog = {
     " éléments",
     " Einträge",
     " itens"
-  ],
-  "MCP専用の保存先へ移動": [
-    "Move to an MCP-only location",
-    "移动到 MCP 专用位置",
-    "移至 MCP 專用位置",
-    "MCP 전용 위치로 이동",
-    "Mover a una ubicación exclusiva de MCP",
-    "Déplacer vers un emplacement réservé à MCP",
-    "An einen reinen MCP-Speicherort verschieben",
-    "Mover para um local exclusivo do MCP"
-  ],
-  "保存場所を移動": [
-    "Move storage location",
-    "移动存储位置",
-    "移動儲存位置",
-    "저장 위치 이동",
-    "Mover ubicación",
-    "Déplacer l’emplacement",
-    "Speicherort verschieben",
-    "Mover local de armazenamento"
   ],
   "参照するフォルダーを変更": [
     "Change referenced folder",
@@ -1117,36 +1090,6 @@ const catalog = {
     "Modification…",
     "Wird geändert…",
     "Alterando…"
-  ],
-  "移動先（絶対パス）": [
-    "Destination (absolute path)",
-    "目标位置（绝对路径）",
-    "目標位置（絕對路徑）",
-    "대상 위치(절대 경로)",
-    "Destino (ruta absoluta)",
-    "Destination (chemin absolu)",
-    "Ziel (absoluter Pfad)",
-    "Destino (caminho absoluto)"
-  ],
-  "移動中…": [
-    "Moving…",
-    "正在移动…",
-    "正在移動…",
-    "이동 중…",
-    "Moviendo…",
-    "Déplacement…",
-    "Wird verschoben…",
-    "Movendo…"
-  ],
-  "この保存先へ移動": [
-    "Move to this location",
-    "移动到此位置",
-    "移至此位置",
-    "이 위치로 이동",
-    "Mover a esta ubicación",
-    "Déplacer ici",
-    "Hierhin verschieben",
-    "Mover para este local"
   ],
   "操作を完了できませんでした": [
     "The operation could not be completed",
@@ -1308,16 +1251,6 @@ const catalog = {
     "MCP-Veröffentlichung ändert die Standardsuche von Codex nicht. Um doppelte direkte Zugriffe zu vermeiden, ",
     "A publicação MCP não altera a descoberta padrão do Codex. Para evitar leituras duplicadas, "
   ],
-  "ソース画面で専用フォルダーへ移動": [
-    "move to a dedicated folder on the Folders page",
-    "在文件夹页面移至专用文件夹",
-    "在資料夾頁面移至專用資料夾",
-    "폴더 화면에서 전용 폴더로 이동",
-    "mueve las habilidades a una carpeta exclusiva desde Carpetas",
-    "déplacez-les vers un dossier dédié depuis Dossiers",
-    "auf der Ordnerseite in einen eigenen Ordner verschieben",
-    "mova para uma pasta exclusiva na página Pastas"
-  ],
   "現在のファイルは読み取れます。最後のスキャン時は取得できなかったため、MCPの索引は復旧待ちです。": [
     "The file is readable now, but the last scan failed. The MCP index needs a rescan. Please ",
     "文件现在可读取，但上次扫描失败。MCP 索引需要重新扫描。请",
@@ -1388,46 +1321,6 @@ const catalog = {
     "Erstellt einen Ordner und SKILL.md in der gewählten Quelle, ohne bestehende Dateien zu überschreiben.",
     "Cria uma pasta e SKILL.md na origem selecionada sem sobrescrever arquivos existentes."
   ],
-  "先に上の接続先をMCPクライアントに登録し、接続を確認してください。": [
-    "First add the endpoint above to your MCP client and verify the connection.",
-    "请先将上述端点添加到 MCP 客户端并确认连接。",
-    "請先將上述端點新增至 MCP 用戶端並確認連線。",
-    "먼저 위 주소를 MCP 클라이언트에 등록하고 연결을 확인하세요.",
-    "Primero añade la dirección anterior al cliente MCP y comprueba la conexión.",
-    "Ajoutez d’abord l’adresse ci-dessus à votre client MCP et vérifiez la connexion.",
-    "Fügen Sie zuerst den obigen Endpunkt zum MCP-Client hinzu und prüfen Sie die Verbindung.",
-    "Primeiro adicione o endereço acima ao cliente MCP e confirme a conexão."
-  ],
-  "移動先は同じボリューム内の、まだ存在しないフォルダーを指定します。推奨先は必要なら作成します。任意の移動先の親フォルダーは事前に用意してください。": [
-    "Choose a folder that does not yet exist on the same volume. The recommended parent location is created if needed. For a custom destination, create its parent folder first.",
-    "请选择同一卷内尚不存在的文件夹。必要时会创建建议位置。自定义目标的父文件夹需预先创建。",
-    "請選擇同一磁碟區內尚不存在的資料夾。必要時會建立建議位置。自訂目標的父資料夾需預先建立。",
-    "같은 볼륨에서 아직 존재하지 않는 폴더를 지정하세요. 권장 위치는 필요하면 생성합니다. 사용자 지정 대상의 상위 폴더는 미리 만드세요.",
-    "Elige una carpeta que aún no exista en el mismo volumen. Se creará la ubicación recomendada si hace falta. Para un destino personalizado, crea primero la carpeta superior.",
-    "Choisissez un dossier inexistant sur le même volume. L’emplacement recommandé est créé si nécessaire. Pour une destination personnalisée, créez d’abord le dossier parent.",
-    "Wählen Sie einen noch nicht vorhandenen Ordner auf demselben Volume. Der empfohlene Ort wird bei Bedarf erstellt. Bei eigenen Zielen muss der übergeordnete Ordner bereits existieren.",
-    "Escolha uma pasta ainda inexistente no mesmo volume. O local recomendado será criado se necessário. Para um destino personalizado, crie primeiro a pasta pai."
-  ],
-  "Git worktreeやリンクを含むフォルダーは移動できません。ファイル内の絶対パスは書き換えません。": [
-    "Folders containing Git worktrees or links cannot be moved. Absolute paths inside files are not rewritten.",
-    "无法移动含 Git 工作树或链接的文件夹。不会重写文件内的绝对路径。",
-    "無法移動含 Git 工作樹或連結的資料夾。不會改寫檔案內的絕對路徑。",
-    "Git 작업 트리나 링크가 포함된 폴더는 이동할 수 없습니다. 파일 안의 절대 경로는 수정하지 않습니다.",
-    "No se pueden mover carpetas con worktrees de Git o enlaces. No se reescriben las rutas absolutas dentro de los archivos.",
-    "Les dossiers contenant des worktrees Git ou des liens ne peuvent pas être déplacés. Les chemins absolus dans les fichiers ne sont pas réécrits.",
-    "Ordner mit Git-Worktrees oder Verknüpfungen können nicht verschoben werden. Absolute Pfade in Dateien werden nicht geändert.",
-    "Pastas com worktrees do Git ou links não podem ser movidas. Caminhos absolutos nos arquivos não são reescritos."
-  ],
-  "移動後はCodexを再起動してください。既存の会話に読み込まれた内容は消えません。以後はMCPでスキルを検索・取得します。": [
-    "Restart Codex after moving. Content already loaded into conversations remains. Future skill searches and retrieval use MCP.",
-    "移动后请重启 Codex。已载入现有对话的内容不会消失。之后通过 MCP 搜索和获取技能。",
-    "移動後請重新啟動 Codex。已載入現有對話的內容不會消失。之後透過 MCP 搜尋和取得技能。",
-    "이동 후 Codex를 다시 시작하세요. 기존 대화에 로드된 내용은 남습니다. 이후 스킬 검색과 조회는 MCP를 사용합니다.",
-    "Reinicia Codex tras mover. El contenido ya cargado en conversaciones permanece. Las siguientes búsquedas y lecturas usarán MCP.",
-    "Redémarrez Codex après le déplacement. Le contenu déjà chargé dans les conversations reste présent. Les recherches et récupérations suivantes passent par MCP.",
-    "Starten Sie Codex nach dem Verschieben neu. Bereits in Gespräche geladene Inhalte bleiben erhalten. Zukünftige Skillsuche und Abrufe nutzen MCP.",
-    "Reinicie o Codex após mover. O conteúdo já carregado nas conversas permanece. As próximas buscas e leituras usarão MCP."
-  ],
   "管理中のフォルダーはありません。下の「フォルダーを追加」から登録してください。": [
     "No managed folders. Use “Add folder” below to register one.",
     "没有管理中的文件夹。请使用下方的“添加文件夹”注册。",
@@ -1437,26 +1330,6 @@ const catalog = {
     "Aucun dossier géré. Utilisez « Ajouter un dossier » ci-dessous.",
     "Keine verwalteten Ordner. Nutzen Sie unten „Ordner hinzufügen“.",
     "Não há pastas gerenciadas. Use “Adicionar pasta” abaixo."
-  ],
-  "Codexの探索先かどうか確認できないため、移動できません。フォルダーやドライブへの接続・読み取り権限を確認してください。": [
-    "Cannot move because Codex discovery status is unknown. Check the folder or drive connection and read permissions.",
-    "无法确认 Codex 的发现状态，因此不能移动。请检查文件夹或驱动器的连接及读取权限。",
-    "無法確認 Codex 的探索狀態，因此不能移動。請檢查資料夾或磁碟機的連線及讀取權限。",
-    "Codex 탐색 대상 여부를 확인할 수 없어 이동할 수 없습니다. 폴더나 드라이브 연결 및 읽기 권한을 확인하세요.",
-    "No se puede mover porque se desconoce si Codex lo explora. Comprueba la conexión de la carpeta o unidad y los permisos de lectura.",
-    "Déplacement impossible car l’état de découverte de Codex est inconnu. Vérifiez la connexion au dossier ou lecteur et les droits de lecture.",
-    "Verschieben nicht möglich, da der Codex-Suchstatus unbekannt ist. Prüfen Sie Ordner- oder Laufwerksverbindung und Leserechte.",
-    "Não é possível mover porque o status de descoberta do Codex é desconhecido. Verifique a conexão da pasta ou unidade e as permissões de leitura."
-  ],
-  "Codexもこのフォルダーを直接読み込みます。MCPだけで使うには、下の保存先へ移動してください。": [
-    "Codex also reads this folder directly. Move it to the location below to use MCP exclusively.",
-    "Codex 也会直接读取此文件夹。若只使用 MCP，请移至下方位置。",
-    "Codex 也會直接讀取此資料夾。若只使用 MCP，請移至下方位置。",
-    "Codex도 이 폴더를 직접 읽습니다. MCP만 사용하려면 아래 위치로 이동하세요.",
-    "Codex también lee esta carpeta directamente. Muévela a la ubicación siguiente para usar solo MCP.",
-    "Codex lit aussi ce dossier directement. Déplacez-le ci-dessous pour utiliser uniquement MCP.",
-    "Codex liest diesen Ordner auch direkt. Verschieben Sie ihn an den folgenden Ort, um ausschließlich MCP zu nutzen.",
-    "O Codex também lê esta pasta diretamente. Mova-a para o local abaixo para usar apenas MCP."
   ],
   "Codexの標準探索先の外です。独自の探索設定がある場合は、そちらも確認してください。": [
     "Outside Codex’s default discovery locations. Check any custom discovery settings as well.",
@@ -1507,36 +1380,6 @@ const catalog = {
     "Gérez un autre dossier. Les fichiers des compétences ne seront pas déplacés.",
     "Wechselt die Verwaltung zu einem anderen Ordner. Skilldateien werden nicht verschoben.",
     "Muda o gerenciamento para outra pasta. Os arquivos das habilidades não serão movidos."
-  ],
-  "元のフォルダーを移動先へ丸ごと移動し、有効なスキルをすべてMCP公開します。元の場所には残りません。MCP接続を確認したうえで実行しますか？": [
-    "Move the entire original folder and publish all valid skills via MCP? Nothing remains at the old location. Confirm the MCP connection before continuing.",
-    "要移动整个原文件夹并通过 MCP 公开所有有效技能吗？原位置不会保留。请先确认 MCP 连接。",
-    "要移動整個原資料夾並透過 MCP 公開所有有效技能嗎？原位置不會保留。請先確認 MCP 連線。",
-    "원본 폴더 전체를 이동하고 유효한 모든 스킬을 MCP에 공개할까요? 원래 위치에는 남지 않습니다. 먼저 MCP 연결을 확인하세요.",
-    "¿Mover toda la carpeta original y publicar todas las habilidades válidas mediante MCP? No quedará nada en la ubicación anterior. Confirma primero la conexión MCP.",
-    "Déplacer tout le dossier et publier toutes les compétences valides via MCP ? Rien ne restera à l’ancien emplacement. Vérifiez d’abord la connexion MCP.",
-    "Gesamten ursprünglichen Ordner verschieben und alle gültigen Skills über MCP veröffentlichen? Am alten Ort bleibt nichts zurück. Prüfen Sie zuerst die MCP-Verbindung.",
-    "Mover toda a pasta original e publicar todas as habilidades válidas pelo MCP? Nada ficará no local antigo. Confirme a conexão MCP antes de continuar."
-  ],
-  "元のフォルダーを丸ごと移動し、有効な": [
-    "Move the entire original folder and publish ",
-    "移动整个原文件夹，并公开有效技能 ",
-    "移動整個原資料夾，並公開有效技能 ",
-    "원본 폴더 전체를 이동하고 유효한 스킬 ",
-    "Mover toda la carpeta original y publicar ",
-    "Déplacer tout le dossier et publier ",
-    "Gesamten ursprünglichen Ordner verschieben und gültige Skills veröffentlichen: ",
-    "Mover toda a pasta original e publicar "
-  ],
-  "件をMCP公開します。移動後はCodexを再起動してください。": [
-    " valid skills via MCP. Restart Codex after moving.",
-    " 项到 MCP。移动后请重启 Codex。",
-    " 項至 MCP。移動後請重新啟動 Codex。",
-    "개를 MCP에 공개합니다. 이동 후 Codex를 다시 시작하세요.",
-    " habilidades válidas mediante MCP. Reinicia Codex después.",
-    " compétences valides via MCP. Redémarrez Codex ensuite.",
-    " über MCP. Starten Sie Codex anschließend neu.",
-    " habilidades válidas pelo MCP. Reinicie o Codex após mover."
   ],
   "編集した本文と保存前のリビジョンを保持しています。先に本文をコピーし、フォルダーの接続・読み取り権限を確認してください。": [
     "Your edited content and original revision are retained. Copy the content first, then check the folder connection and read permissions.",
@@ -2038,46 +1881,6 @@ const catalog = {
     "Erreur · Skilvella",
     "Fehler · Skilvella",
     "Erro · Skilvella"
-  ],
-  "ソースフォルダーを専用フォルダーへ移動し、有効なスキルをMCP公開しました。Codexを再起動してください。": [
-    "Moved the source to a dedicated folder and published valid skills via MCP. Restart Codex.",
-    "已将来源移至专用文件夹，并通过 MCP 公开有效技能。请重启 Codex。",
-    "已將來源移至專用資料夾，並透過 MCP 公開有效技能。請重新啟動 Codex。",
-    "소스를 전용 폴더로 이동하고 유효한 스킬을 MCP에 공개했습니다. Codex를 다시 시작하세요.",
-    "Se movió el origen a una carpeta exclusiva y se publicaron las habilidades válidas mediante MCP. Reinicia Codex.",
-    "La source a été déplacée vers un dossier dédié et les compétences valides ont été publiées via MCP. Redémarrez Codex.",
-    "Quelle in einen eigenen Ordner verschoben und gültige Skills über MCP veröffentlicht. Starten Sie Codex neu.",
-    "A origem foi movida para uma pasta exclusiva e as habilidades válidas foram publicadas pelo MCP. Reinicie o Codex."
-  ],
-  "ソースフォルダーを移動し、有効なスキルをMCP公開しました。Codexを再起動してください。": [
-    "Moved the source folder and published valid skills via MCP. Restart Codex.",
-    "已移动来源文件夹，并通过 MCP 公开有效技能。请重启 Codex。",
-    "已移動來源資料夾，並透過 MCP 公開有效技能。請重新啟動 Codex。",
-    "소스 폴더를 이동하고 유효한 스킬을 MCP에 공개했습니다. Codex를 다시 시작하세요.",
-    "Se movió la carpeta de origen y se publicaron las habilidades válidas mediante MCP. Reinicia Codex.",
-    "Le dossier source a été déplacé et les compétences valides ont été publiées via MCP. Redémarrez Codex.",
-    "Quellordner verschoben und gültige Skills über MCP veröffentlicht. Starten Sie Codex neu.",
-    "A pasta de origem foi movida e as habilidades válidas foram publicadas pelo MCP. Reinicie o Codex."
-  ],
-  "登録後の移動を完了できませんでした: {detail}。現在の登録先・元フォルダー・移動先・公開状態を確認してください。": [
-    "Could not complete the move after registration: {detail}. Check the registered location, original folder, destination and publication status.",
-    "注册后未能完成移动：{detail}。请检查当前注册位置、原文件夹、目标和公开状态。",
-    "註冊後未能完成移動：{detail}。請檢查目前註冊位置、原資料夾、目標與公開狀態。",
-    "등록 후 이동을 완료하지 못했습니다: {detail}. 현재 등록 위치, 원본 폴더, 대상 및 공개 상태를 확인하세요.",
-    "No se pudo completar el traslado tras registrar: {detail}. Revisa el registro, la carpeta original, el destino y la publicación.",
-    "Déplacement après enregistrement impossible : {detail}. Vérifiez l’emplacement enregistré, le dossier d’origine, la destination et la publication.",
-    "Verschieben nach Registrierung fehlgeschlagen: {detail}. Prüfen Sie Registrierung, ursprünglichen Ordner, Ziel und Veröffentlichungsstatus.",
-    "Não foi possível concluir a mudança após registrar: {detail}. Verifique o registro, a pasta original, o destino e a publicação."
-  ],
-  "移動を完了できませんでした: {detail}。現在の登録先・元フォルダー・移動先・公開状態を確認してください。": [
-    "Could not complete the move: {detail}. Check the registered location, original folder, destination and publication status.",
-    "未能完成移动：{detail}。请检查当前注册位置、原文件夹、目标和公开状态。",
-    "未能完成移動：{detail}。請檢查目前註冊位置、原資料夾、目標與公開狀態。",
-    "이동을 완료하지 못했습니다: {detail}. 현재 등록 위치, 원본 폴더, 대상 및 공개 상태를 확인하세요.",
-    "No se pudo completar el traslado: {detail}. Revisa el registro, la carpeta original, el destino y la publicación.",
-    "Déplacement impossible : {detail}. Vérifiez l’emplacement enregistré, le dossier d’origine, la destination et la publication.",
-    "Verschieben fehlgeschlagen: {detail}. Prüfen Sie Registrierung, ursprünglichen Ordner, Ziel und Veröffentlichungsstatus.",
-    "Não foi possível concluir a mudança: {detail}. Verifique o registro, a pasta original, o destino e a publicação."
   ],
   "保存できませんでした: {detail}。下書きは下の編集欄に保持しています。競合時は下書きをコピーしてから「最新版を開く」で最新内容へ統合してください。": [
     "Could not save: {detail}. Your draft remains in the editor below. If there is a conflict, copy your draft, then open the latest version and merge your changes.",

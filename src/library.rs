@@ -705,12 +705,6 @@ mod migration {
     }
 
     impl Library {
-        pub fn dedicated_directory(&self) -> Result<PathBuf> {
-            let data = self.db.parent().context("Invalid database location")?;
-            let name = data.file_name().context("Invalid database location")?;
-            Ok(data.with_file_name(format!("{}-library", name.to_string_lossy())))
-        }
-
         pub(super) fn record_native_roots(
             &self,
             home: &Path,
@@ -765,93 +759,6 @@ mod migration {
                 "未完了のフォルダー移行があります。アプリを再起動して復旧してください"
             );
             Ok(())
-        }
-
-        pub fn migrate_source(&self, alias: &str, destination: &Path) -> Result<ScanReport> {
-            let _guard = self.write_guard()?;
-            self.ensure_no_pending_migration()?;
-            let c = self.connection()?;
-            let from: String = c
-                .query_row(
-                    "SELECT path FROM sources WHERE alias=?1 AND active=1",
-                    [alias],
-                    |r| r.get(0),
-                )
-                .context("Source not found")?;
-            let from = PathBuf::from(from);
-            reject_links(&from)?;
-            ensure!(from.is_dir(), "移行元フォルダーが見つかりません");
-            for ancestor in from.ancestors().skip(1) {
-                ensure!(
-                    !exists(&ancestor.join(".git"))?,
-                    "Gitリポジトリの一部分だけを移行することはできません"
-                );
-            }
-            let dedicated = self.dedicated_directory()?;
-            let default_destination = dedicated.join(alias);
-            let normalized_destination = normalize_path(destination)?;
-            if path_is_within(&normalized_destination, &default_destination)
-                && path_is_within(&default_destination, &normalized_destination)
-                && !exists(&dedicated)?
-            {
-                reject_links(&dedicated)?;
-                ensure!(
-                    !Self::is_native_root(&c, &dedicated)?,
-                    "専用フォルダーがCodexの自動探索範囲内にあります"
-                );
-                let parent = dedicated.parent().context("専用フォルダーの親が必要です")?;
-                ensure!(parent.is_dir(), "専用フォルダーの親が存在しません");
-                let mut builder = fs::DirBuilder::new();
-                builder.recursive(false);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::DirBuilderExt;
-                    builder.mode(0o700);
-                }
-                builder.create(&dedicated)?;
-                sync_directory(parent)?;
-            }
-            let to = checked_destination(destination)?;
-            self.check_migration_bounds(&c, alias, &from, &to)?;
-            check_tree(&from)?;
-            let pending = PendingMigration {
-                alias: alias.to_owned(),
-                identity: directory_identity(&from)?,
-                from,
-                to,
-            };
-            c.execute(
-                "INSERT INTO settings(key,value) VALUES(?1,?2)",
-                params![PENDING, serde_json::to_string(&pending)?],
-            )?;
-            verify_identity(&pending.from, &pending.identity)?;
-            if let Err(error) = rename_no_replace(&pending.from, &pending.to) {
-                verify_identity(&pending.from, &pending.identity)?;
-                clear_pending(&c)?;
-                return Err(error).context(
-                    "フォルダーを移動できません。同じボリューム上の未使用の移動先が必要です",
-                );
-            }
-            match sync_rename_parents(&pending.from, &pending.to)
-                .and_then(|_| self.finish_migration(&pending))
-            {
-                Ok(report) => Ok(report),
-                Err(error) => match verify_identity(&pending.to, &pending.identity)
-                    .and_then(|_| rename_no_replace(&pending.to, &pending.from))
-                {
-                    Ok(()) => {
-                        verify_identity(&pending.from, &pending.identity)?;
-                        sync_rename_parents(&pending.to, &pending.from).context("移行元へ戻しましたが、フォルダーの保存確認に失敗しました。再起動して復旧してください")?;
-                        clear_pending(&c)?;
-                        Err(error).context("索引を更新できなかったため移行元へ戻しました")
-                    }
-                    Err(rollback) => Err(error).context(format!(
-                        "移行の復旧が必要です。移行元: {} / 移動先: {}。元への復帰失敗: {rollback}",
-                        pending.from.display(),
-                        pending.to.display()
-                    )),
-                },
-            }
         }
 
         fn check_migration_bounds(
@@ -1052,39 +959,6 @@ mod migration {
             sync_directory(new_parent)?;
         }
         Ok(())
-    }
-
-    fn checked_destination(destination: &Path) -> Result<PathBuf> {
-        ensure!(
-            destination.is_absolute()
-                && !destination
-                    .components()
-                    .any(|part| matches!(part, Component::CurDir | Component::ParentDir)),
-            "移動先には正規の絶対パスが必要です"
-        );
-        reject_links(destination)?;
-        ensure!(
-            !exists(destination)?,
-            "移動先は既に存在します。未使用のフォルダー名を指定してください"
-        );
-        let name = destination
-            .file_name()
-            .context("移動先のフォルダー名が必要です")?;
-        let parent = destination
-            .parent()
-            .context("移動先の親フォルダーが必要です")?
-            .canonicalize()
-            .context("移動先の親フォルダーが存在しません")?;
-        ensure!(
-            parent.is_dir(),
-            "移動先の親はフォルダーである必要があります"
-        );
-        let destination = parent.join(name);
-        ensure!(
-            destination.to_str().is_some(),
-            "移動先はUTF-8である必要があります"
-        );
-        Ok(destination)
     }
 
     fn check_tree(root: &Path) -> Result<()> {
@@ -1628,7 +1502,7 @@ impl Library {
         Self::sources_on(&c)
     }
     fn sources_on(c: &Connection) -> Result<Vec<Source>> {
-        let mut statement = c.prepare("SELECT s.alias,s.path,(SELECT count(*) FROM skills k WHERE k.source=s.alias AND k.missing=0),(SELECT count(*) FROM skills k WHERE k.source=s.alias AND (k.error IS NOT NULL OR k.missing=1)),(SELECT count(*) FROM skills k WHERE k.source=s.alias AND k.missing=0 AND k.error IS NULL) FROM sources s WHERE active=1 ORDER BY s.alias")?;
+        let mut statement = c.prepare("SELECT s.alias,s.path,(SELECT count(*) FROM skills k WHERE k.source=s.alias AND k.missing=0),(SELECT count(*) FROM skills k WHERE k.source=s.alias AND (k.error IS NOT NULL OR k.missing=1)) FROM sources s WHERE active=1 ORDER BY s.alias")?;
         let mut sources = statement
             .query_map([], |r| {
                 Ok(Source {
@@ -1637,7 +1511,6 @@ impl Library {
                     path: r.get(1)?,
                     skill_count: r.get::<_, i64>(2)? as usize,
                     error_count: r.get::<_, i64>(3)? as usize,
-                    mcp_candidate_count: r.get::<_, i64>(4)? as usize,
                     native_discovery: false,
                     native_discovery_unknown: false,
                 })

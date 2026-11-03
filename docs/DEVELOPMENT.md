@@ -11,7 +11,7 @@ cargo build --release --locked
 
 テスト用のファイル・DBはリポジトリの `.work/test-library` と `.work/test-http` に作成します。実際のスキルフォルダーやクライアント設定は使いません。テスト終了後も調査用に残すため、不要になった時点でそのフォルダーだけを清掃してください。
 
-`tests/migration.rs` はGit管理下の一部を移動しない検査を含むため、`SKILVELLA_MIGRATION_TEST_ROOT` またはOSの一時ディレクトリ配下を使います。ローカル検証では、この変数と子プロセスの `TEMP` / `TMP` を、Git作業ツリー外の作業専用フォルダーへ設定してください。
+`tests/migration.rs` は旧版の中断移行の復旧を隔離フォルダーで検証するため、`SKILVELLA_MIGRATION_TEST_ROOT` またはOSの一時ディレクトリ配下を使います。ローカル検証では、この変数と子プロセスの `TEMP` / `TMP` を、Git作業ツリー外の作業専用フォルダーへ設定してください。
 
 ## 構成
 

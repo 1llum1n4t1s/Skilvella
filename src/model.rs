@@ -30,7 +30,6 @@ pub struct Source {
     pub path: String,
     pub skill_count: usize,
     pub error_count: usize,
-    pub mcp_candidate_count: usize,
     pub native_discovery: bool,
     pub native_discovery_unknown: bool,
 }

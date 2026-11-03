@@ -7,15 +7,6 @@
   {% if !message.is_empty() %}<div class="notice" role="status">{{ message }}</div>{% endif %}
   <div class="folder-connection">
     <p><span class="muted"><!--i18n-->MCP接続先<!--/i18n--></span> <code data-mcp-address><!--i18n-->/mcp（この画面と同じ接続先）<!--/i18n--></code></p>
-    <details class="folder-help">
-      <summary><!--i18n-->移動前の確認事項<!--/i18n--></summary>
-      <ul class="note">
-        <li><!--i18n-->先に上の接続先をMCPクライアントに登録し、接続を確認してください。<!--/i18n--></li>
-        <li><!--i18n-->移動先は同じボリューム内の、まだ存在しないフォルダーを指定します。推奨先は必要なら作成します。任意の移動先の親フォルダーは事前に用意してください。<!--/i18n--></li>
-        <li><!--i18n-->Git worktreeやリンクを含むフォルダーは移動できません。ファイル内の絶対パスは書き換えません。<!--/i18n--></li>
-        <li><!--i18n-->移動後はCodexを再起動してください。既存の会話に読み込まれた内容は消えません。以後はMCPでスキルを検索・取得します。<!--/i18n--></li>
-      </ul>
-    </details>
   </div>
   <section id="mcp-directory" aria-labelledby="folders-heading">
     <h2 id="folders-heading"><!--i18n-->管理中のフォルダー <!--/i18n--><span class="count">{{ sources.len() }}</span></h2>
@@ -39,17 +30,13 @@
       <p class="folder-location"><span class="muted"><!--i18n-->現在の場所<!--/i18n--></span><code>{{ self.display_path(s.path) }}</code></p>
       <p class="note"><!--i18n-->スキル <!--/i18n-->{{ s.skill_count }}<!--i18n-->件<!--/i18n-->{% if s.error_count > 0 %} · <span class="error-text"><!--i18n-->読み取りエラー <!--/i18n-->{{ s.error_count }}<!--i18n-->件<!--/i18n--></span>{% endif %}</p>
       {% if s.native_discovery_unknown %}
-      <p class="notice warning"><!--i18n-->Codexの探索先かどうか確認できないため、移動できません。フォルダーやドライブへの接続・読み取り権限を確認してください。<!--/i18n--></p>
+      <p class="notice warning"><!--i18n-->Codexの探索先かどうか確認できません。フォルダーやドライブへの接続・読み取り権限を確認してください。<!--/i18n--></p>
       {% else %}
       {% if s.native_discovery %}
-      <p class="notice warning"><!--i18n-->Codexもこのフォルダーを直接読み込みます。MCPだけで使うには、下の保存先へ移動してください。<!--/i18n--></p>
+      <p class="notice warning"><!--i18n-->Codexもこのフォルダーを直接読み込みます。二重読み込みを避けるには、Codexの標準探索先以外にスキルを配置して、そのフォルダーを登録してください。<!--/i18n--></p>
       {% else %}
       <p class="note"><!--i18n-->Codexの標準探索先の外です。独自の探索設定がある場合は、そちらも確認してください。<!--/i18n--></p>
       {% endif %}
-      <details class="folder-move" {% if s.native_discovery || migration_alias == s.alias %}open{% endif %}>
-        <summary>{% if s.native_discovery %}<!--i18n-->MCP専用の保存先へ移動<!--/i18n-->{% else %}<!--i18n-->保存場所を移動<!--/i18n-->{% endif %}</summary>
-        {% include "migration_form.html" %}
-      </details>
       {% endif %}
       <div class="folder-card-secondary">
         {% if s.alias == directory.source_alias %}
@@ -71,7 +58,7 @@
     <summary><!--i18n-->フォルダーを追加<!--/i18n--></summary>
     <p class="note"><!--i18n-->既存のフォルダーを追加して、すべての階層のスキルを読み込みます。ファイルは移動せず、新しいスキルは非公開で登録します。<!--/i18n--></p>
     <form method="post" action="/sources/add" class="stack">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="action" value="register">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
       <label><!--i18n-->名前<!--/i18n--><input name="alias" value="{{ alias }}" required maxlength="100" placeholder="例: personal"></label>
       <label><!--i18n-->フォルダーの場所（絶対パス）<!--/i18n--><input name="path" value="{{ self.display_path(path) }}" required placeholder="例: D:\Skills または /Users/you/Skills" spellcheck="false"></label>
       <div><button type="submit" data-busy="追加中…"><!--i18n-->追加してスキャン<!--/i18n--></button></div>

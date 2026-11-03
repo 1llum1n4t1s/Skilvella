@@ -280,11 +280,9 @@ tbody tr:hover { background: var(--violet-soft); }
 .confirmation-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin-top: 24px; }
 .folder-connection { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin: 0 0 24px; padding: 0 0 18px; border-bottom: 1px solid var(--line); }
 .folder-connection p { margin: 0; overflow-wrap: anywhere; }
-.folder-help[open] { flex-basis: 100%; }
 .folder-page summary { cursor: pointer; font-weight: 600; line-height: 1.6; }
 .folder-page details[open]>summary { margin-bottom: 16px; }
-.folder-help summary, .folder-secondary summary { font-size: 13px; color: var(--muted); }
-.folder-help li { margin: 8px 0; }
+.folder-secondary summary { font-size: 13px; color: var(--muted); }
 .heading > div { min-width: 0; max-width: 100%; }
 .heading p.muted { overflow-wrap: anywhere; }
 .folder-card-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
@@ -292,8 +290,6 @@ tbody tr:hover { background: var(--violet-soft); }
 .folder-location { display: grid; gap: 5px; margin: 0 0 10px; }
 .folder-location code { overflow-wrap: anywhere; }
 .folder-card .error-text { display: inline; font-size: inherit; }
-.folder-move { margin-top: 18px; }
-.folder-move .note { margin: 0; }
 .folder-card-secondary { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 18px; display: grid; gap: 18px; }
 .folder-card-secondary form>.note { display: inline-block; margin-left: 12px; }
 .folder-add>summary { font-size: 16px; }
