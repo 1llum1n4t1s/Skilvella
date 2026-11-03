@@ -2,3 +2,4 @@
 .bulk-note{margin:0;padding:9px 18px;background:#f7f9f5;border-inline:1px solid var(--line)}
 
 .brand img{align-self:center;flex:none;object-fit:contain}
+.confirmation-dialog{width:calc(100% - 32px);max-width:560px;max-height:calc(100dvh - 32px);margin:auto;padding:24px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink);overflow:auto;box-shadow:0 12px 40px #24322930}.confirmation-dialog::backdrop{background:#17251db3}.confirmation-dialog h2{margin:0 0 16px;font-size:20px}.confirmation-dialog p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}.confirmation-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:12px;margin-top:24px}.confirmation-dialog button:focus-visible{outline:3px solid var(--accent);outline-offset:3px}@media(max-width:560px){.confirmation-dialog{padding:18px}.confirmation-actions button{flex:1}}

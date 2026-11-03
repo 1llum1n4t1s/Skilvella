@@ -3,6 +3,13 @@
 {% block content %}
 <div class="heading"><h1>ソースフォルダー</h1></div>
 {% if !message.is_empty() %}<div class="notice" role="status">{{ message }}</div>{% endif %}
+<section class="panel" id="mcp-directory">
+  <h2>MCP用の専用フォルダーへ移動</h2>
+  <p>推奨する保存先: <code>{{ dedicated_root }}</code></p>
+  <p>Codexの標準探索先にあるスキルは、MCP公開だけでは直接読み込みも残ります。専用フォルダーへの移行は、元のソースフォルダーを丸ごと移動し、有効なスキルをすべてMCP公開します。コピーでは二重読み込みは解消しません。Codexの設定ファイルは編集しません。</p>
+  <p class="note">先にMCPサーバー <code data-mcp-address>/mcp（この画面と同じ接続先）</code>をクライアントへ登録し、接続を確認してください。移行後はCodexの再起動が必要です。既存の会話に読み込まれた内容は消えません。以後はスキル名をMCPで検索して取得してください。</p>
+  <p class="note">同じボリューム内の未作成の移動先を使います。推奨保存先は必要なら作成します。任意の移動先の親は事前に用意してください。絶対パスの参照は書き換えません。Git worktreeやリンクを含む対象は移行できません。</p>
+</section>
 <section class="panel">
   <h2>管理対象フォルダー</h2>
   {% if directory.mode == "disabled" %}<p class="muted">既定の管理は停止中です。追加のソースは引き続き対象になります。</p>
@@ -18,8 +25,14 @@
 </section>
 <section class="panel">
   <h2>追加のソース</h2><p class="muted">別のフォルダーも併せて管理できます。すべての階層から SKILL.md を探します。</p>
-  <form method="post" action="/sources/add" class="source-form"><input type="hidden" name="csrf" value="{{ csrf }}"><label>ソース名<input name="alias" value="{{ alias }}" required maxlength="100" placeholder="例: personal"></label><label class="grow">フォルダーの絶対パス<input name="path" value="{{ path }}" required placeholder="例: D:\Skills" spellcheck="false"></label><button type="submit" class="primary" data-busy="登録中…">登録してスキャン</button></form>
+  <p>「専用dirへ移動して登録」は、指定した元フォルダーを <code>{{ self.directory_example() }}</code> へ丸ごと移動し、有効なスキルをMCP公開します。元の場所には残りません。既存の移動先は空でも使用できません。同じボリューム内の移動に限ります。</p>
+  <form method="post" action="/sources/add" class="source-form"><input type="hidden" name="csrf" value="{{ csrf }}"><label>ソース名<input name="alias" value="{{ alias }}" required maxlength="100" placeholder="例: personal"></label><label class="grow">元フォルダーの絶対パス<input name="path" value="{{ path }}" required placeholder="例: D:\Skills" spellcheck="false"></label><button type="submit" name="action" value="move" class="primary" data-confirm="指定した元フォルダーを丸ごと推奨保存先/ソース名へ移動し、有効なスキルをすべてMCP公開します。元の場所には残りません。MCP接続を確認したうえで実行しますか？" data-busy="移動中…">専用dirへ移動して登録</button><button type="submit" name="action" value="register" data-busy="登録中…">登録のみ</button></form>
+  <p class="note">「登録のみ」は元フォルダーを管理対象に加えてスキャンします。新しいスキルは非公開で、再登録では既存の公開設定を引き継ぎます。</p>
 </section>
 <section class="panel"><h2>登録済み <span class="count">{{ sources.len() }}</span></h2>
-{% if sources.is_empty() %}<p class="muted">ソースはまだ登録されていません。</p>{% else %}<div class="source-list">{% for s in sources %}<article class="source"><div><h3>{{ s.alias }}{% if s.alias == directory.source_alias %} · 既定{% endif %}</h3><code>{{ s.path }}</code><p class="muted">{{ s.skill_count }}件のスキル · エラー {{ s.error_count }}件</p></div><form method="post" action="/sources/remove" data-confirm="このソースの登録を解除しますか？ 元のフォルダーとファイルは残ります。"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="alias" value="{{ s.alias }}"><button class="destructive" type="submit" data-busy="解除中…">登録を解除</button></form></article>{% endfor %}</div>{% endif %}<p class="note">登録を解除しても元のフォルダーとファイルは削除しません。既定のソースを解除すると自動登録も停止します。</p></section>
+{% if sources.is_empty() %}<p class="muted">ソースはまだ登録されていません。</p>{% else %}<div class="source-list">{% for s in sources %}<article class="source"><div class="grow"><h3>{{ s.alias }}{% if s.alias == directory.source_alias %} · 既定{% endif %}</h3><code>{{ s.path }}</code><p class="muted">{{ s.skill_count }}件のスキル · エラー {{ s.error_count }}件</p>
+{% if s.native_discovery_unknown %}<p class="notice warning">探索先を判定できません。フォルダーやドライブへの接続・読み取り権限を確認してください。安全のため、判定できるまで移行できません。</p>
+{% else if s.native_discovery %}<p class="notice warning">Codex標準探索対象です。MCP公開だけでは直接読み込みも残ります。</p>
+<form method="post" action="/sources/migrate" class="stack" data-confirm="表示中の元ソースフォルダーを指定した移動先へ丸ごと移動し、有効なスキルをすべてMCP公開します。元の場所には残りません。MCP接続を確認したうえで実行しますか？"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="alias" value="{{ s.alias }}"><label>移動先の絶対パス<input name="destination" value="{{ self.destination_for(s) }}" required spellcheck="false"></label><div><button type="submit" class="primary" data-busy="移動中…">移動してMCPで使う（有効{{ s.mcp_candidate_count }}件）</button></div></form>
+{% else %}<p class="note">Codex標準探索先の外です。独自の探索設定がある場合は、そちらも確認してください。</p>{% endif %}</div><form method="post" action="/sources/remove" data-confirm="このソースの登録を解除しますか？ 元のフォルダーとファイルは残ります。"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="alias" value="{{ s.alias }}"><button class="destructive" type="submit" data-busy="解除中…">登録を解除</button></form></article>{% endfor %}</div>{% endif %}<p class="note">有効件数には公開済みのスキルも含みます。登録を解除しても現在のフォルダーとファイルは削除しません。移行を取り消して元の場所へ戻す操作ではありません。既定のソースを解除すると自動登録も停止します。</p></section>
 {% endblock %}

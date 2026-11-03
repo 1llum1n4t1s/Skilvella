@@ -14,6 +14,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(index))
         .route("/sources", get(sources))
         .route("/sources/add", post(add_source))
+        .route("/sources/migrate", post(migrate_source))
         .route("/sources/remove", post(remove_source))
         .route("/sources/directory", post(set_directory))
         .route("/scan", post(scan))
@@ -163,12 +164,36 @@ struct SourcesPage {
     directory: DirectorySettings,
     directory_mode: String,
     directory_path: String,
+    dedicated_root: String,
+    migration_alias: String,
+    migration_destination: String,
 }
+
+impl SourcesPage {
+    fn directory_example(&self) -> String {
+        std::path::PathBuf::from(&self.dedicated_root)
+            .join("ソース名")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn destination_for(&self, source: &Source) -> String {
+        if self.migration_alias == source.alias {
+            self.migration_destination.clone()
+        } else {
+            std::path::PathBuf::from(&self.dedicated_root)
+                .join(&source.alias)
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+}
+
 async fn sources(State(state): State<AppState>, Query(n): Query<Notice>) -> Response {
     source_page(&state, n.message, String::new(), String::new()).await
 }
 async fn source_page(state: &AppState, message: String, alias: String, path: String) -> Response {
-    source_page_with_directory(state, message, alias, path, None).await
+    source_page_with_directory(state, message, alias, path, None, None).await
 }
 async fn source_page_with_directory(
     state: &AppState,
@@ -176,14 +201,22 @@ async fn source_page_with_directory(
     alias: String,
     path: String,
     draft: Option<(String, String)>,
+    migration: Option<(String, String)>,
 ) -> Response {
     match state
-        .run(|lib| Ok((lib.sources()?, lib.directory_settings()?)))
+        .run(|lib| {
+            Ok((
+                lib.sources()?,
+                lib.directory_settings()?,
+                lib.dedicated_directory()?,
+            ))
+        })
         .await
     {
-        Ok((sources, directory)) => {
+        Ok((sources, directory, dedicated_root)) => {
             let (directory_mode, directory_path) =
                 draft.unwrap_or_else(|| (directory.mode.clone(), directory.custom_path.clone()));
+            let (migration_alias, migration_destination) = migration.unwrap_or_default();
             render(SourcesPage {
                 csrf: state.csrf.to_string(),
                 sources,
@@ -193,6 +226,9 @@ async fn source_page_with_directory(
                 directory,
                 directory_mode,
                 directory_path,
+                dedicated_root: dedicated_root.to_string_lossy().into_owned(),
+                migration_alias,
+                migration_destination,
             })
         }
         Err(e) => failure(e),
@@ -232,6 +268,7 @@ async fn set_directory(State(state): State<AppState>, Form(form): Form<Directory
                 String::new(),
                 String::new(),
                 Some((form.mode, form.path)),
+                None,
             )
             .await
         }
@@ -243,6 +280,8 @@ struct SourceForm {
     alias: String,
     #[serde(default)]
     path: String,
+    #[serde(default)]
+    action: String,
 }
 async fn add_source(State(state): State<AppState>, Form(f): Form<SourceForm>) -> Response {
     if let Some(r) = csrf_error(&state, &f.csrf) {
@@ -250,13 +289,28 @@ async fn add_source(State(state): State<AppState>, Form(f): Form<SourceForm>) ->
     }
     let alias = f.alias.clone();
     let path = f.path.clone();
+    if !matches!(f.action.as_str(), "" | "register" | "move") {
+        return error(StatusCode::BAD_REQUEST, "登録方法が不正です。");
+    }
+    let move_source = f.action == "move";
     match state
-        .run(move |lib| lib.add_source(&alias, std::path::Path::new(&path)))
+        .run(move |lib| {
+            let report = lib.add_source(&alias, std::path::Path::new(&path))?;
+            let migration = move_source.then(|| {
+                let destination = lib.dedicated_directory()?.join(&alias);
+                lib.migrate_source(&alias, &destination)
+            });
+            Ok((report, migration))
+        })
         .await
     {
-        Ok(r) => {
+        Ok((r, migration)) => {
             state.rescan.notify_one();
-            redirect("/sources", &scan_message(r))
+            match migration {
+                Some(Ok(report)) => redirect("/sources", &format!("ソースフォルダーを専用フォルダーへ移動し、有効なスキルをMCP公開しました。Codexを再起動してください。{}", scan_message(report))),
+                Some(Err(e)) => source_page(&state, format!("登録後の移動を完了できませんでした: {e:#}。現在の登録先・元フォルダー・移動先・公開状態を確認してください。"), f.alias, f.path).await,
+                None => redirect("/sources", &scan_message(r)),
+            }
         }
         Err(e) => {
             source_page(
@@ -267,6 +321,31 @@ async fn add_source(State(state): State<AppState>, Form(f): Form<SourceForm>) ->
             )
             .await
         }
+    }
+}
+#[derive(Deserialize)]
+struct MigrationForm {
+    csrf: String,
+    alias: String,
+    destination: String,
+}
+async fn migrate_source(State(state): State<AppState>, Form(f): Form<MigrationForm>) -> Response {
+    if let Some(r) = csrf_error(&state, &f.csrf) {
+        return r;
+    }
+    let alias = f.alias.clone();
+    let destination = f.destination.clone();
+    let result = state
+        .run(move |lib| lib.migrate_source(&alias, std::path::Path::new(&destination)))
+        .await;
+    state.rescan.notify_one();
+    match result {
+        Ok(report) => redirect("/sources", &format!("ソースフォルダーを移動し、有効なスキルをMCP公開しました。Codexを再起動してください。{}", scan_message(report))),
+        Err(e) => source_page_with_directory(
+            &state,
+            format!("移動を完了できませんでした: {e:#}。現在の登録先・元フォルダー・移動先・公開状態を確認してください。"),
+            String::new(), String::new(), None, Some((f.alias, f.destination)),
+        ).await,
     }
 }
 async fn remove_source(State(state): State<AppState>, Form(f): Form<SourceForm>) -> Response {

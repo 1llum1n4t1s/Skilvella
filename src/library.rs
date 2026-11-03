@@ -1,4 +1,604 @@
 use crate::model::*;
+mod migration {
+    use super::{Library, rebuild_fts, refresh_valid, reject_links};
+    use crate::model::ScanReport;
+    use anyhow::{Context, Result, bail, ensure};
+    use rusqlite::{Connection, OptionalExtension, params};
+    use serde::{Deserialize, Serialize};
+    use std::{
+        fs,
+        path::{Component, Path, PathBuf},
+    };
+
+    const PENDING: &str = "pending_migration";
+    const NATIVE_ROOTS: &str = "native_skill_roots";
+
+    #[derive(Serialize, Deserialize)]
+    struct PendingMigration {
+        alias: String,
+        from: PathBuf,
+        to: PathBuf,
+        identity: DirectoryIdentity,
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Eq)]
+    struct DirectoryIdentity {
+        volume: u64,
+        file: u64,
+    }
+
+    impl Library {
+        pub fn dedicated_directory(&self) -> Result<PathBuf> {
+            let data = self.db.parent().context("Invalid database location")?;
+            let name = data.file_name().context("Invalid database location")?;
+            Ok(data.with_file_name(format!("{}-library", name.to_string_lossy())))
+        }
+
+        pub(super) fn record_native_roots(
+            &self,
+            home: &Path,
+            codex_home: Option<&Path>,
+        ) -> Result<()> {
+            let c = self.connection()?;
+            // 探索先は今回のhome/CODEX_HOMEだけを保持し、過去のvolumeを予約し続けない。
+            let mut roots = Vec::new();
+            let mut known = vec![home.join(".agents/skills"), home.join(".codex/skills")];
+            if let Some(codex) = codex_home {
+                known.push(codex.join("skills"));
+            }
+            for root in known {
+                ensure!(root.is_absolute(), "Native skill root must be absolute");
+                // 一時的なvolume不在でも既知の探索パスを保持し、管理画面を開く。
+                let root = normalize_path(&root).unwrap_or(root);
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
+            }
+            c.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![NATIVE_ROOTS, serde_json::to_string(&roots)?])?;
+            Ok(())
+        }
+
+        pub(super) fn is_native_root(c: &Connection, path: &Path) -> Result<bool> {
+            let path = normalize_path(path)?;
+            let components: Vec<_> = path
+                .components()
+                .filter_map(|part| match part {
+                    Component::Normal(value) => value.to_str(),
+                    _ => None,
+                })
+                .collect();
+            let standard = components.windows(2).any(|parts| {
+                (path_component_eq(parts[0], ".agents") || path_component_eq(parts[0], ".codex"))
+                    && path_component_eq(parts[1], "skills")
+            });
+            if standard {
+                return Ok(true);
+            }
+            for root in native_roots(c)? {
+                if path_is_within(&path, &normalize_path(&root)?) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+
+        pub(super) fn ensure_no_pending_migration(&self) -> Result<()> {
+            ensure!(
+                read_pending(&self.connection()?)?.is_none(),
+                "未完了のフォルダー移行があります。アプリを再起動して復旧してください"
+            );
+            Ok(())
+        }
+
+        pub fn migrate_source(&self, alias: &str, destination: &Path) -> Result<ScanReport> {
+            let _guard = self.write_guard()?;
+            self.ensure_no_pending_migration()?;
+            let c = self.connection()?;
+            let from: String = c
+                .query_row(
+                    "SELECT path FROM sources WHERE alias=?1 AND active=1",
+                    [alias],
+                    |r| r.get(0),
+                )
+                .context("Source not found")?;
+            let from = PathBuf::from(from);
+            reject_links(&from)?;
+            ensure!(from.is_dir(), "移行元フォルダーが見つかりません");
+            for ancestor in from.ancestors().skip(1) {
+                ensure!(
+                    !exists(&ancestor.join(".git"))?,
+                    "Gitリポジトリの一部分だけを移行することはできません"
+                );
+            }
+            let dedicated = self.dedicated_directory()?;
+            let default_destination = dedicated.join(alias);
+            let normalized_destination = normalize_path(destination)?;
+            if path_is_within(&normalized_destination, &default_destination)
+                && path_is_within(&default_destination, &normalized_destination)
+                && !exists(&dedicated)?
+            {
+                reject_links(&dedicated)?;
+                ensure!(
+                    !Self::is_native_root(&c, &dedicated)?,
+                    "専用フォルダーがCodexの自動探索範囲内にあります"
+                );
+                let parent = dedicated.parent().context("専用フォルダーの親が必要です")?;
+                ensure!(parent.is_dir(), "専用フォルダーの親が存在しません");
+                let mut builder = fs::DirBuilder::new();
+                builder.recursive(false);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::DirBuilderExt;
+                    builder.mode(0o700);
+                }
+                builder.create(&dedicated)?;
+                sync_directory(parent)?;
+            }
+            let to = checked_destination(destination)?;
+            self.check_migration_bounds(&c, alias, &from, &to)?;
+            check_tree(&from)?;
+            let pending = PendingMigration {
+                alias: alias.to_owned(),
+                identity: directory_identity(&from)?,
+                from,
+                to,
+            };
+            c.execute(
+                "INSERT INTO settings(key,value) VALUES(?1,?2)",
+                params![PENDING, serde_json::to_string(&pending)?],
+            )?;
+            verify_identity(&pending.from, &pending.identity)?;
+            if let Err(error) = rename_no_replace(&pending.from, &pending.to) {
+                verify_identity(&pending.from, &pending.identity)?;
+                clear_pending(&c)?;
+                return Err(error).context(
+                    "フォルダーを移動できません。同じボリューム上の未使用の移動先が必要です",
+                );
+            }
+            match sync_rename_parents(&pending.from, &pending.to)
+                .and_then(|_| self.finish_migration(&pending))
+            {
+                Ok(report) => Ok(report),
+                Err(error) => match verify_identity(&pending.to, &pending.identity)
+                    .and_then(|_| rename_no_replace(&pending.to, &pending.from))
+                {
+                    Ok(()) => {
+                        verify_identity(&pending.from, &pending.identity)?;
+                        sync_rename_parents(&pending.to, &pending.from).context("移行元へ戻しましたが、フォルダーの保存確認に失敗しました。再起動して復旧してください")?;
+                        clear_pending(&c)?;
+                        Err(error).context("索引を更新できなかったため移行元へ戻しました")
+                    }
+                    Err(rollback) => Err(error).context(format!(
+                        "移行の復旧が必要です。移行元: {} / 移動先: {}。元への復帰失敗: {rollback}",
+                        pending.from.display(),
+                        pending.to.display()
+                    )),
+                },
+            }
+        }
+
+        fn check_migration_bounds(
+            &self,
+            c: &Connection,
+            alias: &str,
+            from: &Path,
+            to: &Path,
+        ) -> Result<()> {
+            let data = self.db.parent().context("Invalid database location")?;
+            ensure!(
+                !overlaps(to, data),
+                "移動先とアプリのデータフォルダーが重なっています"
+            );
+            ensure!(!overlaps(to, from), "移動元と移動先が重なっています");
+            ensure!(
+                !Self::is_native_root(c, to)?,
+                "Codexが自動探索するフォルダー内へは移行できません"
+            );
+            let mut statement = c.prepare("SELECT path FROM sources WHERE alias<>?1")?;
+            for row in statement.query_map([alias], |r| r.get::<_, String>(0))? {
+                ensure!(
+                    !overlaps(to, &normalize_path(Path::new(&row?))?),
+                    "移動先と別の登録フォルダーが重なっています"
+                );
+            }
+            Ok(())
+        }
+
+        fn finish_migration(&self, pending: &PendingMigration) -> Result<ScanReport> {
+            verify_identity(&pending.to, &pending.identity)?;
+            let mut c = self.connection()?;
+            let tx = c.transaction()?;
+            ensure!(
+                tx.execute(
+                    "UPDATE sources SET path=?2 WHERE alias=?1 AND active=1 AND path=?3",
+                    params![
+                        pending.alias,
+                        pending
+                            .to
+                            .to_str()
+                            .context("移動先はUTF-8である必要があります")?,
+                        pending
+                            .from
+                            .to_str()
+                            .context("移動元はUTF-8である必要があります")?
+                    ]
+                )? == 1,
+                "移行元の登録状態が変更されています"
+            );
+            let mut settings = Self::directory_on(&tx)?;
+            if settings.source_alias == pending.alias {
+                settings.mode = "custom".into();
+                settings.path = pending.to.to_string_lossy().into_owned();
+                settings.custom_path = settings.path.clone();
+                Self::save_directory(&tx, &settings)?;
+            }
+            let report = self.scan_on(&tx)?;
+            let ids: Vec<String> = {
+                let mut statement = tx.prepare(
+                    "SELECT id FROM skills WHERE source=?1 AND missing=0 AND error IS NULL",
+                )?;
+                statement
+                    .query_map([&pending.alias], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?
+            };
+            for id in ids {
+                refresh_valid(&tx, &id, &self.locate(&tx, &id)?.1)?;
+                tx.execute("UPDATE skills SET published=1 WHERE id=?1", [&id])?;
+            }
+            rebuild_fts(&tx)?;
+            verify_identity(&pending.to, &pending.identity)?;
+            clear_pending(&tx)?;
+            tx.commit()?;
+            Ok(report)
+        }
+
+        pub(super) fn recover_pending_migration(&self) -> Result<()> {
+            let c = self.connection()?;
+            let Some(pending) = read_pending(&c)? else {
+                return Ok(());
+            };
+            reject_links(&pending.from)?;
+            reject_links(&pending.to)?;
+            ensure!(
+                pending.from.is_absolute() && pending.to.is_absolute(),
+                "移行復旧情報のパスが不正です"
+            );
+            self.check_migration_bounds(&c, &pending.alias, &pending.from, &pending.to)?;
+            match (exists(&pending.from)?, exists(&pending.to)?) {
+                (true, false) => {
+                    verify_identity(&pending.from, &pending.identity)?;
+                    ensure!(pending.from.is_dir(), "移行元がフォルダーではありません");
+                    sync_rename_parents(&pending.from, &pending.to)?;
+                    clear_pending(&c)?;
+                }
+                (false, true) => {
+                    verify_identity(&pending.to, &pending.identity)?;
+                    ensure!(pending.to.is_dir(), "移動先がフォルダーではありません");
+                    check_tree(&pending.to)?;
+                    sync_rename_parents(&pending.from, &pending.to)?;
+                    self.finish_migration(&pending).with_context(|| {
+                        format!(
+                            "フォルダー移行を復旧できません。移行元: {} / 移動先: {}",
+                            pending.from.display(),
+                            pending.to.display()
+                        )
+                    })?;
+                }
+                _ => bail!(
+                    "移行元と移動先の状態を自動判定できません。両方存在するか両方不在です。移行元: {} / 移動先: {}",
+                    pending.from.display(),
+                    pending.to.display()
+                ),
+            }
+            Ok(())
+        }
+    }
+
+    fn native_roots(c: &Connection) -> Result<Vec<PathBuf>> {
+        let value: Option<String> = c
+            .query_row(
+                "SELECT value FROM settings WHERE key=?1",
+                [NATIVE_ROOTS],
+                |r| r.get(0),
+            )
+            .optional()?;
+        value
+            .map(|value| serde_json::from_str(&value).map_err(Into::into))
+            .unwrap_or_else(|| Ok(Vec::new()))
+    }
+
+    fn path_component_eq(left: &str, right: &str) -> bool {
+        left.eq_ignore_ascii_case(right)
+    }
+
+    fn overlaps(left: &Path, right: &Path) -> bool {
+        path_is_within(left, right) || path_is_within(right, left)
+    }
+
+    fn path_is_within(path: &Path, root: &Path) -> bool {
+        let mut path = path.components();
+        root.components().all(|part| {
+            path.next().is_some_and(|candidate| {
+                if cfg!(any(windows, target_os = "macos")) {
+                    candidate
+                        .as_os_str()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case(&part.as_os_str().to_string_lossy())
+                } else {
+                    candidate == part
+                }
+            })
+        })
+    }
+
+    fn normalize_path(path: &Path) -> Result<PathBuf> {
+        ensure!(path.is_absolute(), "フォルダーパスには絶対パスが必要です");
+        let mut ancestor = path;
+        let mut suffix = Vec::new();
+        loop {
+            match ancestor.canonicalize() {
+                Ok(mut canonical) => {
+                    for part in suffix.into_iter().rev() {
+                        canonical.push(part);
+                    }
+                    return Ok(canonical);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    suffix.push(
+                        ancestor
+                            .file_name()
+                            .context("フォルダーの親を解決できません")?
+                            .to_os_string(),
+                    );
+                    ancestor = ancestor
+                        .parent()
+                        .context("フォルダーの親を解決できません")?;
+                }
+                Err(error) => return Err(error).context("フォルダーの正規パスを解決できません"),
+            }
+        }
+    }
+
+    fn sync_directory(path: &Path) -> Result<()> {
+        #[cfg(unix)]
+        fs::File::open(path)?.sync_all()?;
+        #[cfg(not(unix))]
+        let _ = path;
+        Ok(())
+    }
+
+    fn sync_rename_parents(from: &Path, to: &Path) -> Result<()> {
+        let old_parent = from.parent().context("移動元の親が必要です")?;
+        let new_parent = to.parent().context("移動先の親が必要です")?;
+        sync_directory(old_parent)?;
+        if old_parent != new_parent {
+            sync_directory(new_parent)?;
+        }
+        Ok(())
+    }
+
+    fn checked_destination(destination: &Path) -> Result<PathBuf> {
+        ensure!(
+            destination.is_absolute()
+                && !destination
+                    .components()
+                    .any(|part| matches!(part, Component::CurDir | Component::ParentDir)),
+            "移動先には正規の絶対パスが必要です"
+        );
+        reject_links(destination)?;
+        ensure!(
+            !exists(destination)?,
+            "移動先は既に存在します。未使用のフォルダー名を指定してください"
+        );
+        let name = destination
+            .file_name()
+            .context("移動先のフォルダー名が必要です")?;
+        let parent = destination
+            .parent()
+            .context("移動先の親フォルダーが必要です")?
+            .canonicalize()
+            .context("移動先の親フォルダーが存在しません")?;
+        ensure!(
+            parent.is_dir(),
+            "移動先の親はフォルダーである必要があります"
+        );
+        let destination = parent.join(name);
+        ensure!(
+            destination.to_str().is_some(),
+            "移動先はUTF-8である必要があります"
+        );
+        Ok(destination)
+    }
+
+    fn check_tree(root: &Path) -> Result<()> {
+        reject_links(root)?;
+        for entry in fs::read_dir(root)? {
+            let path = entry?.path();
+            reject_links(&path)?;
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.is_dir()
+                && path
+                    .file_name()
+                    .is_some_and(|name| path_component_eq(&name.to_string_lossy(), "skills"))
+                && root.file_name().is_some_and(|name| {
+                    path_component_eq(&name.to_string_lossy(), ".agents")
+                        || path_component_eq(&name.to_string_lossy(), ".codex")
+                })
+            {
+                bail!("移行元の内部にCodexが自動探索するスキルフォルダーがあるため移行できません");
+            }
+            if path
+                .file_name()
+                .is_some_and(|name| path_component_eq(&name.to_string_lossy(), ".git"))
+            {
+                ensure!(
+                    metadata.is_dir(),
+                    "git worktreeなど.git参照ファイルのあるフォルダーは移行できません"
+                );
+                check_git_directory(&path)?;
+            }
+            ensure!(
+                metadata.is_dir() || metadata.is_file(),
+                "特殊ファイルのあるフォルダーは移行できません"
+            );
+            if metadata.is_dir() {
+                check_tree(&path)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn check_git_directory(git: &Path) -> Result<()> {
+        // 外部のオブジェクトやworktreeへの参照はルート移動だけでは保全できない。
+        for pointer in [
+            "objects/info/alternates",
+            "worktrees",
+            "commondir",
+            "config.worktree",
+        ] {
+            ensure!(
+                !exists(&git.join(pointer))?,
+                "Gitの外部共有・worktree参照があるフォルダーは移行できません"
+            );
+        }
+        let config = git.join("config");
+        reject_links(&config)?;
+        if exists(&config)? {
+            let text = super::read_text(&config, super::FILE_LIMIT)?;
+            ensure!(
+                !text.lines().any(|line| {
+                    line.trim_start()
+                        .split(['=', ' ', '\t'])
+                        .next()
+                        .is_some_and(|key| key.eq_ignore_ascii_case("worktree"))
+                }),
+                "Gitのworktree設定があるフォルダーは移行できません"
+            );
+        }
+        Ok(())
+    }
+
+    fn exists(path: &Path) -> Result<bool> {
+        match fs::symlink_metadata(path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn directory_identity(path: &Path) -> Result<DirectoryIdentity> {
+        reject_links(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = fs::metadata(path)?;
+            ensure!(metadata.is_dir(), "移行対象がフォルダーではありません");
+            Ok(DirectoryIdentity {
+                volume: metadata.dev(),
+                file: metadata.ino(),
+            })
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+            use windows_sys::Win32::Storage::FileSystem::{
+                BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
+            };
+            let directory = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)?;
+            ensure!(
+                directory.metadata()?.is_dir(),
+                "移行対象がフォルダーではありません"
+            );
+            let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+            if unsafe {
+                GetFileInformationByHandle(directory.as_raw_handle() as _, information.as_mut_ptr())
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let information = unsafe { information.assume_init() };
+            Ok(DirectoryIdentity {
+                volume: u64::from(information.dwVolumeSerialNumber),
+                file: (u64::from(information.nFileIndexHigh) << 32)
+                    | u64::from(information.nFileIndexLow),
+            })
+        }
+    }
+
+    fn verify_identity(path: &Path, expected: &DirectoryIdentity) -> Result<()> {
+        ensure!(
+            &directory_identity(path)? == expected,
+            "移行対象のフォルダーが置き換わっています。自動復旧を停止し、復旧情報を保持しました"
+        );
+        Ok(())
+    }
+
+    fn read_pending(c: &Connection) -> Result<Option<PendingMigration>> {
+        let value: Option<String> = c
+            .query_row("SELECT value FROM settings WHERE key=?1", [PENDING], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        value
+            .map(|value| serde_json::from_str(&value).map_err(Into::into))
+            .transpose()
+    }
+
+    fn clear_pending(c: &Connection) -> Result<()> {
+        c.execute("DELETE FROM settings WHERE key=?1", [PENDING])?;
+        Ok(())
+    }
+
+    fn rename_no_replace(from: &Path, to: &Path) -> Result<()> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            let from: Vec<_> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+            let to: Vec<_> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+            // 既存先の置換と別ボリュームへのコピーを許可せず、保存完了を待つ。
+            if unsafe {
+                windows_sys::Win32::Storage::FileSystem::MoveFileExW(
+                    from.as_ptr(),
+                    to.as_ptr(),
+                    windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error().into());
+            }
+        }
+        #[cfg(unix)]
+        {
+            use std::{ffi::CString, os::unix::ffi::OsStrExt};
+            let from = CString::new(from.as_os_str().as_bytes())?;
+            let to = CString::new(to.as_os_str().as_bytes())?;
+            #[cfg(target_os = "linux")]
+            let result = unsafe {
+                libc::renameat2(
+                    libc::AT_FDCWD,
+                    from.as_ptr(),
+                    libc::AT_FDCWD,
+                    to.as_ptr(),
+                    libc::RENAME_NOREPLACE,
+                )
+            };
+            #[cfg(target_os = "macos")]
+            let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            compile_error!(
+                "Atomic migration requires a no-replace rename implementation for this OS"
+            );
+            if result != 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(windows)]
 use anyhow::bail;
 use anyhow::{Context, Result, ensure};
@@ -9,12 +609,36 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 
 const CONTENT_LIMIT: u64 = 2 * 1024 * 1024;
 const FILE_LIMIT: u64 = 1024 * 1024;
+
+struct WriteGuard<'a> {
+    _file: fs::File,
+    _mutex: MutexGuard<'a, ()>,
+}
+
+fn lock_writer_file(path: &Path) -> Result<fs::File> {
+    reject_links(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    ensure!(
+        file.metadata()?.is_file(),
+        "Writer lock must be a regular file"
+    );
+    file.lock()
+        .context("Cannot acquire library operation lock")?;
+    Ok(file)
+}
 
 #[derive(Clone)]
 pub struct Library {
@@ -24,6 +648,12 @@ pub struct Library {
 
 impl Library {
     pub fn open(data_dir: &Path) -> Result<Self> {
+        Self::open_inner(data_dir, None)
+    }
+    pub fn open_for_user(data_dir: &Path, home: &Path, codex_home: Option<&Path>) -> Result<Self> {
+        Self::open_inner(data_dir, Some((home, codex_home)))
+    }
+    fn open_inner(data_dir: &Path, native_context: Option<(&Path, Option<&Path>)>) -> Result<Self> {
         reject_links(data_dir)?;
         let mut directory = fs::DirBuilder::new();
         directory.recursive(true);
@@ -34,6 +664,8 @@ impl Library {
         }
         directory.create(data_dir)?;
         let db = data_dir.canonicalize()?.join("library.sqlite3");
+        // 別Library・別プロセスの移行が終わるまで起動時復旧も待機する。
+        let _operation = lock_writer_file(&db.with_file_name("library.write.lock"))?;
         reject_links(&db)?;
         // SQLite が初めて開く前から履歴と索引のファイルを非公開で作成する。
         if !db.exists() {
@@ -60,7 +692,22 @@ impl Library {
             CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY,skill_id TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,reason TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE VIRTUAL TABLE IF NOT EXISTS skill_fts USING fts5(id UNINDEXED,name,description,content,tags,category,tokenize='trigram');")?;
+        if let Some((home, codex_home)) = native_context {
+            library.record_native_roots(home, codex_home)?;
+        }
+        library.recover_pending_migration()?;
         Ok(library)
+    }
+    fn write_guard(&self) -> Result<WriteGuard<'_>> {
+        let mutex = self
+            .writer
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let file = lock_writer_file(&self.db.with_file_name("library.write.lock"))?;
+        Ok(WriteGuard {
+            _file: file,
+            _mutex: mutex,
+        })
     }
     fn connection(&self) -> Result<Connection> {
         reject_links(&self.db)?;
@@ -107,10 +754,9 @@ impl Library {
         Self::directory_on(&self.connection()?)
     }
     pub fn initialize_directory(&self, home: &Path, codex_home: Option<&Path>) -> Result<()> {
-        let _guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
+        self.record_native_roots(home, codex_home)?;
         let mut candidates = vec![home.join(".agents/skills")];
         if let Some(path) = codex_home {
             candidates.push(path.join("skills"));
@@ -186,10 +832,8 @@ impl Library {
         Ok(())
     }
     pub fn set_directory(&self, mode: &str, path: &str) -> Result<ScanReport> {
-        let _guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
         let mut c = self.connection()?;
         let tx = c.transaction()?;
         let settings = Self::directory_on(&tx)?;
@@ -306,17 +950,31 @@ impl Library {
         Self::sources_on(&c)
     }
     fn sources_on(c: &Connection) -> Result<Vec<Source>> {
-        let mut statement = c.prepare("SELECT s.alias,s.path,(SELECT count(*) FROM skills k WHERE k.source=s.alias AND k.missing=0),(SELECT count(*) FROM skills k WHERE k.source=s.alias AND (k.error IS NOT NULL OR k.missing=1)) FROM sources s WHERE active=1 ORDER BY s.alias")?;
-        Ok(statement
+        let mut statement = c.prepare("SELECT s.alias,s.path,(SELECT count(*) FROM skills k WHERE k.source=s.alias AND k.missing=0),(SELECT count(*) FROM skills k WHERE k.source=s.alias AND (k.error IS NOT NULL OR k.missing=1)),(SELECT count(*) FROM skills k WHERE k.source=s.alias AND k.missing=0 AND k.error IS NULL) FROM sources s WHERE active=1 ORDER BY s.alias")?;
+        let mut sources = statement
             .query_map([], |r| {
                 Ok(Source {
                     alias: r.get(0)?,
                     path: r.get(1)?,
                     skill_count: r.get::<_, i64>(2)? as usize,
                     error_count: r.get::<_, i64>(3)? as usize,
+                    mcp_candidate_count: r.get::<_, i64>(4)? as usize,
+                    native_discovery: false,
+                    native_discovery_unknown: false,
                 })
             })?
-            .collect::<rusqlite::Result<_>>()?)
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for source in &mut sources {
+            match Self::is_native_root(c, Path::new(&source.path)) {
+                Ok(native) => source.native_discovery = native,
+                Err(_) => {
+                    // オフラインvolumeなどの判定不能を、専用フォルダーの保証にしない。
+                    source.native_discovery = true;
+                    source.native_discovery_unknown = true;
+                }
+            }
+        }
+        Ok(sources)
     }
     pub fn add_source(&self, alias: &str, path: &Path) -> Result<ScanReport> {
         ensure!(
@@ -327,10 +985,8 @@ impl Library {
                     .all(|c| c.is_alphanumeric() || "_-".contains(c)),
             "Invalid source alias"
         );
-        let _guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
         reject_links(path)?;
         let root = path
             .canonicalize()
@@ -374,10 +1030,8 @@ impl Library {
         Ok(report)
     }
     pub fn remove_source(&self, alias: &str) -> Result<()> {
-        let _guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
         let mut c = self.connection()?;
         let tx = c.transaction()?;
         tx.execute("UPDATE sources SET active=0 WHERE alias=?1", [alias])?;
@@ -392,10 +1046,8 @@ impl Library {
         Ok(())
     }
     pub fn scan(&self) -> Result<ScanReport> {
-        let _guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
         self.scan_locked(&self.connection()?)
     }
     fn scan_locked(&self, c: &Connection) -> Result<ScanReport> {
@@ -662,10 +1314,8 @@ impl Library {
         })
     }
     pub fn save_content(&self, id: &str, expected_revision: &str, content: &str) -> Result<()> {
-        let _guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
         self.save_locked(id, expected_revision, content, "edit")
     }
     fn save_locked(&self, id: &str, expected: &str, content: &str, reason: &str) -> Result<()> {
@@ -729,10 +1379,8 @@ impl Library {
         Ok(())
     }
     pub fn set_metadata(&self, id: &str, metadata: SkillMetadata) -> Result<()> {
-        let _guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
         let c = self.connection()?;
         self.locate(&c, id)?;
         let tags = normalize_tags(&metadata.tags)?;
@@ -760,10 +1408,8 @@ impl Library {
         published: Option<bool>,
         add_tags: &[String],
     ) -> Result<()> {
-        let _guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
         let additions = normalize_tags(add_tags)?;
         let c = self.connection()?;
         let tx = c.unchecked_transaction()?;
@@ -789,10 +1435,8 @@ impl Library {
         Ok(())
     }
     pub fn restore(&self, id: &str, history_id: i64, expected_revision: &str) -> Result<()> {
-        let _guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
         let content: String = self
             .connection()?
             .query_row(
@@ -804,10 +1448,8 @@ impl Library {
         self.save_locked(id, expected_revision, &content, "restore")
     }
     pub fn create_skill(&self, source: &str, relative_dir: &str, content: &str) -> Result<String> {
-        let _guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Writer lock poisoned"))?;
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
         ensure!(
             content.len() as u64 <= CONTENT_LIMIT,
             "Content exceeds 2 MiB"

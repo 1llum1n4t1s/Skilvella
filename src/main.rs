@@ -1,17 +1,29 @@
 use anyhow::{Context, bail};
 use skilvella::{AppState, library::Library};
-use std::{env, net::Ipv4Addr, path::PathBuf};
+use std::{
+    env,
+    net::Ipv4Addr,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+mod desktop;
 
 struct Options {
     data_dir: PathBuf,
     port: u16,
     watch: bool,
+    tray: bool,
 }
 fn options() -> anyhow::Result<Option<Options>> {
     let mut options = Options {
         data_dir: default_data_dir()?,
         port: 7465,
         watch: true,
+        tray: cfg!(any(windows, target_os = "macos")),
     };
     let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
@@ -28,9 +40,10 @@ fn options() -> anyhow::Result<Option<Options>> {
                     .parse()?
             }
             Some("--no-watch") => options.watch = false,
+            Some("--no-tray") => options.tray = false,
             Some("--help" | "-h") => {
                 println!(
-                    "Skilvella {}\n\nUsage: skilvella [--data-dir PATH] [--port PORT] [--no-watch]\n\nBrowser: http://127.0.0.1:7465/\nMCP:     http://127.0.0.1:7465/mcp\n\nThe server always binds to IPv4 loopback. Default data directory: {}",
+                    "Skilvella {}\n\nUsage: skilvella [--data-dir PATH] [--port PORT] [--no-watch] [--no-tray]\n\nBrowser: http://127.0.0.1:7465/\nMCP:     http://127.0.0.1:7465/mcp\n\nWindows/macOS: click the tray/menu bar icon to open the browser.\nUse --no-tray for headless operation.\nThe server always binds to IPv4 loopback. Default data directory: {}",
                     env!("CARGO_PKG_VERSION"),
                     options.data_dir.display()
                 );
@@ -76,9 +89,13 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, options.port))
         .await
         .context("Could not bind localhost port; another instance may be running")?;
-    let state = AppState::new(Library::open(&options.data_dir)?);
     let home = user_home()?;
     let codex_home = env::var_os("CODEX_HOME").map(PathBuf::from);
+    let state = AppState::new(Library::open_for_user(
+        &options.data_dir,
+        &home,
+        codex_home.as_deref(),
+    )?);
     state
         .run(move |lib| lib.initialize_directory(&home, codex_home.as_deref()))
         .await
@@ -94,15 +111,37 @@ async fn main() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION"),
         options.data_dir.display()
     );
-    axum::serve(listener, skilvella::server::router(state, port))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let server_stopped = StopDesktopOnDrop(stopped.clone());
+    let server = tokio::spawn(async move {
+        // サーバーのエラーやパニック時にも、OSのイベントループを終了させる。
+        let _server_stopped = server_stopped;
+        axum::serve(listener, skilvella::server::router(state, port))
+            .with_graceful_shutdown(async {
+                let _ = tokio::signal::ctrl_c().await;
+            })
+            .await
+    });
+    if options.tray {
+        // AppKitはメインスレッドで動かす。HTTPはTokioのワーカースレッドで継続する。
+        if let Err(error) = desktop::run(&format!("http://127.0.0.1:{port}/"), stopped) {
+            eprintln!("Could not create the tray icon: {error:#}. The server is still running.");
+        }
+    }
+    let result = server.await?;
     if let Some(watcher) = watcher {
         watcher.abort();
     }
+    result?;
     Ok(())
+}
+
+struct StopDesktopOnDrop(Arc<AtomicBool>);
+
+impl Drop for StopDesktopOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
 }
 
 fn user_home() -> anyhow::Result<PathBuf> {
