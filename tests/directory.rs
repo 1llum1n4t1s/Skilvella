@@ -92,6 +92,9 @@ fn switching_is_persistent_atomic_and_keeps_root_history_separate() {
     let l = Library::open(&b.join("data")).unwrap();
     l.initialize_directory(&home, None).unwrap();
     l.add_source("manual", &b.join("manual")).unwrap();
+    let original_alias = l.directory_settings().unwrap().source_alias;
+    l.set_source_display_name(&original_alias, "標準スキル")
+        .unwrap();
     let original_id = all(&l)
         .into_iter()
         .find(|s| s.name == "Original")
@@ -130,6 +133,16 @@ fn switching_is_persistent_atomic_and_keeps_root_history_separate() {
     assert_eq!(reopened.directory_settings().unwrap().mode, "custom");
     reopened.set_directory("auto", "").unwrap();
     let restored = reopened.detail(&original_id, false).unwrap();
+    assert_eq!(
+        reopened
+            .sources()
+            .unwrap()
+            .iter()
+            .find(|s| s.alias == original_alias)
+            .unwrap()
+            .display_name,
+        "標準スキル"
+    );
     assert!(restored.summary.published);
     assert!(!restored.history.is_empty());
     assert_eq!(all(&reopened).len(), 2);

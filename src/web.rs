@@ -17,6 +17,7 @@ pub fn router() -> Router<AppState> {
         .route("/settings/updates/check", post(check_update))
         .route("/settings/updates/install", post(install_update))
         .route("/sources/add", post(add_source))
+        .route("/sources/name", post(set_source_name))
         .route("/sources/migrate", post(migrate_source))
         .route("/sources/remove", post(remove_source))
         .route("/sources/directory", post(set_directory))
@@ -157,6 +158,15 @@ struct IndexPage {
     previous: String,
     next: String,
 }
+impl IndexPage {
+    fn source_label(&self, alias: &str) -> String {
+        self.sources
+            .iter()
+            .find(|s| s.alias == alias)
+            .map(Source::label)
+            .unwrap_or_else(|| alias.to_owned())
+    }
+}
 async fn index(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
@@ -261,6 +271,27 @@ impl SourcesPage {
 
 async fn sources(State(state): State<AppState>, Query(n): Query<Notice>) -> Response {
     source_page(&state, n.message, String::new(), String::new()).await
+}
+#[derive(Deserialize)]
+struct SourceNameForm {
+    csrf: String,
+    alias: String,
+    display_name: String,
+}
+async fn set_source_name(
+    State(state): State<AppState>,
+    Form(form): Form<SourceNameForm>,
+) -> Response {
+    if let Some(response) = csrf_error(&state, &form.csrf) {
+        return response;
+    }
+    match state
+        .run(move |lib| lib.set_source_display_name(&form.alias, &form.display_name))
+        .await
+    {
+        Ok(()) => redirect("/sources", "表示名を保存しました。"),
+        Err(e) => error(StatusCode::BAD_REQUEST, &format!("{e:#}")),
+    }
 }
 async fn source_page(state: &AppState, message: String, alias: String, path: String) -> Response {
     source_page_with_directory(state, message, alias, path, None, None).await
@@ -512,6 +543,7 @@ async fn bulk(State(state): State<AppState>, Form(f): Form<BulkForm>) -> Respons
 #[template(path = "detail.html")]
 struct DetailPage {
     csrf: String,
+    source_label: String,
     detail: SkillDetail,
     preview: String,
     tag_text: String,
@@ -541,8 +573,15 @@ async fn detail_page(
     draft: Option<(String, String)>,
 ) -> Response {
     let key = id.clone();
-    match state.run(move |lib| lib.detail(&key, false)).await {
-        Ok(mut detail) => {
+    match state
+        .run(move |lib| {
+            let detail = lib.detail(&key, false)?;
+            let source_label = lib.source_label(&detail.summary.source)?;
+            Ok((detail, source_label))
+        })
+        .await
+    {
+        Ok((mut detail, source_label)) => {
             let dirty = draft.is_some();
             if let Some((content, revision)) = draft {
                 detail.content = content;
@@ -552,6 +591,7 @@ async fn detail_page(
             let tag_text = detail.summary.tags.join(", ");
             render(DetailPage {
                 csrf: state.csrf.to_string(),
+                source_label,
                 detail,
                 preview,
                 tag_text,

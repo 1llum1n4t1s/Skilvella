@@ -24,7 +24,18 @@
     {% else %}
     {% for s in sources %}
     <article class="panel folder-card">
-      <div class="folder-card-heading"><h3>{{ s.alias }}</h3>{% if s.alias == directory.source_alias %}<span class="badge"><!--i18n-->既定<!--/i18n--></span>{% endif %}</div>
+      <div class="folder-card-heading"><h3>{{ s.display_name }}</h3>{% if s.alias == directory.source_alias %}<span class="badge"><!--i18n-->既定<!--/i18n--></span>{% endif %}</div>
+      {% if s.display_name != s.alias %}<p class="note"><!--i18n-->識別子<!--/i18n-->: <code>{{ s.alias }}</code></p>{% endif %}
+      <details class="folder-secondary">
+        <summary><!--i18n-->表示名を変更<!--/i18n--></summary>
+        <form method="post" action="/sources/name" class="stack">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="alias" value="{{ s.alias }}">
+          <label><!--i18n-->表示名<!--/i18n--><input name="display_name" value="{{ s.display_name }}" aria-describedby="source-name-help-{{ s.alias }}"></label>
+          <p class="note" id="source-name-help-{{ s.alias }}"><!--i18n-->画面上の名前だけを変更します。空欄で保存すると識別子に戻ります。<!--/i18n--></p>
+          <div class="actions"><button type="submit"><!--i18n-->保存<!--/i18n--></button></div>
+        </form>
+      </details>
       <p class="folder-location"><span class="muted"><!--i18n-->現在の場所<!--/i18n--></span><code>{{ self.display_path(s.path) }}</code></p>
       <p class="note"><!--i18n-->スキル <!--/i18n-->{{ s.skill_count }}<!--i18n-->件<!--/i18n-->{% if s.error_count > 0 %} · <span class="error-text"><!--i18n-->読み取りエラー <!--/i18n-->{{ s.error_count }}<!--i18n-->件<!--/i18n--></span>{% endif %}</p>
       {% if s.native_discovery_unknown %}

@@ -1,6 +1,13 @@
 "use strict";
 (() => {
 const catalog = {
+  "表示名を変更": ["Change display name", "更改显示名称", "變更顯示名稱", "표시 이름 변경", "Cambiar nombre visible", "Modifier le nom affiché", "Anzeigenamen ändern", "Alterar nome de exibição"],
+  "表示名": ["Display name", "显示名称", "顯示名稱", "표시 이름", "Nombre visible", "Nom affiché", "Anzeigename", "Nome de exibição"],
+  "識別子": ["Identifier", "标识符", "識別碼", "식별자", "Identificador", "Identifiant", "Kennung", "Identificador"],
+  "画面上の名前だけを変更します。空欄で保存すると識別子に戻ります。": ["Only the displayed name changes. Save an empty name to restore the identifier.", "仅更改界面上显示的名称。留空保存可恢复为标识符。", "僅變更畫面顯示的名稱。留空儲存可還原為識別碼。", "화면에 표시되는 이름만 변경합니다. 빈칸으로 저장하면 식별자로 돌아갑니다.", "Solo cambia el nombre visible. Guarde un nombre vacío para restaurar el identificador.", "Seul le nom affiché change. Enregistrez un nom vide pour rétablir l’identifiant.", "Nur der angezeigte Name wird geändert. Leer speichern stellt die Kennung wieder her.", "Apenas o nome exibido muda. Salve um nome vazio para restaurar o identificador."],
+  "保存": ["Save", "保存", "儲存", "저장", "Guardar", "Enregistrer", "Speichern", "Salvar"],
+  "表示名を保存しました。": ["Display name saved.", "显示名称已保存。", "顯示名稱已儲存。", "표시 이름을 저장했습니다.", "Nombre visible guardado.", "Nom affiché enregistré.", "Anzeigename gespeichert.", "Nome de exibição salvo."],
+  "表示名は制御文字を含まない100文字以内で入力してください。": ["Enter a display name of up to 100 characters without control characters.", "请输入不含控制字符且不超过100个字符的显示名称。", "請輸入不含控制字元且不超過100個字元的顯示名稱。", "제어 문자 없이 100자 이내의 표시 이름을 입력하세요.", "Introduzca un nombre visible de hasta 100 caracteres sin caracteres de control.", "Saisissez un nom affiché de 100 caractères maximum sans caractères de contrôle.", "Geben Sie einen Anzeigenamen mit höchstens 100 Zeichen ohne Steuerzeichen ein.", "Insira um nome de exibição com até 100 caracteres sem caracteres de controle."],
   "設定": [
     "Settings",
     "设置",

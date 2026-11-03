@@ -121,6 +121,105 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     )
     .await;
     assert_eq!(added.status(), StatusCode::SEE_OTHER);
+    let name_url = format!("{base_url}/sources/name");
+    assert_eq!(
+        client.get(&name_url).send().await.unwrap().status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    for token in ["wrong", ""] {
+        assert_eq!(
+            post(
+                &client,
+                &name_url,
+                &[
+                    ("csrf", token),
+                    ("alias", "test"),
+                    ("display_name", "blocked")
+                ]
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    let display_name = "仕事 <script>alert(1)</script> & \"🌸\"";
+    assert_eq!(
+        post(
+            &client,
+            &name_url,
+            &[
+                ("csrf", &token),
+                ("alias", "test"),
+                ("display_name", display_name)
+            ]
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    let skill_id = state
+        .library
+        .search(Default::default(), false)
+        .unwrap()
+        .skills[0]
+        .id
+        .clone();
+    for path in [
+        "/sources".to_owned(),
+        "/".into(),
+        "/skills/new".into(),
+        format!("/skills/{skill_id}"),
+    ] {
+        let body = client
+            .get(format!("{base_url}{path}"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(
+            body.contains("仕事 &#60;script&#62;alert(1)&#60;/script&#62; &#38; &#34;🌸&#34;"),
+            "{path}: missing escaped display name"
+        );
+        assert!(!body.contains(display_name));
+        if path == "/" || path == "/skills/new" {
+            assert!(body.contains("value=\"test\""));
+        }
+    }
+    assert_eq!(
+        post(
+            &client,
+            &name_url,
+            &[
+                ("csrf", &token),
+                ("alias", "test"),
+                ("display_name", "a\nb")
+            ]
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        post(
+            &client,
+            &name_url,
+            &[("csrf", &token), ("alias", "test"), ("display_name", "")]
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    let body = client
+        .get(format!("{base_url}/sources"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(body.contains("<h3>test</h3>"));
     let initial = rpc(&client, &base_url, 1, "initialize", json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"integration-test","version":"1"}})).await;
     assert_eq!(initial["serverInfo"]["name"], "skilvella");
     let tools = rpc(&client, &base_url, 2, "tools/list", json!({})).await;

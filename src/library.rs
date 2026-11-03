@@ -955,6 +955,7 @@ impl Library {
             .query_map([], |r| {
                 Ok(Source {
                     alias: r.get(0)?,
+                    display_name: String::new(),
                     path: r.get(1)?,
                     skill_count: r.get::<_, i64>(2)? as usize,
                     error_count: r.get::<_, i64>(3)? as usize,
@@ -965,6 +966,7 @@ impl Library {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for source in &mut sources {
+            source.display_name = Self::source_display_name_on(c, &source.alias)?;
             match Self::is_native_root(c, Path::new(&source.path)) {
                 Ok(native) => source.native_discovery = native,
                 Err(_) => {
@@ -975,6 +977,52 @@ impl Library {
             }
         }
         Ok(sources)
+    }
+    fn source_display_name_on(c: &Connection, alias: &str) -> Result<String> {
+        Ok(c.query_row(
+            "SELECT value FROM settings WHERE key=?1",
+            [format!("source_display_name:{alias}")],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| alias.to_owned()))
+    }
+
+    pub fn source_label(&self, alias: &str) -> Result<String> {
+        let c = self.connection()?;
+        let display_name = Self::source_display_name_on(&c, alias)?;
+        Ok(Source::format_label(alias, &display_name))
+    }
+
+    pub fn set_source_display_name(&self, alias: &str, name: &str) -> Result<()> {
+        ensure!(
+            !name.chars().any(char::is_control) && name.chars().count() <= 100,
+            "表示名は制御文字を含まない100文字以内で入力してください。"
+        );
+        let name = name.trim();
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
+        let mut c = self.connection()?;
+        let tx = c.transaction()?;
+        ensure!(
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sources WHERE alias=?1 AND active=1)",
+                [alias],
+                |r| r.get::<_, bool>(0),
+            )?,
+            "Source not found"
+        );
+        let key = format!("source_display_name:{alias}");
+        if name.is_empty() || name == alias {
+            tx.execute("DELETE FROM settings WHERE key=?1", [key])?;
+        } else {
+            tx.execute(
+                "INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![key, name],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
     pub fn add_source(&self, alias: &str, path: &Path) -> Result<ScanReport> {
         ensure!(

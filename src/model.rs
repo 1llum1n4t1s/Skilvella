@@ -12,12 +12,27 @@ pub struct DirectorySettings {
 #[derive(Clone, Debug, Serialize)]
 pub struct Source {
     pub alias: String,
+    pub display_name: String,
     pub path: String,
     pub skill_count: usize,
     pub error_count: usize,
     pub mcp_candidate_count: usize,
     pub native_discovery: bool,
     pub native_discovery_unknown: bool,
+}
+
+impl Source {
+    pub fn label(&self) -> String {
+        Self::format_label(&self.alias, &self.display_name)
+    }
+
+    pub(crate) fn format_label(alias: &str, display_name: &str) -> String {
+        if display_name == alias {
+            alias.to_owned()
+        } else {
+            format!("{display_name} ({alias})")
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

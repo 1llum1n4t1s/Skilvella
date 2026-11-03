@@ -285,8 +285,10 @@ tbody tr:hover { background: var(--violet-soft); }
 .folder-page details[open]>summary { margin-bottom: 16px; }
 .folder-help summary, .folder-secondary summary { font-size: 13px; color: var(--muted); }
 .folder-help li { margin: 8px 0; }
+.heading > div { min-width: 0; max-width: 100%; }
+.heading p.muted { overflow-wrap: anywhere; }
 .folder-card-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-.folder-card-heading h3 { margin: 0; font-family: ui-monospace, Consolas, monospace; letter-spacing: .02em; }
+.folder-card-heading h3 { min-width: 0; overflow-wrap: anywhere; margin: 0; font-family: ui-monospace, Consolas, monospace; letter-spacing: .02em; }
 .folder-location { display: grid; gap: 5px; margin: 0 0 10px; }
 .folder-location code { overflow-wrap: anywhere; }
 .folder-card .error-text { display: inline; font-size: inherit; }

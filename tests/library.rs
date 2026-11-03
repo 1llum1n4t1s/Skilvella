@@ -41,6 +41,10 @@ fn publish(l: &Library, id: &str) {
 #[test]
 fn publication_metadata_history_and_restore_survive_rescan_and_reopen() {
     let (base, library, source) = fixture();
+    assert_eq!(library.sources().unwrap()[0].display_name, "local");
+    library
+        .set_source_display_name("local", "仕事用 🌸")
+        .unwrap();
     let id = id(&library);
     assert_eq!(
         library.search(SearchQuery::default(), true).unwrap().total,
@@ -67,6 +71,7 @@ fn publication_metadata_history_and_restore_survive_rescan_and_reopen() {
     library.add_source("local", &source).unwrap();
     drop(library);
     let library = Library::open(&base.join("data")).unwrap();
+    assert_eq!(library.sources().unwrap()[0].display_name, "仕事用 🌸");
     let detail = library.detail(&id, true).unwrap();
     assert_eq!(detail.summary.tags, vec!["仕事", "rust"]);
     assert_eq!(detail.summary.category, "development");
@@ -79,6 +84,50 @@ fn publication_metadata_history_and_restore_survive_rescan_and_reopen() {
     let file = library.read_file(&id, "reference.txt", 2, 1).unwrap();
     assert_eq!(file.text, "two");
     assert_eq!(file.total_lines, 3);
+}
+
+#[test]
+fn source_display_names_validate_without_changing_identity_or_files() {
+    let (base, library, source) = fixture();
+    let original_id = id(&library);
+    let path = library.sources().unwrap()[0].path.clone();
+    for invalid in [
+        "a\nb".to_owned(),
+        "a\0b".into(),
+        "a".repeat(101),
+        "🌸".repeat(101),
+    ] {
+        assert!(library.set_source_display_name("local", &invalid).is_err());
+    }
+    assert!(library.set_source_display_name("unknown", "name").is_err());
+    library
+        .set_source_display_name("local", &"🌸".repeat(100))
+        .unwrap();
+    assert_eq!(library.sources().unwrap()[0].display_name, "🌸".repeat(100));
+    library
+        .set_source_display_name("local", "  <仕事> & \"🌸\"  ")
+        .unwrap();
+    assert_eq!(
+        library.sources().unwrap()[0].display_name,
+        "<仕事> & \"🌸\""
+    );
+    library.scan().unwrap();
+    assert_eq!(id(&library), original_id);
+    assert_eq!(library.sources().unwrap()[0].path, path);
+    assert!(source.join("alpha/SKILL.md").is_file());
+    let second_source = base.join("second-source");
+    fs::create_dir_all(&second_source).unwrap();
+    library.add_source("second", &second_source).unwrap();
+    library
+        .set_source_display_name("second", "<仕事> & \"🌸\"")
+        .unwrap();
+    let sources = library.sources().unwrap();
+    assert_eq!(sources[0].display_name, sources[1].display_name);
+    assert_ne!(sources[0].label(), sources[1].label());
+    library.set_source_display_name("local", "   ").unwrap();
+    assert_eq!(library.sources().unwrap()[0].display_name, "local");
+    library.remove_source("local").unwrap();
+    assert!(library.set_source_display_name("local", "hidden").is_err());
 }
 #[test]
 fn yaml_errors_show_file_location_and_cause_without_exposing_invalid_skills() {

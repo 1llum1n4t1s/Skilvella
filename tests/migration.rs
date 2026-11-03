@@ -95,6 +95,9 @@ fn pending_count(base: &Path) -> i64 {
 #[test]
 fn whole_root_migration_keeps_identity_history_references_and_git_clone() {
     let (base, library, from, alias) = fixture();
+    library
+        .set_source_display_name(&alias, "移動するスキル")
+        .unwrap();
     let parent = library
         .search(
             SearchQuery {
@@ -149,6 +152,7 @@ fn whole_root_migration_keeps_identity_history_references_and_git_clone() {
     #[cfg(not(windows))]
     let input = to.clone();
     let report = library.migrate_source(&alias, &input).unwrap();
+    assert_eq!(library.sources().unwrap()[0].display_name, "移動するスキル");
     assert_eq!(report.indexed, 3);
     assert_eq!(report.errors, 1);
     #[cfg(unix)]
