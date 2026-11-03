@@ -1,6 +1,6 @@
 [package]
 name = "skilvella"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
 rust-version = "1.89"
 description = "A local skill library with a browser manager and three MCP tools"
