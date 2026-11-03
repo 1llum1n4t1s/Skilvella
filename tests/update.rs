@@ -88,7 +88,12 @@ fn copy_executable(source: &Path, target: &Path) {
 fn helper_lifecycle(bad_update: bool, cancel: bool) {
     let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+        .unwrap_or_else(|| {
+            let root = std::env::temp_dir();
+            #[cfg(unix)]
+            let root = root.canonicalize().unwrap();
+            root
+        });
     assert!(root.is_absolute());
     let root = root.join(format!("update-e2e-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&root).unwrap();

@@ -20,7 +20,12 @@ fn skill(root: &Path, name: &str) {
 fn fixture() -> (PathBuf, Library, PathBuf, String) {
     let base = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("skilvella-migration-tests"))
+        .unwrap_or_else(|| {
+            let root = std::env::temp_dir();
+            #[cfg(unix)]
+            let root = root.canonicalize().unwrap();
+            root.join("skilvella-migration-tests")
+        })
         .join(uuid::Uuid::new_v4().to_string());
     let root = base.join("home/.agents/skills");
     skill(&root.join("parent"), "Parent");

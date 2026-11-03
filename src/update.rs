@@ -761,28 +761,51 @@ fn launcher_mutex_name(root: &Path) -> anyhow::Result<String> {
         "For a non-ASCII launcher path, update using Skilvella-Latest.ps1"
     );
     let path = unsafe {
-        use windows_sys::Win32::Storage::FileSystem::GetFullPathNameW;
+        use windows_sys::Win32::Storage::FileSystem::{GetFullPathNameW, GetLongPathNameW};
         let input: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
-        let length = GetFullPathNameW(
-            input.as_ptr(),
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        );
-        ensure!(length > 0, "Could not normalize the launcher path");
-        let mut output = vec![0u16; length as usize];
-        let written = GetFullPathNameW(
-            input.as_ptr(),
-            length,
-            output.as_mut_ptr(),
-            std::ptr::null_mut(),
-        );
-        ensure!(
-            written > 0 && written < length,
-            "Could not normalize the launcher path"
-        );
-        String::from_utf16(&output[..written as usize])?
+        // .NET GetFullPath は拡張パスをそのまま返し、通常パスの 8.3 名を展開する。
+        // GitHub Actions の RUNNER~1 などでもランチャーと同じ名前を使う。
+        if path.starts_with(r"\\?\") {
+            path.to_owned()
+        } else {
+            let length = GetFullPathNameW(
+                input.as_ptr(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            ensure!(length > 0, "Could not normalize the launcher path");
+            let mut output = vec![0u16; length as usize];
+            let written = GetFullPathNameW(
+                input.as_ptr(),
+                length,
+                output.as_mut_ptr(),
+                std::ptr::null_mut(),
+            );
+            ensure!(
+                written > 0 && written < length,
+                "Could not normalize the launcher path"
+            );
+            let normalized = String::from_utf16(&output[..written as usize])?;
+            if !normalized.contains('~') {
+                normalized
+            } else {
+                let length = GetLongPathNameW(output.as_ptr(), std::ptr::null_mut(), 0);
+                ensure!(length > 0, "Could not expand the launcher path");
+                let mut expanded = vec![0u16; length as usize];
+                let written = GetLongPathNameW(output.as_ptr(), expanded.as_mut_ptr(), length);
+                ensure!(
+                    written > 0 && written < length,
+                    "Could not expand the launcher path"
+                );
+                String::from_utf16(&expanded[..written as usize])?
+            }
+        }
     };
+    ensure!(
+        path.is_ascii(),
+        "For a non-ASCII launcher path, update using Skilvella-Latest.ps1"
+    );
     let sid = unsafe {
         let mut token = std::ptr::null_mut();
         ensure!(
@@ -1099,6 +1122,19 @@ fn apply_binary(
 mod tests {
     use super::*;
 
+    fn fixture_root() -> PathBuf {
+        let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let root = std::env::temp_dir();
+                #[cfg(unix)]
+                let root = root.canonicalize().unwrap();
+                root
+            });
+        plain_path(&root).unwrap();
+        root
+    }
+
     #[test]
     fn stable_versions_and_checksums_are_strict() {
         assert!(version("v1.10.0").unwrap() > version("1.9.9").unwrap());
@@ -1172,10 +1208,7 @@ mod tests {
 
     #[test]
     fn apply_requires_both_checksums_and_preserves_recovery_copy() {
-        let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        plain_path(&root).unwrap();
+        let root = fixture_root();
         let directory = root.join(format!("updater-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         let target = directory.join("target");
@@ -1219,10 +1252,7 @@ mod tests {
 
     #[test]
     fn launcher_cache_switch_preserves_fields_and_detects_conflicts() {
-        let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        plain_path(&root).unwrap();
+        let root = fixture_root();
         let root = root.join(format!("updater-launcher-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
         let installed = root.join("versions/v1.0.1");
@@ -1273,10 +1303,7 @@ mod tests {
 
     #[test]
     fn target_lock_prevents_concurrent_helpers() {
-        let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        plain_path(&root).unwrap();
+        let root = fixture_root();
         let directory = root.join(format!("updater-lock-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         let target = directory.join(executable_name());
@@ -1288,10 +1315,7 @@ mod tests {
 
     #[test]
     fn failed_restart_restores_previous_executable() {
-        let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        plain_path(&root).unwrap();
+        let root = fixture_root();
         let directory = root.join(format!("updater-rollback-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         let target = directory.join(executable_name());
@@ -1324,13 +1348,10 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn named_mutex_matches_the_powershell_launcher_and_excludes_other_processes() {
-        let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        plain_path(&root).unwrap();
+        let root = fixture_root();
         let directory = root.join(format!("updater-mutex-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
-        let script = "$identity=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $sha=[Security.Cryptography.SHA256]::Create(); try { $scope=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFullPath($env:SKILVELLA_MUTEX_FIXTURE_ROOT).ToLowerInvariant()))).Replace('-', '') } finally { $sha.Dispose() }; $name='Local\\SkilvellaLatest-'+$identity+'-'+$scope; [Console]::WriteLine($name); $mutex=New-Object Threading.Mutex($false,$name); try { $owned=$mutex.WaitOne(0); [Console]::WriteLine($owned); if ($owned) {$mutex.ReleaseMutex()} } finally {$mutex.Dispose()}";
+        let script = "$identity=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $sha=[Security.Cryptography.SHA256]::Create(); try { $scope=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFullPath($env:SKILVELLA_MUTEX_FIXTURE_ROOT).ToLowerInvariant()))).Replace('-', '') } finally { $sha.Dispose() }; $name='Local\\SkilvellaLatest-'+$identity+'-'+$scope; [Console]::WriteLine($name); $mutex=New-Object Threading.Mutex($false,$name); try { $owned=$mutex.WaitOne(0); [Console]::WriteLine($owned); if ($owned) {$mutex.ReleaseMutex()} } finally {$mutex.Dispose()}; [Console]::WriteLine([IO.Path]::GetFullPath($env:SKILVELLA_MUTEX_FIXTURE_ROOT))";
         let probe = |fixture_root: &Path| {
             let output = Command::new("pwsh")
                 .args(["-NoProfile", "-NonInteractive", "-Command", script])
@@ -1344,14 +1365,51 @@ mod tests {
             );
             String::from_utf8(output.stdout).unwrap()
         };
-        for path in [directory.clone(), fs::canonicalize(&directory).unwrap()] {
+        let short_path = |path: &Path| unsafe {
+            use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+            let input: Vec<u16> = path
+                .to_str()
+                .unwrap()
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
+            let length = GetShortPathNameW(input.as_ptr(), std::ptr::null_mut(), 0);
+            assert!(length > 0);
+            let mut output = vec![0u16; length as usize];
+            let written = GetShortPathNameW(input.as_ptr(), output.as_mut_ptr(), length);
+            assert!(written > 0 && written < length);
+            PathBuf::from(String::from_utf16(&output[..written as usize]).unwrap())
+        };
+        // 作業ボリュームで 8.3 名の生成が無効でも、既存の別名で一致を確認する。
+        let program_files = PathBuf::from(std::env::var_os("ProgramFiles").unwrap());
+        let short_program_files = short_path(&program_files);
+        let observed = probe(&short_program_files);
+        assert_eq!(
+            observed.lines().next().unwrap(),
+            launcher_mutex_name(&short_program_files).unwrap(),
+            "root: {short_program_files:?}; PowerShell output: {observed}"
+        );
+        for path in [
+            directory.clone(),
+            fs::canonicalize(&directory).unwrap(),
+            short_path(&directory),
+        ] {
             let guard = acquire_launcher_mutex(&path).unwrap();
             let blocked = probe(&path);
             let lines: Vec<_> = blocked.lines().collect();
-            assert_eq!(lines[0], launcher_mutex_name(&path).unwrap());
+            assert_eq!(
+                lines[0],
+                launcher_mutex_name(&path).unwrap(),
+                "root: {path:?}; PowerShell output: {blocked}"
+            );
             assert_eq!(lines[1], "False");
             drop(guard);
             assert_eq!(probe(&path).lines().nth(1), Some("True"));
         }
+        // 8.3 別名がASCIIでも、実名が非ASCIIなら既存の拒否条件を維持する。
+        let unicode = directory.join("non-ascii-Ä");
+        fs::create_dir(&unicode).unwrap();
+        assert!(launcher_mutex_name(&unicode).is_err());
+        assert!(launcher_mutex_name(&short_path(&unicode)).is_err());
     }
 }
