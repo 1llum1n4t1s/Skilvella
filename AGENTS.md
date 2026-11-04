@@ -11,7 +11,9 @@ SkilvellaはRust製のローカルスキル管理アプリです。構造・デ�
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --features launcher --bin skilvella-launcher --test launcher -- -D warnings
 cargo test --locked
+cargo test --locked --features launcher --test launcher
 cargo build --release --locked
 ```
 
@@ -19,6 +21,7 @@ cargo build --release --locked
 - `tests/localization.rs` は設定画面・同梱言語アセット・更新操作のHTTP/CSRF境界、`tests/update.rs` は隔離した実行ファイルで更新ヘルパーの置換・再起動・復元・中止を検証します。後者も `SKILVELLA_MIGRATION_TEST_ROOT` を使います。サービス再起動と監視・管理情報の保持は `src/service.rs` 内のテストで検証します。
 - `tests/library.rs` は保存・検索・パス境界、`tests/directory.rs` は管理フォルダーの選択と親子スキルの境界、`tests/http_mcp.rs` は管理フォームとMCPの連携、`tests/watch.rs` は外部変更の反映、`tests/startup.rs` はヘッドレス起動とポート競合時の非変更、`tests/migration.rs` は旧版の中断移行の起動時復旧・同一性検査・操作ロックを検証します。変更した契約に対応する検証を維持してください。
 - `tests/repositories.rs` は取得元の分類・件数・ページ分割・切断時の保持、`tests/codex_index.rs` はCodex入口の公開判定・所有権・競合・中断復旧、`tests/codex_http.rs` は連携フォームのHTTP/CSRF境界と一括変更を検証します。
+- `tests/launcher.rs` は任意の起動補助の引数転送・作業ディレクトリ・起動失敗を検証します。通常の `cargo test --locked` では対象外のため、上記の `launcher` 機能付き検証も実行してください。
 - テストの生成先は [開発手順の保存先一覧](docs/DEVELOPMENT.md#開発) を参照してください。実際の利用者フォルダーやクライアント設定で代用せず、ディレクトリ初期化・Codex入口生成にはテスト用ホームを明示してください。
 - 旧版の移行復旧テストでは隔離したフォルダーを移動します。`SKILVELLA_MIGRATION_TEST_ROOT` と子プロセスの `TEMP` / `TMP` をGit作業ツリー外の作業専用フォルダーへ設定してください。未指定時はOSの一時ディレクトリ配下を使います。CIは `SKILVELLA_MIGRATION_TEST_ROOT` に `runner.temp` を指定します。
 
