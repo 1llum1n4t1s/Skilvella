@@ -442,6 +442,189 @@ fn source_counts_preserve_invalid_missing_empty_and_inactive_sources() {
 }
 
 #[test]
+fn forget_missing_preserves_search_filters_and_ignores_page_bounds() {
+    let (_base, library, source) = fixture();
+    let alpha = id(&library);
+    let before = library.detail(&alpha, false).unwrap();
+    library
+        .save_content(&alpha, &before.revision, &skill("日本語検索", "İSTANBUL"))
+        .unwrap();
+    let mut ids = vec![alpha.clone()];
+    for (folder, body) in [
+        ("category", "İSTANBUL"),
+        ("tag", "İSTANBUL"),
+        ("query", "別の本文"),
+    ] {
+        ids.push(
+            library
+                .create_skill("local", folder, &skill("日本語検索", body))
+                .unwrap(),
+        );
+    }
+    for (index, id) in ids.iter().enumerate() {
+        library
+            .set_metadata(
+                id,
+                SkillMetadata {
+                    tags: vec![if index == 2 { "別タグ" } else { "絞込" }.into()],
+                    category: if index == 1 { "別分類" } else { "分類" }.into(),
+                    published: false,
+                },
+            )
+            .unwrap();
+    }
+    for folder in ["alpha", "category", "tag", "query"] {
+        fs::rename(
+            source.join(folder).join("SKILL.md"),
+            source.join(folder).join("retired.txt"),
+        )
+        .unwrap();
+    }
+    library.scan().unwrap();
+    let query = SearchQuery {
+        q: "日本語 İSTANBUL".into(),
+        tag: "絞込".into(),
+        category: "分類".into(),
+        status: "missing".into(),
+        ..Default::default()
+    };
+    let matching = library.search(query.clone(), false).unwrap();
+    assert_eq!(matching.total, 1);
+    assert_eq!(matching.skills[0].id, alpha);
+    assert_eq!(
+        library
+            .forget_missing(
+                SearchQuery {
+                    offset: usize::MAX,
+                    limit: 1,
+                    ..query
+                },
+                repository_scope("local", ""),
+                1,
+            )
+            .unwrap(),
+        1
+    );
+    assert!(library.detail(&alpha, false).is_err());
+    for id in &ids[1..] {
+        assert!(library.detail(id, false).unwrap().summary.missing);
+    }
+}
+
+#[test]
+fn single_updates_keep_unicode_search_and_other_skills_and_scan_repairs_index() {
+    let (base, library, _source) = fixture();
+    let alpha = id(&library);
+    let peer = library
+        .create_skill("local", "peer", &skill("別スキル", "保持する検索本文"))
+        .unwrap();
+    let before = library.detail(&alpha, false).unwrap();
+    library
+        .save_content(
+            &alpha,
+            &before.revision,
+            &skill("İSTANBUL", "更新した日本語本文"),
+        )
+        .unwrap();
+    library
+        .set_metadata(
+            &alpha,
+            SkillMetadata {
+                tags: vec!["İSTANBULタグ".into(), "日本語タグ".into()],
+                category: "日本語分類".into(),
+                published: true,
+            },
+        )
+        .unwrap();
+    for term in [
+        "İSTANBUL",
+        "更新した日本語本文",
+        "İSTANBULタグ",
+        "日本語タグ",
+        "日本語分類",
+    ] {
+        let results = library
+            .search(
+                SearchQuery {
+                    q: term.into(),
+                    ..Default::default()
+                },
+                true,
+            )
+            .unwrap();
+        assert_eq!(results.total, 1, "{term}");
+        assert_eq!(results.skills[0].id, alpha, "{term}");
+    }
+    let peer_search = || {
+        library
+            .search(
+                SearchQuery {
+                    q: "保持する検索本文".into(),
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap()
+    };
+    assert_eq!(peer_search().skills[0].id, peer);
+    let db = rusqlite::Connection::open(base.join("data/library.sqlite3")).unwrap();
+    db.execute("DELETE FROM skill_fts WHERE id=?1", [&peer])
+        .unwrap();
+    assert_eq!(peer_search().total, 0);
+    library.scan().unwrap();
+    assert_eq!(peer_search().skills[0].id, peer);
+}
+
+#[test]
+fn metadata_and_refreshed_content_roll_back_if_index_update_fails() {
+    let (base, library, source) = fixture();
+    let alpha = id(&library);
+    let before = library.detail(&alpha, false).unwrap();
+    fs::write(
+        source.join("alpha/SKILL.md"),
+        skill("外部更新", "公開前の再読込"),
+    )
+    .unwrap();
+    let db = rusqlite::Connection::open(base.join("data/library.sqlite3")).unwrap();
+    db.execute("ALTER TABLE skill_fts RENAME TO saved_skill_fts", [])
+        .unwrap();
+    assert!(
+        library
+            .set_metadata(
+                &alpha,
+                SkillMetadata {
+                    tags: vec!["保存失敗".into()],
+                    category: "保存失敗".into(),
+                    published: true,
+                }
+            )
+            .is_err()
+    );
+    let stored: (String, String, String, bool) = db
+        .query_row(
+            "SELECT content,tags,category,published FROM skills WHERE id=?1",
+            [&alpha],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(stored, (before.content, "[]".into(), String::new(), false));
+    db.execute("ALTER TABLE saved_skill_fts RENAME TO skill_fts", [])
+        .unwrap();
+    library.scan().unwrap();
+    let refreshed = library
+        .search(
+            SearchQuery {
+                q: "外部更新".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+    assert_eq!(refreshed.total, 1);
+    assert_eq!(refreshed.skills[0].id, alpha);
+}
+
+#[test]
 fn search_pages_preserve_score_name_id_order_and_extreme_offsets() {
     let (_, library, source) = fixture();
     for (dir, name, body) in [

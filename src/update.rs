@@ -1185,7 +1185,7 @@ mod tests {
 
     #[test]
     fn archive_rejects_traversal_and_missing_executable() {
-        fn archive(names: &[&str]) -> Vec<u8> {
+        fn zip_archive(names: &[&str]) -> Vec<u8> {
             let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
             for name in names {
                 zip.start_file(*name, zip::write::SimpleFileOptions::default())
@@ -1199,37 +1199,75 @@ mod tests {
             }
             zip.finish().unwrap().into_inner()
         }
-        assert_eq!(
-            extract(
-                &archive(&[
-                    executable_name(),
-                    "LICENSE",
-                    "CHANGELOG.md",
-                    "README.txt",
-                    "BUILD-INFO.txt"
-                ]),
-                true,
-                "1.0.2"
-            )
-            .unwrap(),
-            b"executable"
-        );
-        assert!(extract(&archive(&["../skilvella.exe"]), true, "1.0.2").is_err());
-        assert!(extract(&archive(&["LICENSE"]), true, "1.0.2").is_err());
-        assert!(
-            extract(
-                &archive(&[
-                    executable_name(),
-                    "LICENSE",
-                    "CHANGELOG.md",
-                    "README.txt",
-                    "BUILD-INFO.txt"
-                ]),
-                true,
-                "1.0.3"
-            )
-            .is_err()
-        );
+        fn tar_archive(names: &[&str], executable_type: tar::EntryType) -> Vec<u8> {
+            let gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            let mut tar = tar::Builder::new(gzip);
+            for name in names {
+                let kind = if *name == executable_name() {
+                    executable_type
+                } else {
+                    tar::EntryType::Regular
+                };
+                let bytes: &[u8] = if !kind.is_file() {
+                    b""
+                } else if *name == "BUILD-INFO.txt" {
+                    b"version=1.0.2\n"
+                } else {
+                    b"executable"
+                };
+                let mut header = tar::Header::new_gnu();
+                // 不正パスも抽出側へ渡すため、Builderのパス検証を経由しない。
+                header.as_mut_bytes()[..name.len()].copy_from_slice(name.as_bytes());
+                header.set_entry_type(kind);
+                header.set_size(bytes.len() as u64);
+                if kind.is_symlink() || kind.is_hard_link() {
+                    header.set_link_name("outside").unwrap();
+                }
+                header.set_cksum();
+                tar.append(&header, bytes).unwrap();
+            }
+            tar.into_inner().unwrap().finish().unwrap()
+        }
+        let names = [
+            executable_name(),
+            "LICENSE",
+            "CHANGELOG.md",
+            "README.txt",
+            "BUILD-INFO.txt",
+        ];
+        for zip in [true, false] {
+            let archive = |names: &[&str]| {
+                if zip {
+                    zip_archive(names)
+                } else {
+                    tar_archive(names, tar::EntryType::Regular)
+                }
+            };
+            let valid = archive(&names);
+            assert_eq!(extract(&valid, zip, "1.0.2").unwrap(), b"executable");
+            for path in ["../skilvella.exe", "/skilvella", "nested/skilvella"] {
+                let mut unexpected = names.to_vec();
+                unexpected.push(path);
+                let error = extract(&archive(&unexpected), zip, "1.0.2").unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("Unexpected or duplicate release archive entry")
+                );
+            }
+            let error = extract(&archive(&names[1..]), zip, "1.0.2").unwrap_err();
+            assert!(error.to_string().contains("Release archive is incomplete"));
+            let error = extract(&valid, zip, "1.0.3").unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Release tag and build version disagree")
+            );
+        }
+        for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
+            let error = extract(&tar_archive(&names, kind), false, "1.0.2").unwrap_err();
+            assert!(error.to_string().contains("not a regular file"));
+        }
     }
 
     #[test]

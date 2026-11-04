@@ -80,6 +80,7 @@ pub fn router() -> Router<AppState> {
         .route("/sources/directory", post(set_directory))
         .route("/scan", post(scan))
         .route("/bulk", post(bulk))
+        .route("/missing/forget", post(forget_missing))
         .route("/repositories/bulk", post(repository_bulk))
         .route("/skills/new", get(new_skill))
         .route("/skills/create", post(create))
@@ -430,20 +431,26 @@ async fn index(
     Query(notice): Query<Notice>,
 ) -> Response {
     let mut query = query;
+    if query.status.is_empty() {
+        query.status = "present".into();
+    }
     query.limit = 50;
     query.source = selection.repository_source.clone();
     let q = query.clone();
-    let selected = !selection.repository_source.is_empty();
+    let selected = !selection.repository_source.is_empty()
+        || matches!(query.status.as_str(), "missing" | "all");
     let scope = selection.clone();
     match state
         .run(move |lib| {
             let groups = lib.repository_groups()?;
-            let results = if selected {
+            let results = if selected && scope.repository_source.is_empty() {
+                lib.search(q, false)?
+            } else if selected {
                 lib.search_repository_with_groups(q, scope, &groups)?
             } else {
                 SearchResults {
                     skills: Vec::new(),
-                    total: groups.iter().map(|g| g.count).sum(),
+                    total: groups.iter().map(|g| g.count - g.missing).sum(),
                     indexed_at: String::new(),
                 }
             };
@@ -756,6 +763,70 @@ struct BulkForm {
     #[serde(default)]
     codex_mode: String,
 }
+#[derive(Deserialize)]
+struct ForgetMissingForm {
+    csrf: String,
+    expected: usize,
+    #[serde(flatten)]
+    selection: RepositorySelection,
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    tag: String,
+    #[serde(default)]
+    category: String,
+}
+async fn forget_missing(
+    State(state): State<AppState>,
+    Form(f): Form<ForgetMissingForm>,
+) -> Response {
+    if let Some(r) = csrf_error(&state, &f.csrf) {
+        return r;
+    }
+    let selection = f.selection.clone();
+    let query = SearchQuery {
+        q: f.q,
+        tag: f.tag,
+        category: f.category,
+        ..Default::default()
+    };
+    match state
+        .run_mut(move |lib| lib.forget_missing(query, selection, f.expected))
+        .await
+    {
+        Ok(_) => {
+            let target = format!(
+                "/?repository_source={}&repository={}&status=missing",
+                encoded(&f.selection.repository_source),
+                encoded(&f.selection.repository)
+            );
+            Redirect::to(&format!(
+                "{target}&message={}",
+                encoded("不在スキルの登録情報と履歴を削除しました。実ファイルは変更していません。")
+            ))
+            .into_response()
+        }
+        Err(e) => failure(e),
+    }
+}
+fn bulk_settings(
+    published: &str,
+    mode: &str,
+) -> Result<(Option<bool>, Option<crate::model::CodexSkillPolicy>), &'static str> {
+    let published = match published {
+        "true" => Some(true),
+        "false" => Some(false),
+        "" => None,
+        _ => return Err("公開状態が不正です。"),
+    };
+    let codex = if mode.is_empty() {
+        None
+    } else {
+        Some(codex_mode(mode).ok_or("Codexでの使い方を選択してください。")?)
+    };
+    Ok((published, codex))
+}
+
 async fn bulk(State(state): State<AppState>, Form(f): Form<BulkForm>) -> Response {
     if let Some(r) = csrf_error(&state, &f.csrf) {
         return r;
@@ -772,24 +843,11 @@ async fn bulk(State(state): State<AppState>, Form(f): Form<BulkForm>) -> Respons
             "スキルを1件以上選んでください。ブラウザーでJavaScriptを有効にしてください。",
         );
     }
-    let published = match f.published.as_str() {
-        "true" => Some(true),
-        "false" => Some(false),
-        "" => None,
-        _ => return error(StatusCode::BAD_REQUEST, "公開状態が不正です。"),
+    let (published, codex) = match bulk_settings(&f.published, &f.codex_mode) {
+        Ok(settings) => settings,
+        Err(message) => return error(StatusCode::BAD_REQUEST, message),
     };
     let add_tags = tags(&f.tags);
-    let codex = if f.codex_mode.is_empty() {
-        None
-    } else {
-        let Some(policy) = codex_mode(&f.codex_mode) else {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "Codexでの使い方を選択してください。",
-            );
-        };
-        Some(policy)
-    };
     if published.is_none() && add_tags.is_empty() && codex.is_none() {
         return error(
             StatusCode::BAD_REQUEST,
@@ -852,22 +910,9 @@ async fn repository_bulk(
     if selections.is_empty() {
         return error(StatusCode::BAD_REQUEST, "取得元を1件以上選んでください。");
     }
-    let published = match published.as_str() {
-        "" => None,
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => return error(StatusCode::BAD_REQUEST, "公開状態が不正です。"),
-    };
-    let codex = if mode.is_empty() {
-        None
-    } else {
-        let Some(policy) = codex_mode(&mode) else {
-            return error(
-                StatusCode::BAD_REQUEST,
-                "Codexでの使い方を選択してください。",
-            );
-        };
-        Some(policy)
+    let (published, codex) = match bulk_settings(&published, &mode) {
+        Ok(settings) => settings,
+        Err(message) => return error(StatusCode::BAD_REQUEST, message),
     };
     if published.is_none() && codex.is_none() {
         return error(

@@ -184,7 +184,7 @@
       const messages = [];
       if (dirty && form !== editor) messages.push(t("未保存の本文があります。変更を破棄して操作を続けますか？"));
       const confirmation = button?.dataset.confirm || form.dataset.confirm;
-      if (confirmation) messages.push(confirmation);
+      if (confirmation) messages.push(confirmation + (form.dataset.confirmCount ? `\n${t("対象: ")}${form.dataset.confirmCount}` : ""));
       if (messages.length) {
         event.preventDefault();
         void confirmSubmission(form, button, messages.join("\n\n"));

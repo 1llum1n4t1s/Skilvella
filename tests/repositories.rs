@@ -9,6 +9,185 @@ use std::{fs, path::PathBuf};
 mod common;
 
 #[tokio::test]
+async fn forget_missing_checks_paths_and_deletes_filtered_records_across_pages() {
+    let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("forget-missing-{}", uuid::Uuid::new_v4()));
+    let source = root.join("source");
+    for i in 0..101 {
+        let dir = source.join(format!("repo/old-{i:03}"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: old-{i:03}\ndescription: old\n---\nBody"),
+        )
+        .unwrap();
+    }
+    fs::create_dir_all(source.join("repo/.git")).unwrap();
+    fs::create_dir_all(source.join("keep")).unwrap();
+    fs::write(
+        source.join("keep/SKILL.md"),
+        "---\nname: keep\ndescription: keep\n---\nBody",
+    )
+    .unwrap();
+    let library = Library::open_for_user(&root.join("data"), &root.join("home"), None).unwrap();
+    library.add_source("test", &source).unwrap();
+    let old_id = library
+        .search(
+            SearchQuery {
+                q: "old-000".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap()
+        .skills[0]
+        .id
+        .clone();
+    library.set_codex_policy(&old_id, false, true).unwrap();
+    let db = rusqlite::Connection::open(root.join("data/library.sqlite3")).unwrap();
+    db.execute(
+        "INSERT INTO history(skill_id,content,reason) VALUES(?1,'before','test')",
+        [&old_id],
+    )
+    .unwrap();
+    fs::rename(source.join("repo"), root.join("retired")).unwrap();
+    fs::create_dir_all(source.join("repo/.git")).unwrap();
+    library.scan().unwrap();
+    let state = AppState::new(library.clone());
+    let token = state.csrf.to_string();
+    let server = common::HttpServer::start(state).await;
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let post = |csrf: &str, count: usize| {
+        client.post(format!("{}/missing/forget", server.base))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!("csrf={csrf}&expected={count}&repository_source=test&repository=repo&q=old&tag=&category="))
+    };
+    let page = client
+        .get(format!("{}/?status=missing", server.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("action=\"/missing/forget\""));
+    assert!(page.contains("name=\"expected\" value=\"101\""));
+    assert_eq!(post("invalid", 101).send().await.unwrap().status(), 403);
+    assert!(
+        !post(&token, 100)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    // 索引が不在でもファイルが復活していたら、全件を保持する。
+    fs::create_dir_all(source.join("repo/old-000")).unwrap();
+    fs::rename(
+        root.join("retired/old-000/SKILL.md"),
+        source.join("repo/old-000/SKILL.md"),
+    )
+    .unwrap();
+    assert!(
+        !post(&token, 101)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_redirection()
+    );
+    fs::rename(
+        source.join("repo/old-000/SKILL.md"),
+        root.join("restored.md"),
+    )
+    .unwrap();
+    fs::rename(&source, root.join("offline")).unwrap();
+    assert!(
+        !post(&token, 101)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_redirection()
+    );
+    fs::rename(root.join("offline"), &source).unwrap();
+    assert_eq!(
+        library
+            .search(
+                SearchQuery {
+                    status: "missing".into(),
+                    ..Default::default()
+                },
+                false
+            )
+            .unwrap()
+            .total,
+        101
+    );
+    let deleted = post(&token, 101).send().await.unwrap();
+    assert!(deleted.status().is_redirection());
+    let location = deleted.headers()["location"].to_str().unwrap();
+    assert!(location.contains("status=missing&message="));
+    let completed = client
+        .get(format!("{}{location}", server.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(completed.contains("不在スキルの登録情報と履歴を削除しました。"));
+    assert!(!completed.contains("action=\"/missing/forget\""));
+    assert_eq!(
+        library.search(SearchQuery::default(), false).unwrap().total,
+        1
+    );
+    assert!(source.join("keep/SKILL.md").is_file());
+    assert!(root.join("retired/old-001/SKILL.md").is_file());
+    let histories: i64 = db
+        .query_row(
+            "SELECT count(*) FROM history WHERE skill_id=?1",
+            [&old_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let policies: i64 = db
+        .query_row(
+            "SELECT count(*) FROM settings WHERE key=?1",
+            [format!("codex_policy:{old_id}")],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!((histories, policies), (0, 0));
+    assert_eq!(
+        library
+            .search(
+                SearchQuery {
+                    q: "old".into(),
+                    ..Default::default()
+                },
+                false
+            )
+            .unwrap()
+            .total,
+        0
+    );
+    assert!(
+        !post(&token, 101)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_redirection()
+    );
+}
+
+#[tokio::test]
 async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
     let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
         .map(PathBuf::from)
@@ -115,19 +294,43 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
         fields.retain(|(name, _)| name != key);
         assert_eq!(post(&fields).send().await.unwrap().status().as_u16(), 400);
     }
-    let mut no_selection = valid.clone();
-    no_selection.retain(|(name, _)| name != "selected");
-    let mut no_changes = valid.clone();
-    for (name, value) in &mut no_changes {
-        if name == "published" || name == "codex_mode" {
-            value.clear();
+    for (has_selection, published, mode, message) in [
+        (
+            false,
+            "invalid",
+            "invalid",
+            "取得元を1件以上選んでください。",
+        ),
+        (true, "invalid", "invalid", "公開状態が不正です。"),
+        (true, "", "invalid", "Codexでの使い方を選択してください。"),
+        (
+            true,
+            "",
+            "",
+            "変更する公開状態・Codexでの使い方を指定してください。",
+        ),
+    ] {
+        let mut fields = valid.clone();
+        fields
+            .iter_mut()
+            .find(|(name, _)| name == "published")
+            .unwrap()
+            .1 = published.into();
+        fields
+            .iter_mut()
+            .find(|(name, _)| name == "codex_mode")
+            .unwrap()
+            .1 = mode.into();
+        if !has_selection {
+            fields.retain(|(name, _)| name != "selected");
         }
+        let response = post(&fields).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 400);
+        assert!(response.text().await.unwrap().contains(message));
     }
     let mut unknown = valid.clone();
     unknown.push(("selected".into(), scope("unknown")));
-    for fields in [no_selection, no_changes, unknown] {
-        assert_eq!(post(&fields).send().await.unwrap().status().as_u16(), 400);
-    }
+    assert_eq!(post(&unknown).send().await.unwrap().status().as_u16(), 400);
     assert!(
         control
             .search(SearchQuery::default(), true)
@@ -360,7 +563,7 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
     assert!(!top.contains("repository_source=test&#38;repository=."));
     assert!(top.contains("repository=repo\""));
     assert!(top.contains("repository=\""));
-    assert!(top.contains("<!--/i18n-->52 ·"));
+    assert!(top.contains("現在のファイル: <!--/i18n-->51 ·"));
     assert!(top.contains("<!--/i18n-->1</span>"));
     let page = get("?repository_source=test&repository=repo")
         .send()
@@ -370,7 +573,17 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
         .await
         .unwrap();
     assert!(page.contains("<table>"));
-    assert!(page.contains("skill-00"));
+    assert!(!page.contains("skill-00"));
+    assert!(page.contains("skill-01"));
+    let all = get("?repository_source=test&repository=repo&status=all")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(all.contains("skill-00"));
+    assert!(all.contains("skill-01"));
     assert!(!page.contains("other-repository"));
     assert!(!page.contains("personal-only"));
     assert!(page.contains("repository_source=test&#38;repository=repo&#38;q="));

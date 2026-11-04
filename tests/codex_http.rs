@@ -415,31 +415,52 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
             Default::default()
         );
     }
-    for (selected, mode) in [
-        (format!("{id},{second}"), "unknown"),
-        (String::new(), "command"),
+    for (selected, published, mode, message) in [
+        (
+            format!("{id},{second}"),
+            "",
+            "unknown",
+            "Codexでの使い方を選択してください。",
+        ),
+        (
+            String::new(),
+            "invalid",
+            "unknown",
+            "スキルを1件以上選んでください。",
+        ),
+        (
+            format!("{id},{second}"),
+            "invalid",
+            "unknown",
+            "公開状態が不正です。",
+        ),
+        (
+            format!("{id},{second}"),
+            "",
+            "",
+            "変更する公開状態・追加タグ・Codexでの使い方のいずれかを指定してください。",
+        ),
     ] {
-        assert_eq!(
-            client
-                .post(&bulk_url)
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(
-                    [
-                        ("csrf", token.as_str()),
-                        ("selected", &selected),
-                        ("codex_mode", mode)
-                    ]
-                    .iter()
-                    .map(|(key, value)| format!("{key}={value}"))
-                    .collect::<Vec<_>>()
-                    .join("&")
-                )
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            StatusCode::BAD_REQUEST
-        );
+        let response = client
+            .post(&bulk_url)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(
+                [
+                    ("csrf", token.as_str()),
+                    ("selected", &selected),
+                    ("published", published),
+                    ("codex_mode", mode),
+                ]
+                .iter()
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join("&"),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response.text().await.unwrap().contains(message));
     }
     let before = state.library.detail(&id, false).unwrap();
     assert_eq!(

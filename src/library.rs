@@ -2207,7 +2207,7 @@ impl Library {
         query: SearchQuery,
         selection: RepositorySelection,
     ) -> Result<SearchResults> {
-        self.search_inner(query, false, Some(selection), None)
+        self.search_inner(query, false, Some(selection), None, false)
     }
 
     pub(crate) fn search_repository_with_groups(
@@ -2216,11 +2216,11 @@ impl Library {
         selection: RepositorySelection,
         groups: &[RepositoryGroup],
     ) -> Result<SearchResults> {
-        self.search_inner(query, false, Some(selection), Some(groups))
+        self.search_inner(query, false, Some(selection), Some(groups), false)
     }
 
     pub fn search(&self, query: SearchQuery, published_only: bool) -> Result<SearchResults> {
-        self.search_inner(query, published_only, None, None)
+        self.search_inner(query, published_only, None, None, false)
     }
 
     fn search_inner(
@@ -2229,6 +2229,7 @@ impl Library {
         published_only: bool,
         selection: Option<RepositorySelection>,
         shared_groups: Option<&[RepositoryGroup]>,
+        collect_all: bool,
     ) -> Result<SearchResults> {
         let owned_groups;
         let groups: &[RepositoryGroup] = if let Some(groups) = shared_groups {
@@ -2268,7 +2269,7 @@ impl Library {
             AND (?4='' OR EXISTS(SELECT 1 FROM json_each(k.tags) WHERE value=?4 COLLATE NOCASE))
             AND (?5='' OR k.category=?5)
             AND (?6='' OR k.id IN(SELECT id FROM skill_fts WHERE skill_fts MATCH ?6))
-            AND CASE ?7 WHEN 'published' THEN k.published=1 WHEN 'unpublished' THEN k.published=0
+            AND CASE ?7 WHEN 'present' THEN k.missing=0 WHEN 'published' THEN k.published=1 WHEN 'unpublished' THEN k.published=0
                 WHEN 'error' THEN k.error IS NOT NULL WHEN 'errors' THEN k.error IS NOT NULL
                 WHEN 'missing' THEN k.missing=1 WHEN 'duplicate' THEN coalesce(d.n,0)>1 WHEN 'duplicates' THEN coalesce(d.n,0)>1 ELSE 1 END";
         let sql = if long.is_empty() {
@@ -2340,20 +2341,22 @@ impl Library {
             matches.push((score, s));
         }
         let total = matches.len();
-        let limit = if query.limit == 0 {
-            50
+        let (offset, limit) = if collect_all {
+            (0, total)
+        } else if query.limit == 0 {
+            (query.offset, 50)
         } else {
-            query.limit.min(100)
+            (query.offset, query.limit.min(100))
         };
         let compare = |a: &(usize, SkillSummary), b: &(usize, SkillSummary)| {
             b.0.cmp(&a.0)
                 .then_with(|| a.1.name.cmp(&b.1.name))
                 .then_with(|| a.1.id.cmp(&b.1.id))
         };
-        if query.offset >= total {
+        if offset >= total {
             matches.clear();
         } else {
-            let keep = query.offset.saturating_add(limit).min(total);
+            let keep = offset.saturating_add(limit).min(total);
             if keep < total {
                 matches.select_nth_unstable_by(keep, compare);
                 matches.truncate(keep);
@@ -2362,7 +2365,7 @@ impl Library {
         }
         let skills = matches
             .into_iter()
-            .skip(query.offset)
+            .skip(offset)
             .take(limit)
             .map(|(_, s)| s)
             .collect();
@@ -2530,7 +2533,7 @@ impl Library {
         }
         let tx = c.unchecked_transaction()?;
         tx.execute("UPDATE skills SET name=?2,description=?3,content=?4,revision=?5,error=NULL,missing=0,updated_at=CURRENT_TIMESTAMP WHERE id=?1",params![id,name,description,content,revision(content)])?;
-        rebuild_fts(&tx)?;
+        refresh_fts(&tx, id)?;
         tx.commit()?;
         Ok(())
     }
@@ -2554,10 +2557,58 @@ impl Library {
                 metadata.published
             ],
         )?;
-        rebuild_fts(&tx)?;
+        refresh_fts(&tx, id)?;
         tx.commit()?;
         Ok(())
     }
+    pub fn forget_missing(
+        &self,
+        mut query: SearchQuery,
+        selection: RepositorySelection,
+        expected: usize,
+    ) -> Result<usize> {
+        ensure!(
+            expected > 0,
+            "削除対象がありません。再読み込みしてください。"
+        );
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
+        query.status = "missing".into();
+        query.source = selection.repository_source.clone();
+        let selection = (!selection.repository_source.is_empty()).then_some(selection);
+        let matches = self.search_inner(query, false, selection, None, true)?;
+        ensure!(
+            matches.total == expected,
+            "対象件数が変わりました。再読み込みしてください。"
+        );
+        let ids: Vec<_> = matches.skills.into_iter().map(|skill| skill.id).collect();
+        let c = self.connection()?;
+        let tx = c.unchecked_transaction()?;
+        // 接続障害・権限不足・復活したファイルを、不在として削除しない。
+        for id in &ids {
+            let (root, path) = self.locate(&tx, id)?;
+            fs::read_dir(&root)
+                .context("ソースを確認できません。接続・権限を確認してください。")?;
+            match fs::symlink_metadata(&path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                _ => bail!(
+                    "パスが存在するか不在を確認できないため、削除を中止しました。再スキャンしてください。"
+                ),
+            }
+        }
+        for id in &ids {
+            tx.execute("DELETE FROM history WHERE skill_id=?1", [id])?;
+            tx.execute(
+                "DELETE FROM settings WHERE key=?1",
+                [format!("codex_policy:{id}")],
+            )?;
+            tx.execute("DELETE FROM skills WHERE id=?1 AND missing=1", [id])?;
+        }
+        rebuild_fts(&tx)?;
+        tx.commit()?;
+        Ok(ids.len())
+    }
+
     pub fn bulk_metadata(
         &self,
         ids: &[String],
@@ -2851,9 +2902,20 @@ fn summary_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkillSummary> {
 }
 fn rebuild_fts(c: &Connection) -> Result<()> {
     c.execute("DELETE FROM skill_fts", [])?;
-    let mut rows = c.prepare("SELECT id,name,description,content,tags,category FROM skills")?;
+    insert_fts(c, None)
+}
+fn refresh_fts(c: &Connection, id: &str) -> Result<()> {
+    c.execute("DELETE FROM skill_fts WHERE id=?1", [id])?;
+    insert_fts(c, Some(id))
+}
+fn insert_fts(c: &Connection, id: Option<&str>) -> Result<()> {
+    let sql = format!(
+        "SELECT id,name,description,content,tags,category FROM skills{}",
+        if id.is_some() { " WHERE id=?1" } else { "" }
+    );
+    let mut rows = c.prepare(&sql)?;
     let mut insert = c.prepare("INSERT INTO skill_fts(id,name,description,content,tags,category) VALUES(?1,?2,?3,?4,?5,?6)")?;
-    for row in rows.query_map([], |row| {
+    for row in rows.query_map(rusqlite::params_from_iter(id), |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,

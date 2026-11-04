@@ -1,6 +1,6 @@
 [package]
 name = "skilvella"
-version = "1.0.6"
+version = "1.0.7"
 edition = "2024"
 rust-version = "1.89"
 description = "A local skill library with a browser manager and three MCP tools"
@@ -29,7 +29,7 @@ comrak = { version = "0.59.0", default-features = false }
 notify = "8"
 flate2 = "1"
 tar = "0.4"
-zip = { version = "9", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 rmcp = { version = "3.8.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 saphyr = "0.3.3"
