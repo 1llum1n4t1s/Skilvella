@@ -9,6 +9,7 @@ use axum::{
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
+use std::sync::Arc;
 
 pub fn router(state: AppState, port: u16) -> Router {
     router_with_shutdown(state, port).0
@@ -30,14 +31,14 @@ pub fn router_with_shutdown(state: AppState, port: u16) -> (Router, impl FnOnce(
         LocalSessionManager::default().into(),
         config,
     );
+    let boundary = Arc::new((hosts, origins));
     // URL エンコードされた UTF-8 本文は最大3倍になる。本文自体の上限は保存層で検査する。
     let router = web::router()
         .nest_service("/mcp", service)
         .layer(DefaultBodyLimit::max(6 * 1024 * 1024 + 64 * 1024))
         .layer(middleware::from_fn(move |request: Request, next: Next| {
-            let hosts = hosts.clone();
-            let origins = origins.clone();
-            async move { local_boundary(request, next, &hosts, &origins).await }
+            let boundary = Arc::clone(&boundary);
+            async move { local_boundary(request, next, &boundary.0, &boundary.1).await }
         }))
         .with_state(state);
     (router, move || cancellation.cancel())

@@ -60,6 +60,16 @@ fn explicit_automatic_search_only_and_publication_preserve_the_original() {
     let wrapper = fs::read_to_string(entry(&base, &id).join("SKILL.md")).unwrap();
     assert!(wrapper.contains(&format!("load_skill with the fixed id \"{id}\"")));
     assert!(!wrapper.contains("PRIVATE ORIGINAL BODY"));
+    let finder =
+        fs::read_to_string(base.join("home/.agents/skills/skilvella/skilvella-search/SKILL.md"))
+            .unwrap();
+    for instructions in [&wrapper, &finder] {
+        assert!(instructions.contains("toolport_search_tools"));
+        assert!(instructions.contains("toolport_call_tool"));
+        assert!(instructions.contains("parameters inside arguments"));
+        assert!(instructions.contains("available tool inventory"));
+        assert!(instructions.contains("Never replace MCP retrieval with local skill files"));
+    }
     assert!(
         fs::read_to_string(entry(&base, &id).join("agents/openai.yaml"))
             .unwrap()
@@ -482,6 +492,26 @@ fn duplicate_reserved_and_invalid_names_receive_safe_distinct_commands() {
     assert!(
         base.join("home/.agents/skills/skilvella/skilvella-search/SKILL.md")
             .is_file()
+    );
+    let duplicates = library
+        .search(SearchQuery::default(), false)
+        .unwrap()
+        .skills
+        .into_iter()
+        .filter(|skill| skill.name == "original")
+        .collect::<Vec<_>>();
+    library
+        .set_codex_policy(&duplicates[0].id, false, false)
+        .unwrap();
+    library.sync_codex_entries().unwrap();
+    assert_eq!(library.codex_settings().unwrap().exported, 3);
+    let command = format!("original-{}", &duplicates[1].id[..8]);
+    let exported = base.join("home/.agents/skills/skilvella").join(command);
+    assert!(exported.join("SKILL.md").is_file());
+    assert!(
+        fs::read_to_string(exported.join("agents/openai.yaml"))
+            .unwrap()
+            .contains(&duplicates[1].relative_path)
     );
 }
 

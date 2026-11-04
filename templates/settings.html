@@ -12,7 +12,7 @@
 <section class="panel stack" id="codex"><h2><!--i18n-->Codex連携<!--/i18n--></h2>
 <form method="post" action="/settings/codex" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}">
 <label><!--i18n-->Codex連携<!--/i18n--><select name="enabled"><option value="false" {% if !codex.enabled %}selected{% endif %}><!--i18n-->無効<!--/i18n--></option><option value="true" {% if codex.enabled %}selected{% endif %}><!--i18n-->有効<!--/i18n--></option></select></label>
-<p class="note"><!--i18n-->有効にすると検索用スキル skilvella-search が常に候補に表示されます。各スキルの使い方は詳細画面で選択できます。<!--/i18n--></p>
+<p class="note"><!--i18n-->有効にすると検索用スキル skilvella-search が常に候補に表示されます。各スキルの使い方は一覧または詳細画面で選択できます。<!--/i18n--></p>
 <button type="submit" data-busy="保存中…"><!--i18n-->保存<!--/i18n--></button></form>
 <p><!--i18n-->生成先: <!--/i18n--><code>{{ self.display_codex_path() }}</code></p>
 <p><!--i18n-->生成済み件数: <!--/i18n-->{{ codex.exported }}</p>

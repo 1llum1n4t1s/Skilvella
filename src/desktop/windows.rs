@@ -372,7 +372,9 @@ fn load_icon() -> Result<Icon> {
     let width = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(1);
     let height = unsafe { GetSystemMetrics(SM_CYSMICON) }.max(1);
     let entry = bytes[6..]
-        .chunks_exact(16)
+        .as_chunks::<16>()
+        .0
+        .iter()
         .take(count)
         .min_by_key(|entry| {
             let size = if entry[0] == 0 {

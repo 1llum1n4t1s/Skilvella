@@ -6,6 +6,206 @@ use skilvella::{
 };
 use std::{fs, path::PathBuf};
 
+mod common;
+
+#[tokio::test]
+async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
+    let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("repository-bulk-http-{}", uuid::Uuid::new_v4()));
+    let source = root.join("source");
+    let special = "repo & 日本語 + %";
+    for repository in ["repo", special, "unselected"] {
+        fs::create_dir_all(source.join(repository).join(".git")).unwrap();
+    }
+    for folder in (0..105)
+        .map(|i| format!("repo/skill-{i:02}"))
+        .chain([format!("{special}/one"), "unselected/one".into()])
+    {
+        fs::create_dir_all(source.join(&folder)).unwrap();
+        fs::write(
+            source.join(&folder).join("SKILL.md"),
+            format!(
+                "---\nname: {}\ndescription: Bulk form fixture\n---\nOriginal body\n",
+                folder.replace('/', "-")
+            ),
+        )
+        .unwrap();
+    }
+    let library = Library::open_for_user(&root.join("data"), &root.join("home"), None).unwrap();
+    library.add_source("local", &source).unwrap();
+    fs::rename(
+        source.join("repo/skill-103/SKILL.md"),
+        source.join("repo/skill-103/retired.txt"),
+    )
+    .unwrap();
+    fs::write(
+        source.join("repo/skill-104/SKILL.md"),
+        "---\nname: [broken\n---\ninvalid",
+    )
+    .unwrap();
+    library.scan().unwrap();
+    library.set_codex_enabled(true).unwrap();
+    let control = library.clone();
+    let state = AppState::new(library);
+    let token = state.csrf.to_string();
+    let server = common::HttpServer::start(state).await;
+    let client = Client::new();
+    let post = |fields: &[(String, String)]| {
+        let encode = |value: &str| {
+            value
+                .bytes()
+                .map(|byte| format!("%{byte:02X}"))
+                .collect::<String>()
+        };
+        let body = fields
+            .iter()
+            .map(|(key, value)| format!("{}={}", encode(key), encode(value)))
+            .collect::<Vec<_>>()
+            .join("&");
+        client
+            .post(format!("{}/repositories/bulk", server.base))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body)
+    };
+    let scope = |repository: &str| {
+        serde_json::json!({
+            "repository_source": "local", "repository": repository
+        })
+        .to_string()
+    };
+    let valid = vec![
+        ("csrf".to_owned(), token),
+        ("published".into(), "true".into()),
+        ("codex_mode".into(), "automatic".into()),
+        ("selected".into(), scope("repo")),
+        ("selected".into(), scope(special)),
+        ("selected".into(), scope("repo")),
+    ];
+    let top = client
+        .get(&server.base)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(top.contains("action=\"/repositories/bulk\""));
+    assert!(top.contains("data-count=\"103\""));
+    assert!(top.contains("対象件数はスキャン索引に基づきます。"));
+    for (key, replacement) in [
+        ("csrf", "invalid"),
+        ("published", "yes"),
+        ("codex_mode", "invalid"),
+        ("selected", "not-json"),
+    ] {
+        let mut fields = valid.clone();
+        fields.iter_mut().find(|(name, _)| name == key).unwrap().1 = replacement.into();
+        let response = post(&fields).send().await.unwrap();
+        assert_eq!(
+            response.status().as_u16(),
+            if key == "csrf" { 403 } else { 400 }
+        );
+    }
+    for key in ["csrf", "published", "codex_mode"] {
+        let mut fields = valid.clone();
+        fields.push(fields.iter().find(|(name, _)| name == key).unwrap().clone());
+        assert_eq!(post(&fields).send().await.unwrap().status().as_u16(), 400);
+        fields.retain(|(name, _)| name != key);
+        assert_eq!(post(&fields).send().await.unwrap().status().as_u16(), 400);
+    }
+    let mut no_selection = valid.clone();
+    no_selection.retain(|(name, _)| name != "selected");
+    let mut no_changes = valid.clone();
+    for (name, value) in &mut no_changes {
+        if name == "published" || name == "codex_mode" {
+            value.clear();
+        }
+    }
+    let mut unknown = valid.clone();
+    unknown.push(("selected".into(), scope("unknown")));
+    for fields in [no_selection, no_changes, unknown] {
+        assert_eq!(post(&fields).send().await.unwrap().status().as_u16(), 400);
+    }
+    assert!(
+        control
+            .search(SearchQuery::default(), true)
+            .unwrap()
+            .skills
+            .is_empty()
+    );
+    let result = post(&valid).send().await.unwrap();
+    assert!(result.status().is_success());
+    assert_eq!(result.url().path(), "/");
+    let body = result.text().await.unwrap();
+    assert!(body.contains("取得元の一括設定: 104件更新、2件対象外。"));
+    let mut all = control
+        .search(
+            SearchQuery {
+                limit: 100,
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap()
+        .skills;
+    all.extend(
+        control
+            .search(
+                SearchQuery {
+                    limit: 100,
+                    offset: 100,
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap()
+            .skills,
+    );
+    assert_eq!(all.len(), 107);
+    assert_eq!(all.iter().filter(|skill| skill.published).count(), 104);
+    for skill in all {
+        let selected = !skill.relative_path.starts_with("unselected/")
+            && !skill.missing
+            && skill.error.is_none();
+        assert_eq!(skill.published, selected);
+        let policy = control.codex_policy(&skill.id).unwrap();
+        assert_eq!((policy.automatic, policy.command), (selected, selected));
+    }
+    let codex = control.codex_settings().unwrap();
+    assert!(codex.last_error.is_empty(), "{}", codex.last_error);
+    assert_eq!(codex.exported, 104);
+    assert_eq!(
+        fs::read_to_string(source.join("repo/skill-00/SKILL.md")).unwrap(),
+        "---\nname: repo-skill-00\ndescription: Bulk form fixture\n---\nOriginal body\n"
+    );
+
+    // 取得元が未確認なら、古い索引に有効な行が残っていても対象件数を表示しない。
+    fs::rename(&source, root.join("offline-source")).unwrap();
+    rusqlite::Connection::open(root.join("data/library.sqlite3"))
+        .unwrap()
+        .execute("DELETE FROM settings WHERE key LIKE 'repositories:%'", [])
+        .unwrap();
+    let group = control.repository_groups().unwrap().remove(0);
+    assert!(group.unknown && group.available > 0);
+    let unknown = client
+        .get(&server.base)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let card = unknown
+        .split("<div class=\"repository-card\">")
+        .nth(1)
+        .unwrap();
+    assert!(card.contains("取得元を確認できません"));
+    assert!(card.contains("disabled"));
+    assert!(!card.contains("<!--i18n-->対象:"));
+}
+
 #[tokio::test]
 async fn repository_selection_scopes_search_counts_and_pagination() {
     let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
@@ -110,22 +310,9 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
         .skills[0]
         .id
         .clone();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let task = tokio::spawn(async move {
-        axum::serve(listener, skilvella::server::router(state, port))
-            .await
-            .unwrap();
-    });
-    struct Stop(tokio::task::JoinHandle<()>);
-    impl Drop for Stop {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
-    let _stop = Stop(task);
+    let server = common::HttpServer::start(state).await;
     let client = Client::new();
-    let base = format!("http://127.0.0.1:{port}");
+    let base = server.base.clone();
     let get = |query: &str| client.get(format!("{base}/{query}"));
     let top = get("").send().await.unwrap().text().await.unwrap();
     assert!(!top.contains("<table>"));

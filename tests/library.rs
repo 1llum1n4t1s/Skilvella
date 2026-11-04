@@ -1,6 +1,6 @@
 use skilvella::{
     library::Library,
-    model::{SearchQuery, SkillMetadata},
+    model::{CodexSkillPolicy, RepositorySelection, SearchQuery, SkillMetadata},
 };
 use std::{fs, path::PathBuf};
 
@@ -38,6 +38,303 @@ fn publish(l: &Library, id: &str) {
     .unwrap();
 }
 
+fn repository_bulk_fixture() -> (PathBuf, Library, PathBuf) {
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(".work/test-library")
+        .join(format!("repository-bulk-{}", uuid::Uuid::new_v4()));
+    let source = base.join("source");
+    for repo in ["repo", "repo-extra", "peer", "empty"] {
+        fs::create_dir_all(source.join(repo).join(".git")).unwrap();
+    }
+    for folder in (0..103).map(|i| format!("repo/skill-{i:03}")).chain([
+        "repo-extra/one".into(),
+        "peer/one".into(),
+        "personal".into(),
+    ]) {
+        fs::create_dir_all(source.join(&folder)).unwrap();
+        fs::write(
+            source.join(&folder).join("SKILL.md"),
+            skill(&folder.replace('/', "-"), "original"),
+        )
+        .unwrap();
+    }
+    let library = Library::open_for_user(&base.join("data"), &base.join("home"), None).unwrap();
+    library.add_source("local", &source).unwrap();
+    (base, library, source)
+}
+
+fn repository_scope(source: &str, repository: &str) -> RepositorySelection {
+    RepositorySelection {
+        repository_source: source.into(),
+        repository: repository.into(),
+    }
+}
+
+#[test]
+fn repository_bulk_updates_all_selected_skills_and_preserves_files_and_history() {
+    let (base, library, source) = repository_bulk_fixture();
+    fs::rename(
+        source.join("repo/skill-101/SKILL.md"),
+        source.join("repo/skill-101/retired.txt"),
+    )
+    .unwrap();
+    fs::write(
+        source.join("repo/skill-102/SKILL.md"),
+        "---\nname: [broken\n---\ninvalid",
+    )
+    .unwrap();
+    library.scan().unwrap();
+    let groups = library.repository_groups().unwrap();
+    let repo = groups
+        .iter()
+        .find(|group| group.repository == "repo")
+        .unwrap();
+    assert_eq!((repo.count, repo.missing, repo.available), (103, 1, 101));
+    // カード取得後に増えたスキルもPOST時点の対象へ含める。
+    let added = library
+        .create_skill("local", "repo/new", &skill("new", "new file"))
+        .unwrap();
+    let before = library.detail(&added, false).unwrap();
+    library
+        .save_content(&added, &before.revision, &skill("new", "edited file"))
+        .unwrap();
+    let before = library.detail(&added, false).unwrap();
+    let snapshots: Vec<_> = (0..101)
+        .map(|i| {
+            let path = source.join(format!("repo/skill-{i:03}/SKILL.md"));
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    let policy = CodexSkillPolicy {
+        automatic: true,
+        command: true,
+    };
+    assert_eq!(
+        library
+            .bulk_repository_settings(
+                &[
+                    repository_scope("local", "repo"),
+                    repository_scope("local", "peer"),
+                    repository_scope("local", "repo"),
+                ],
+                Some(true),
+                Some(policy.clone())
+            )
+            .unwrap(),
+        (103, 2)
+    );
+    let db = rusqlite::Connection::open(base.join("data/library.sqlite3")).unwrap();
+    let count = |sql: &str| db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    assert_eq!(count("SELECT count(*) FROM skills WHERE published=1"), 103);
+    assert_eq!(
+        count("SELECT count(*) FROM skills WHERE published=1 AND (missing=1 OR error IS NOT NULL)"),
+        0
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM settings WHERE key LIKE 'codex_policy:%'"),
+        103
+    );
+    for repository in ["repo-extra", ""] {
+        let unselected = library
+            .search_repository(
+                SearchQuery::default(),
+                repository_scope("local", repository),
+            )
+            .unwrap();
+        assert_eq!(unselected.total, 1);
+        assert!(!unselected.skills[0].published);
+        assert_eq!(
+            library.codex_policy(&unselected.skills[0].id).unwrap(),
+            CodexSkillPolicy::default()
+        );
+    }
+    assert_eq!(library.codex_policy(&added).unwrap(), policy);
+    let after = library.detail(&added, false).unwrap();
+    assert_eq!(after.content, before.content);
+    assert_eq!(
+        after.history.iter().map(|h| h.id).collect::<Vec<_>>(),
+        before.history.iter().map(|h| h.id).collect::<Vec<_>>()
+    );
+    for (path, bytes) in snapshots {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    assert_eq!(
+        fs::read(source.join("repo/new/SKILL.md")).unwrap(),
+        before.content.as_bytes()
+    );
+    assert_eq!(
+        library
+            .bulk_repository_settings(
+                &[repository_scope("local", "")],
+                None,
+                Some(CodexSkillPolicy {
+                    automatic: false,
+                    command: true
+                })
+            )
+            .unwrap(),
+        (1, 0)
+    );
+    let standalone = base.join("standalone");
+    fs::create_dir_all(standalone.join(".git")).unwrap();
+    fs::create_dir_all(standalone.join("one")).unwrap();
+    fs::write(standalone.join("one/SKILL.md"), skill("standalone", "body")).unwrap();
+    library.add_source("standalone", &standalone).unwrap();
+    assert_eq!(
+        library
+            .bulk_repository_settings(&[repository_scope("standalone", ".")], Some(true), None)
+            .unwrap(),
+        (1, 0)
+    );
+    // 一括設定から新規スキルへ自動継承しない。
+    let later = library
+        .create_skill("local", "repo/later", &skill("later", "body"))
+        .unwrap();
+    assert!(!library.detail(&later, false).unwrap().summary.published);
+    assert_eq!(
+        library.codex_policy(&later).unwrap(),
+        CodexSkillPolicy::default()
+    );
+}
+
+#[test]
+fn repository_bulk_rejects_invalid_scopes_and_rolls_back_stale_publication() {
+    let (base, library, source) = repository_bulk_fixture();
+    let selected = repository_scope("local", "repo");
+    let policy = CodexSkillPolicy {
+        automatic: true,
+        command: true,
+    };
+    let db = rusqlite::Connection::open(base.join("data/library.sqlite3")).unwrap();
+    let unchanged = || {
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM skills WHERE published=1", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM settings WHERE key LIKE 'codex_policy:%'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    };
+    assert!(
+        library
+            .bulk_repository_settings(&[], Some(true), None)
+            .is_err()
+    );
+    assert!(
+        library
+            .bulk_repository_settings(std::slice::from_ref(&selected), None, None)
+            .is_err()
+    );
+    assert!(
+        library
+            .bulk_repository_settings(
+                std::slice::from_ref(&selected),
+                None,
+                Some(CodexSkillPolicy {
+                    automatic: true,
+                    command: false
+                })
+            )
+            .is_err()
+    );
+    for invalid in [
+        repository_scope("unknown", "repo"),
+        repository_scope("local", "unknown"),
+        repository_scope("local", "empty"),
+    ] {
+        assert!(
+            library
+                .bulk_repository_settings(
+                    &[selected.clone(), invalid],
+                    Some(true),
+                    Some(policy.clone())
+                )
+                .is_err()
+        );
+        unchanged();
+    }
+    // 索引が正常でも、公開直前のファイル再検査で失敗すれば他の対象も戻る。
+    let stale = source.join("repo/skill-102/SKILL.md");
+    let original = fs::read(&stale).unwrap();
+    fs::write(&stale, "---\nname: [broken\n---\nstale").unwrap();
+    assert!(
+        library
+            .bulk_repository_settings(
+                std::slice::from_ref(&selected),
+                Some(true),
+                Some(policy.clone())
+            )
+            .is_err()
+    );
+    unchanged();
+    fs::write(&stale, original).unwrap();
+    fs::write(
+        source.join("peer/one/SKILL.md"),
+        "---\nname: [broken\n---\ninvalid",
+    )
+    .unwrap();
+    library.scan().unwrap();
+    assert!(
+        library
+            .bulk_repository_settings(
+                &[repository_scope("local", "peer")],
+                Some(false),
+                Some(policy.clone())
+            )
+            .is_err()
+    );
+    unchanged();
+    // 切断中にキャッシュからカードを表示できても設定は変更しない。
+    let disconnected = base.join("disconnected-source");
+    fs::rename(&source, &disconnected).unwrap();
+    assert!(
+        library
+            .bulk_repository_settings(
+                std::slice::from_ref(&selected),
+                Some(false),
+                Some(policy.clone())
+            )
+            .is_err()
+    );
+    unchanged();
+    db.execute(
+        "UPDATE settings SET key='test-unknown:' || key WHERE key LIKE 'repositories:%'",
+        [],
+    )
+    .unwrap();
+    assert!(
+        library
+            .repository_groups()
+            .unwrap()
+            .iter()
+            .any(|group| group.unknown)
+    );
+    assert!(
+        library
+            .bulk_repository_settings(&[repository_scope("local", "")], Some(true), None)
+            .is_err()
+    );
+    unchanged();
+    fs::rename(&disconnected, &source).unwrap();
+    library.remove_source("local").unwrap();
+    assert!(
+        library
+            .bulk_repository_settings(&[selected], Some(true), Some(policy))
+            .is_err()
+    );
+    unchanged();
+}
+
 #[test]
 fn publication_metadata_history_and_restore_survive_rescan_and_reopen() {
     let (base, library, source) = fixture();
@@ -46,6 +343,15 @@ fn publication_metadata_history_and_restore_survive_rescan_and_reopen() {
         .set_source_display_name("local", "仕事用 🌸")
         .unwrap();
     let id = id(&library);
+    // Python hashlibで算出した既知値。依存更新でも既存IDと本文revisionを維持する。
+    assert_eq!(
+        id,
+        "8ca3b665c809f41fd8a3d10fe0d70b0bca0389822cfd888922784f87a4c99556"
+    );
+    assert_eq!(
+        library.detail(&id, false).unwrap().revision,
+        "7adc13176e6bbaafac0f0bfc1441aa92bda64f489958c4c9fb42bf946226de6a"
+    );
     assert_eq!(
         library.search(SearchQuery::default(), true).unwrap().total,
         0
@@ -84,6 +390,131 @@ fn publication_metadata_history_and_restore_survive_rescan_and_reopen() {
     let file = library.read_file(&id, "reference.txt", 2, 1).unwrap();
     assert_eq!(file.text, "two");
     assert_eq!(file.total_lines, 3);
+    for (content, start, limit, expected, total) in [
+        ("", 0, 0, "", 0),
+        ("one\r\n\r\nthree\r\n", 0, 0, "one", 3),
+        ("one\r\n\r\nthree", 2, 10, "\nthree", 3),
+        ("one\n", 2, 1, "", 1),
+        ("one\ntwo", usize::MAX, 1, "", 2),
+    ] {
+        fs::write(source.join("alpha/reference.txt"), content).unwrap();
+        let file = library
+            .read_file(&id, "reference.txt", start, limit)
+            .unwrap();
+        assert_eq!(file.text, expected);
+        assert_eq!(file.total_lines, total);
+        assert_eq!(file.start_line, start.max(1));
+    }
+    fs::write(source.join("alpha/reference.txt"), "line\n".repeat(1001)).unwrap();
+    let file = library
+        .read_file(&id, "reference.txt", 1, usize::MAX)
+        .unwrap();
+    assert_eq!(file.total_lines, 1001);
+    assert_eq!(file.text.lines().count(), 1000);
+}
+
+#[test]
+fn source_counts_preserve_invalid_missing_empty_and_inactive_sources() {
+    let (base, library, source) = fixture();
+    fs::create_dir_all(source.join("invalid")).unwrap();
+    fs::write(source.join("invalid/SKILL.md"), "invalid frontmatter").unwrap();
+    library.scan().unwrap();
+    let sources = library.sources().unwrap();
+    assert_eq!((sources[0].skill_count, sources[0].error_count), (2, 1));
+    fs::rename(source.join("invalid"), base.join("retired-invalid")).unwrap();
+    library.scan().unwrap();
+    let empty = base.join("empty");
+    fs::create_dir_all(&empty).unwrap();
+    library.add_source("empty", &empty).unwrap();
+    let inactive = base.join("inactive");
+    fs::create_dir_all(&inactive).unwrap();
+    fs::write(inactive.join("SKILL.md"), skill("inactive", "body")).unwrap();
+    library.add_source("inactive", &inactive).unwrap();
+    library.remove_source("inactive").unwrap();
+    let sources = library.sources().unwrap();
+    assert_eq!(
+        sources
+            .iter()
+            .map(|s| (s.alias.as_str(), s.skill_count, s.error_count))
+            .collect::<Vec<_>>(),
+        vec![("empty", 0, 0), ("local", 1, 1)]
+    );
+}
+
+#[test]
+fn search_pages_preserve_score_name_id_order_and_extreme_offsets() {
+    let (_, library, source) = fixture();
+    for (dir, name, body) in [
+        ("b", "same", "needle"),
+        ("c", "same", "needle"),
+        ("d", "needle", "body"),
+        ("e", "last", "needle"),
+    ] {
+        fs::create_dir_all(source.join(dir)).unwrap();
+        fs::write(source.join(dir).join("SKILL.md"), skill(name, body)).unwrap();
+    }
+    library.scan().unwrap();
+    for q in ["", "needle"] {
+        let all = library
+            .search(
+                SearchQuery {
+                    q: q.into(),
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap();
+        let mut expected = all.skills.clone();
+        expected.sort_by(|a, b| {
+            let score = |s: &skilvella::model::SkillSummary| {
+                usize::from(!q.is_empty() && s.name.contains(q))
+            };
+            score(b)
+                .cmp(&score(a))
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        assert_eq!(
+            all.skills.iter().map(|s| &s.id).collect::<Vec<_>>(),
+            expected.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+        for offset in 0..=all.total {
+            let page = library
+                .search(
+                    SearchQuery {
+                        q: q.into(),
+                        offset,
+                        limit: 1,
+                        ..Default::default()
+                    },
+                    false,
+                )
+                .unwrap();
+            assert_eq!(page.total, all.total);
+            assert_eq!(
+                page.skills.iter().map(|s| &s.id).collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .skip(offset)
+                    .take(1)
+                    .map(|s| &s.id)
+                    .collect::<Vec<_>>()
+            );
+        }
+        let page = library
+            .search(
+                SearchQuery {
+                    q: q.into(),
+                    offset: usize::MAX,
+                    limit: 100,
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap();
+        assert_eq!(page.total, all.total);
+        assert!(page.skills.is_empty());
+    }
 }
 
 #[test]

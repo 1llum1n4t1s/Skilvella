@@ -1,11 +1,25 @@
 [package]
 name = "skilvella"
-version = "1.0.5"
+version = "1.0.6"
 edition = "2024"
 rust-version = "1.89"
 description = "A local skill library with a browser manager and three MCP tools"
 license = "MIT"
 repository = "https://github.com/1llum1n4t1s/Skilvella"
+default-run = "skilvella"
+
+[features]
+launcher = []
+
+[[bin]]
+name = "skilvella-launcher"
+path = "src/bin/skilvella-launcher.rs"
+required-features = ["launcher"]
+
+[[test]]
+name = "launcher"
+path = "tests/launcher.rs"
+required-features = ["launcher"]
 
 [dependencies]
 anyhow = "1"
@@ -15,13 +29,13 @@ comrak = { version = "0.59.0", default-features = false }
 notify = "8"
 flate2 = "1"
 tar = "0.4"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 rmcp = { version = "3.8.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 saphyr = "0.3.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time", "sync"] }
 uuid = { version = "1", features = ["v4"] }
 

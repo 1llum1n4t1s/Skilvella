@@ -3,6 +3,8 @@ use serde_json::{Value, json};
 use skilvella::{AppState, library::Library};
 use std::{fs, path::PathBuf};
 
+mod common;
+
 fn encode(s: &str) -> String {
     s.bytes()
         .map(|b| {
@@ -63,20 +65,8 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     .unwrap();
     let state = AppState::new(Library::open(&base.join("data")).unwrap());
     let token = state.csrf.to_string();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let router = skilvella::server::router(state.clone(), port);
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    struct Stop(tokio::task::JoinHandle<()>);
-    impl Drop for Stop {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
-    let _stop = Stop(task);
-    let base_url = format!("http://127.0.0.1:{port}");
+    let server = common::HttpServer::start(state.clone()).await;
+    let base_url = server.base.clone();
     let client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -412,20 +402,8 @@ async fn directory_settings_forms_and_icons_work_over_http() {
         )
         .unwrap();
     let token = state.csrf.to_string();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let router = skilvella::server::router(state.clone(), port);
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    struct Stop(tokio::task::JoinHandle<()>);
-    impl Drop for Stop {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
-    let _stop = Stop(task);
-    let url = format!("http://127.0.0.1:{port}");
+    let server = common::HttpServer::start(state.clone()).await;
+    let url = server.base.clone();
     let client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()

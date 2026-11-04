@@ -8,6 +8,9 @@ permissions:
 
 jobs:
   check:
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -18,7 +21,11 @@ jobs:
       - run: rustup show
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --features launcher --bin skilvella-launcher --test launcher -- -D warnings
       - run: cargo test --locked
+        env:
+          SKILVELLA_MIGRATION_TEST_ROOT: ${{ runner.temp }}
+      - run: cargo test --locked --features launcher --test launcher
         env:
           SKILVELLA_MIGRATION_TEST_ROOT: ${{ runner.temp }}
       - run: cargo build --release --locked

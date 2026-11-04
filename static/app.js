@@ -1,6 +1,81 @@
 "use strict";
 (() => {
   const t = (key, values) => window.skilvellaI18n?.t(key, values) ?? key;
+  const operationKey = "skilvella-policy-operation";
+  async function refreshPolicyDisplay() {
+    if (document.querySelector("form[data-editor]")) {
+      const form = document.querySelector('form[action$="/codex"]');
+      if (form) {
+        const response = await fetch(form.action.replace(/\/codex$/, ""), { cache: "no-store" });
+        if (!response.ok) throw new Error("Cannot refresh policy");
+        const latest = new DOMParser().parseFromString(await response.text(), "text/html").querySelector('form[action$="/codex"]');
+        if (!latest) throw new Error("Cannot refresh policy");
+        form.replaceWith(latest);
+        window.skilvellaI18n?.applyLanguage?.();
+      }
+      document.documentElement.classList.remove("policy-restoring");
+      showRecoveryNotice();
+    } else if (document.querySelector(".codex-policy-form") || window.location.pathname === "/" || window.location.pathname === "/settings") {
+      window.location.replace(window.location.href);
+    } else {
+      document.documentElement.classList.remove("policy-restoring");
+      showRecoveryNotice();
+    }
+  }
+  window.addEventListener("skilvella:restore-policies", () => {
+    void (async () => {
+      // 復元された文書でも記録を読み直す。
+      let record;
+      try { record = sessionStorage.getItem(operationKey); } catch { await refreshPolicyDisplay(); return; }
+      if (record) await recoverPolicyOperation();
+      else await refreshPolicyDisplay();
+    })().catch(() => { document.getElementById("policy-recovery-status").textContent = t("保存状態を確認できません。再読み込みしてください。"); });
+  });
+  async function recoverPolicyOperation() {
+      try {
+        const recovery = JSON.parse(sessionStorage.getItem(operationKey));
+        if (!recovery || typeof recovery.id !== "string") throw new Error("Invalid operation");
+        const deadline = Date.now() + 30000;
+        let recoveryNotice = "";
+        let csrf;
+        if (!recovery.complete) {
+          const settings = await fetch("/settings", { cache: "no-store" });
+          if (!settings.ok) throw new Error("Missing token");
+          csrf = new DOMParser().parseFromString(await settings.text(), "text/html").querySelector('input[name="csrf"]')?.value;
+          if (!csrf) throw new Error("Missing token");
+        }
+        while (!recovery.complete) {
+          const response = await fetch("/settings/policy-operations/" + encodeURIComponent(recovery.id), { method: "POST", body: new URLSearchParams({ csrf }), cache: "no-store" });
+          if (!response.ok) throw new Error("Cannot confirm save");
+          const status = await response.json();
+          if (status.state === "cancelled" || status.state === "failed") { recoveryNotice = "保存結果を確認できませんでした。最新の設定を表示しています。"; break; }
+          if (status.state === "sync_failed") { recoveryNotice = "保存しましたが、Codexへの同期に失敗しました。設定画面を確認してください。"; break; }
+          if (status.state === "complete") break;
+          if (Date.now() >= deadline) throw new Error("Cannot confirm save");
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        sessionStorage.removeItem(operationKey);
+        if (recoveryNotice) sessionStorage.setItem("skilvella-policy-cancelled", recoveryNotice);
+        await refreshPolicyDisplay();
+      } catch {
+        document.getElementById("policy-recovery-status").textContent = t("保存状態を確認できません。再読み込みしてください。");
+      }
+  }
+  if (document.documentElement.classList.contains("policy-restoring")) void recoverPolicyOperation();
+  function showRecoveryNotice() {
+  try {
+    if (sessionStorage.getItem("skilvella-policy-cancelled")) {
+      const message = sessionStorage.getItem("skilvella-policy-cancelled");
+      sessionStorage.removeItem("skilvella-policy-cancelled");
+      const notice = document.createElement("div");
+      notice.className = "notice warning";
+      notice.setAttribute("role", "alert");
+      notice.textContent = t(message);
+      document.querySelector("main").prepend(notice);
+    }
+  } catch { /* ストレージを利用できない場合、保存操作側で停止する。 */ }
+  }
+  showRecoveryNotice();
   document.querySelectorAll("[data-mcp-address]").forEach(element => {
     element.textContent = `${window.location.origin}/mcp`;
   });
@@ -121,6 +196,7 @@
       if (!selected.length) { event.preventDefault(); return; }
       document.getElementById("selected-ids").value = selected.join(",");
     }
+    if (form.id === "repository-bulk-form" && !repositorySelectionChanged()) { event.preventDefault(); return; }
     form.dataset.submitting = "true";
     saving = true;
     // 送信ボタンの値をブラウザーが取得してから無効にする。
@@ -138,23 +214,169 @@
       for (const button of form.querySelectorAll("button[type=submit]")) { button.disabled = false; if (button.dataset.originalLabel) button.textContent = button.dataset.originalLabel; }
     }
     selectionChanged();
+    repositorySelectionChanged();
   });
   const checks = [...document.querySelectorAll(".skill-select")];
   const selectAll = document.getElementById("select-all");
+  let policyPending = false;
+  let policyUncertain = false;
   function selectionChanged() {
     const count = checks.filter(input => input.checked).length;
     const label = document.getElementById("selection-count");
     if (label) label.textContent = t("{count}件選択", { count });
     const submit = document.getElementById("bulk-submit");
-    if (submit) submit.disabled = count === 0;
+    if (submit) submit.disabled = count === 0 || policyPending || policyUncertain;
     if (selectAll) { selectAll.checked = count > 0 && count === checks.length; selectAll.indeterminate = count > 0 && count < checks.length; }
   }
   document.addEventListener("skilvella:language", selectionChanged);
   checks.forEach(input => input.addEventListener("change", selectionChanged));
   selectAll?.addEventListener("change", () => { checks.forEach(input => { input.checked = selectAll.checked; }); selectionChanged(); });
-  document.body.addEventListener("htmx:responseError", () => {
+  const policyForms = [...document.querySelectorAll(".codex-policy-form")];
+  let policyNavigation = null;
+  document.addEventListener("click", event => {
+    if (!policyPending || event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (!link || link.hasAttribute("download") || (link.target && link.target !== "_self")) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    policyNavigation ??= () => { window.location.assign(link.href); };
+  }, true);
+  document.addEventListener("submit", event => {
+    if (!policyPending || !(event.target instanceof HTMLFormElement)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const form = event.target;
+    const button = event.submitter;
+    policyNavigation ??= () => { if (button?.isConnected && !button.disabled) form.requestSubmit(button); else form.requestSubmit(); };
+  }, true);
+  function policyStatus(form, key) {
+    form.dataset.policyStatus = key;
+    form.querySelector(".codex-policy-status").textContent = t(key);
+  }
+  policyForms.forEach(form => {
+    form.addEventListener("change", async event => {
+      if (!(event.target instanceof HTMLInputElement) || event.target.name !== "mode") return;
+      if (policyPending) return;
+      const selected = event.target;
+      const hadFocus = form.contains(document.activeElement);
+      const body = new URLSearchParams(new FormData(form));
+      const operation = crypto.randomUUID();
+      try {
+        sessionStorage.setItem(operationKey, JSON.stringify({ id: operation, complete: false }));
+      } catch {
+        policyUncertain = true;
+        form.querySelectorAll('input[name="mode"]').forEach(input => { input.checked = false; });
+        policyForms.forEach(item => { item.querySelector("fieldset").disabled = true; });
+        document.getElementById("policy-uncertain-warning").hidden = false;
+        selectionChanged();
+        policyStatus(form, "保存状態を確認できません。再読み込みしてください。");
+        return;
+      }
+      body.set("operation", operation);
+      policyPending = true;
+      policyForms.forEach(item => { item.querySelector("fieldset").disabled = true; });
+      selectionChanged();
+      form.setAttribute("aria-busy", "true");
+      policyStatus(form, "保存中…");
+      let uncertain = false;
+      let syncFailed = false;
+      try {
+        const response = await fetch(form.action, { method: "POST", headers: { Accept: "application/json" }, body, keepalive: true });
+        // 次の文書は完了後にもう一度取得する。古いGET応答との競合も防ぐ。
+        const recorded = JSON.parse(sessionStorage.getItem(operationKey));
+        if (!response.ok) throw new Error("Policy update failed");
+        const sync = await response.json();
+        if (typeof sync.enabled !== "boolean" || typeof sync.last_error !== "string") throw new Error("Invalid sync status");
+        if (!sync.last_error && recorded?.id === operation) sessionStorage.setItem(operationKey, JSON.stringify({ id: operation, complete: true }));
+        syncFailed = !!sync.last_error;
+        const warning = document.getElementById("codex-sync-warning");
+        if (warning) {
+          warning.querySelector("#codex-sync-error").textContent = sync.last_error;
+          warning.hidden = !sync.last_error;
+        }
+        policyForms.forEach(item => {
+          if (item !== form && item.dataset.policyStatus && item.dataset.policyUncertain !== "true") {
+            delete item.dataset.policyStatus;
+            item.querySelector(".codex-policy-status").textContent = "";
+          }
+        });
+        policyStatus(form, sync.last_error ? "保存しましたが、Codexへの同期に失敗しました。設定画面を確認してください。" : !sync.enabled ? "保存しました。Codex連携は無効です。" : "保存しました。");
+      } catch {
+        uncertain = true;
+        policyUncertain = true;
+        form.dataset.policyUncertain = "true";
+        form.querySelectorAll('input[name="mode"]').forEach(input => { input.checked = false; });
+        policyStatus(form, "保存状態を確認できません。再読み込みしてください。");
+        document.getElementById("policy-uncertain-warning").hidden = false;
+      } finally {
+        const next = policyNavigation;
+        policyNavigation = null;
+        policyPending = false;
+        policyForms.forEach(item => { item.querySelector("fieldset").disabled = policyUncertain; });
+        selectionChanged();
+        form.removeAttribute("aria-busy");
+        if (!uncertain && hadFocus && (document.activeElement === document.body || document.activeElement === document.documentElement)) selected.focus({ preventScroll: true });
+        if (!uncertain && !syncFailed && next) next();
+      }
+    });
+  });
+  document.addEventListener("skilvella:language", () => {
+    policyForms.forEach(form => { if (form.dataset.policyStatus) policyStatus(form, form.dataset.policyStatus); });
+  });
+  const repositoryForm = document.getElementById("repository-bulk-form");
+  function repositorySelectionChanged() {
+    if (!repositoryForm) return false;
+    const selected = [...repositoryForm.querySelectorAll(".repository-check:checked:not(:disabled)")];
+    const count = selected.reduce((sum, input) => sum + Number(input.dataset.count), 0);
+    const label = document.getElementById("repository-selection-count");
+    label.textContent = t("{groups}取得元選択 · 対象{count}件", { groups: selected.length, count });
+    label.hidden = false;
+    const valid = selected.length > 0 && [...repositoryForm.querySelectorAll("select")].some(select => select.value !== "");
+    document.getElementById("repository-bulk-submit").disabled = !valid || repositoryForm.dataset.submitting === "true";
+    return valid;
+  }
+  repositoryForm?.addEventListener("change", repositorySelectionChanged);
+  document.addEventListener("skilvella:language", repositorySelectionChanged);
+  repositorySelectionChanged();
+  document.querySelectorAll("button[data-preview]").forEach(button => {
+    const form = button.form;
     const preview = document.getElementById("preview");
-    if (preview) preview.textContent = t("プレビューを表示できませんでした。本文は編集欄に保持されています。");
+    if (!form || !preview) return;
+    const indicator = form.querySelector("[data-preview-status]");
+    let running = false;
+    let queued = false;
+    async function updatePreview() {
+      if (running) { queued = true; return; }
+      running = true;
+      preview.setAttribute("aria-busy", "true");
+      if (indicator) indicator.hidden = false;
+      try {
+        do {
+          queued = false;
+          try {
+            const response = await fetch(button.formAction, {
+              method: "POST",
+              mode: "same-origin",
+              credentials: "same-origin",
+              body: new URLSearchParams(new FormData(form))
+            });
+            if (!response.ok) throw new Error("Preview request failed");
+            preview.innerHTML = await response.text();
+          } catch {
+            preview.textContent = t("プレビューを表示できませんでした。本文は編集欄に保持されています。");
+          }
+        } while (queued && button.isConnected);
+      } finally {
+        running = false;
+        preview.removeAttribute("aria-busy");
+        if (indicator) indicator.hidden = true;
+      }
+    }
+    // クリックは必須入力の検証をせずプレビューし、通常のフォーム送信は残す。
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      void updatePreview();
+    });
   });
 
   const updates = document.querySelector("[data-updates]");

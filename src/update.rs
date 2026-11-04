@@ -227,15 +227,37 @@ fn checksum(list: &str, asset: &str) -> anyhow::Result<String> {
 }
 
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hash_hex(&Sha256::digest(bytes))
+}
+
+fn hash_hex(hash: &[u8]) -> String {
+    hash.iter()
+        .flat_map(|byte| {
+            let hex = b"0123456789abcdef";
+            [
+                hex[(byte >> 4) as usize] as char,
+                hex[(byte & 15) as usize] as char,
+            ]
+        })
+        .collect()
 }
 
 fn file_hash(path: &Path) -> anyhow::Result<String> {
     plain_path(path)?;
     let mut file = File::open(path)?;
     let mut hash = Sha256::new();
-    std::io::copy(&mut file, &mut hash)?;
-    Ok(format!("{:x}", hash.finalize()))
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = match file.read(&mut buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    Ok(hash_hex(&hash.finalize()))
 }
 
 fn plain_path(path: &Path) -> anyhow::Result<()> {
@@ -301,7 +323,7 @@ fn extract(archive: &[u8], zip: bool, expected_version: &str) -> anyhow::Result<
         let mut entries = zip::ZipArchive::new(Cursor::new(archive))?;
         for i in 0..entries.len() {
             let entry = entries.by_index(i)?;
-            let path = entry.name().to_owned();
+            let path = entry.name()?.into_owned();
             ensure!(
                 allowed.contains(&path.as_str()) && seen.insert(path.clone()),
                 "Unexpected or duplicate release archive entry"
@@ -1137,6 +1159,10 @@ mod tests {
 
     #[test]
     fn stable_versions_and_checksums_are_strict() {
+        assert_eq!(
+            digest(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
         assert!(version("v1.10.0").unwrap() > version("1.9.9").unwrap());
         for invalid in ["v1.2.3-beta", "v1.2", "v01.2.3", "../1.2.3", "v1.2.3/"] {
             assert!(version(invalid).is_err());

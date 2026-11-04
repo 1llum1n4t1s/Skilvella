@@ -13,16 +13,19 @@ struct Options {
 }
 fn options() -> anyhow::Result<Option<Options>> {
     let mut options = Options {
-        data_dir: default_data_dir()?,
+        data_dir: PathBuf::new(),
         port: 7465,
         watch: true,
         tray: cfg!(any(windows, target_os = "macos")),
     };
+    let mut data_dir = None;
     let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--data-dir") => {
-                options.data_dir = args.next().context("--data-dir needs a path")?.into()
+                data_dir = Some(PathBuf::from(
+                    args.next().context("--data-dir needs a path")?,
+                ))
             }
             Some("--port") => {
                 options.port = args
@@ -38,13 +41,20 @@ fn options() -> anyhow::Result<Option<Options>> {
                 println!(
                     "Skilvella {}\n\nUsage: skilvella [--data-dir PATH] [--port PORT] [--no-watch] [--no-tray]\n\nBrowser: http://127.0.0.1:7465/\nMCP:     http://127.0.0.1:7465/mcp\n\nWindows/macOS: left-click the tray/menu bar icon to open the browser.\nRight-click for Open manager, Check for updates, Restart service, and Quit.\nUse --no-tray for headless operation.\nThe server always binds to IPv4 loopback. Default data directory: {}",
                     env!("CARGO_PKG_VERSION"),
-                    options.data_dir.display()
+                    data_dir
+                        .or_else(|| default_data_dir().ok())
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "unavailable; use --data-dir PATH".into())
                 );
                 return Ok(None);
             }
             _ => bail!("Unknown option: {} (see --help)", arg.to_string_lossy()),
         }
     }
+    options.data_dir = match data_dir {
+        Some(path) => path,
+        None => default_data_dir()?,
+    };
     Ok(Some(options))
 }
 fn default_data_dir() -> anyhow::Result<PathBuf> {
@@ -64,13 +74,12 @@ fn default_data_dir() -> anyhow::Result<PathBuf> {
     }
     #[cfg(all(not(windows), not(target_os = "macos")))]
     {
-        Ok(env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or(
-                PathBuf::from(env::var_os("HOME").context("HOME missing; use --data-dir")?)
-                    .join(".local/share"),
-            )
-            .join("skilvella"))
+        let root = match env::var_os("XDG_DATA_HOME") {
+            Some(path) => PathBuf::from(path),
+            None => PathBuf::from(env::var_os("HOME").context("HOME missing; use --data-dir")?)
+                .join(".local/share"),
+        };
+        Ok(root.join("skilvella"))
     }
 }
 #[tokio::main(worker_threads = 2)]

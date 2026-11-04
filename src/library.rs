@@ -6,7 +6,7 @@ mod codex_index {
     use rusqlite::{Connection, OptionalExtension, params};
     use serde::{Deserialize, Serialize};
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, HashSet},
         fs,
         io::Write,
         path::{Path, PathBuf},
@@ -37,6 +37,9 @@ mod codex_index {
         relative_path: String,
     }
 
+    // 個別の入口と検索の入口で、直接接続・集約接続の案内を共通化する。
+    const MCP_ACCESS: &str = "MCP tool access: use the connected Skilvella tools directly when available, including their advertised namespace. If Toolport is available, use toolport_search_tools to discover each required capability (query: load_skill, read_skill_file, or search_skills), then invoke the exact returned tool name with toolport_call_tool, passing the tool parameters inside arguments. Do not guess a server prefix or treat a tool missing from the initial tool list as a disconnected MCP. If the Toolport helpers are deferred, discover them in the available tool inventory first. Only report MCP as unavailable after tool discovery or an actual MCP request fails; include that failure. Never replace MCP retrieval with local skill files.\n";
+
     fn setting(c: &Connection, key: &str) -> Result<Option<String>> {
         Ok(
             c.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| {
@@ -66,14 +69,160 @@ mod codex_index {
         }
     }
     impl Library {
+        pub(super) fn owned_codex_markers(&self) -> (HashSet<PathBuf>, bool, HashSet<PathBuf>) {
+            let Some(parent) = self.db.parent() else {
+                return (HashSet::new(), true, HashSet::new());
+            };
+            let state = parent.join("codex-index");
+            let read_record = |name: &str| -> Result<String> {
+                let path = state.join(name);
+                reject_links(&path)?;
+                read_text(&path, CONTENT_LIMIT)
+            };
+            let mut regions = HashSet::new();
+            let mut checked_markers = |manifest: &Manifest| -> Result<(HashSet<PathBuf>, bool)> {
+                ensure!(
+                    manifest.owner == self.db,
+                    "Foreign Codex ownership manifest"
+                );
+                if manifest.root.as_os_str().is_empty() {
+                    return Ok((HashSet::new(), false));
+                }
+                ensure!(
+                    manifest.root.is_absolute()
+                        && manifest.root.ends_with(".agents/skills/skilvella"),
+                    "Invalid Codex ownership manifest root"
+                );
+                reject_links(&manifest.root)?;
+                let root = super::migration::normalize_path(&manifest.root)?;
+                regions.insert(root.clone());
+                let mut markers = HashSet::new();
+                let mut invalid = false;
+                for relative in manifest
+                    .files
+                    .keys()
+                    .filter(|p| p.ends_with("/SKILL.md") || *p == "SKILL.md")
+                {
+                    if !relative.split('/').all(|part| {
+                        !part.is_empty()
+                            && part != "."
+                            && part != ".."
+                            && !part.ends_with(['.', ' '])
+                            && !part.contains(['\\', ':', '\0'])
+                    }) {
+                        invalid = true;
+                        continue;
+                    }
+                    let path = root.join(relative);
+                    // リンクを辿らず既知のパスを保持し、他の正常な入口も失効させない。
+                    markers.insert(path.clone());
+                    if reject_links(&path).is_ok()
+                        && let Ok(canonical) = super::migration::normalize_path(&path)
+                    {
+                        markers.insert(canonical);
+                    }
+                }
+                Ok((markers, invalid))
+            };
+            let valid_location = |path: &Path, manifest: &Manifest, category: &str| {
+                if manifest.root.as_os_str().is_empty() {
+                    return path.as_os_str().is_empty();
+                }
+                manifest
+                    .root
+                    .parent()
+                    .and_then(Path::parent)
+                    .map(|p| p.join(category))
+                    .as_deref()
+                    == path.parent()
+                    && path
+                        .file_name()
+                        .and_then(|p| p.to_str())
+                        .is_some_and(|p| uuid::Uuid::parse_str(p).is_ok())
+                    && reject_links(path).is_ok()
+            };
+            let exists = |path: &Path| -> Result<bool> {
+                if path.as_os_str().is_empty() {
+                    Ok(false)
+                } else {
+                    Ok(path.try_exists()?)
+                }
+            };
+            let mut markers = HashSet::new();
+            let mut uncertain = false;
+            let mut previous_retired = false;
+            match read_record("pending.json")
+                .and_then(|text| Ok(serde_json::from_str::<Pending>(&text)?))
+            {
+                Ok(pending) => {
+                    let mut inspect = || -> Result<(HashSet<PathBuf>, bool, bool)> {
+                        let (previous, previous_invalid) = checked_markers(&pending.previous)?;
+                        let (next, next_invalid) = checked_markers(&pending.next)?;
+                        ensure!(
+                            valid_location(&pending.stage, &pending.next, "skilvella-staging")
+                                && valid_location(
+                                    &pending.retired,
+                                    &pending.previous,
+                                    "skilvella-retired"
+                                ),
+                            "Invalid Codex publication paths"
+                        );
+                        let retired = exists(&pending.retired)?;
+                        let mut owned = if retired { HashSet::new() } else { previous };
+                        if !exists(&pending.stage)? && pending.next.root.is_dir() {
+                            owned.extend(next);
+                        }
+                        Ok((owned, retired, previous_invalid || next_invalid))
+                    };
+                    match inspect() {
+                        Ok((owned, retired, invalid)) => {
+                            markers.extend(owned);
+                            previous_retired = retired;
+                            uncertain |= invalid;
+                        }
+                        Err(_) => uncertain = true,
+                    }
+                }
+                Err(error) => {
+                    uncertain |= !error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+                }
+            }
+            // 旧出力が退避済みなら、旧manifestの場所にできた別ファイルを隠さない。
+            if !previous_retired {
+                match read_record("manifest.json")
+                    .and_then(|text| Ok(serde_json::from_str::<Manifest>(&text)?))
+                    .and_then(|manifest| checked_markers(&manifest))
+                {
+                    Ok((owned, invalid)) => {
+                        markers.extend(owned);
+                        uncertain |= invalid;
+                    }
+                    Err(error) => {
+                        uncertain |= !error
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+                    }
+                }
+            }
+            if uncertain
+                && let Ok(c) = self.connection()
+                && let Ok(Some(root)) = target(&c)
+            {
+                // native親は記録時に正規化済み。子を再解決してリンク先を巻き込まない。
+                regions.insert(root);
+            }
+            (markers, uncertain, regions)
+        }
+
         pub(super) fn codex_policy_on(c: &Connection, id: &str) -> Result<CodexSkillPolicy> {
             Ok(setting(c, &format!("codex_policy:{id}"))?
                 .map(|s| serde_json::from_str(&s))
                 .transpose()?
                 .unwrap_or_default())
         }
-        pub fn codex_policy(&self, id: &str) -> Result<CodexSkillPolicy> {
-            let c = self.connection()?;
+        fn ensure_skill_on(c: &Connection, id: &str) -> Result<()> {
             ensure!(
                 c.query_row(
                     "SELECT EXISTS(SELECT 1 FROM skills WHERE id=?1)",
@@ -82,7 +231,28 @@ mod codex_index {
                 )?,
                 "Skill not found"
             );
+            Ok(())
+        }
+        pub fn codex_policy(&self, id: &str) -> Result<CodexSkillPolicy> {
+            let c = self.connection()?;
+            Self::ensure_skill_on(&c, id)?;
             Self::codex_policy_on(&c, id)
+        }
+        pub(crate) fn codex_policies(
+            &self,
+            ids: &[String],
+        ) -> Result<BTreeMap<String, Option<CodexSkillPolicy>>> {
+            let c = self.connection()?;
+            ids.iter()
+                .map(|id| {
+                    let value = setting(&c, &format!("codex_policy:{id}"))?;
+                    let policy = match value {
+                        None => Some(CodexSkillPolicy::default()),
+                        Some(value) => serde_json::from_str(&value).ok(),
+                    };
+                    Ok((id.clone(), policy))
+                })
+                .collect()
         }
         pub fn set_codex_policy(&self, id: &str, automatic: bool, command: bool) -> Result<()> {
             ensure!(
@@ -91,8 +261,8 @@ mod codex_index {
             );
             let _guard = self.write_guard()?;
             self.ensure_no_pending_migration()?;
-            self.codex_policy(id)?;
             let c = self.connection()?;
+            Self::ensure_skill_on(&c, id)?;
             put(
                 &c,
                 &format!("codex_policy:{id}"),
@@ -191,12 +361,15 @@ mod codex_index {
                         format!("Codex source unavailable: {}", source.display())
                     })?;
                 }
-                let finder = "---\nname: skilvella-search\ndescription: Search the published Skilvella skill library on demand.\n---\nUse the Skilvella MCP search_skills tool to find relevant skills, then load_skill with the returned id. Fetch references only with read_skill_file after loading. If MCP is unavailable, report that it must be connected; do not substitute local files.\n";
-                desired.insert("skilvella-search/SKILL.md".into(), finder.into());
+                let finder = format!(
+                    "---\nname: skilvella-search\ndescription: Search the published Skilvella skill library on demand.\n---\nUse the Skilvella MCP search_skills tool to find relevant skills, then load_skill with the returned id. Fetch references only with read_skill_file after loading.\n\n{MCP_ACCESS}"
+                );
+                desired.insert("skilvella-search/SKILL.md".into(), finder);
                 desired.insert(
                     "skilvella-search/agents/openai.yaml".into(),
                     "policy:\n  allow_implicit_invocation: false\n".into(),
                 );
+                let mut duplicate_names = None;
                 let mut skills = c.prepare("SELECT k.id FROM skills k JOIN sources s ON s.alias=k.source WHERE s.active=1 AND k.published=1 AND k.missing=0 AND k.error IS NULL ORDER BY k.id")?;
                 for id in skills.query_map([], |r| r.get::<_, String>(0))? {
                     let id = id?;
@@ -222,8 +395,18 @@ mod codex_index {
                     } else {
                         format!("skill-{suffix}")
                     };
-                    let duplicates: i64 = c.query_row("SELECT count(*) FROM skills k JOIN sources s ON s.alias=k.source WHERE s.active=1 AND k.published=1 AND k.missing=0 AND k.error IS NULL AND k.name=?1", [original], |r| r.get(0))?;
-                    if name == "skilvella-search" || duplicates > 1 {
+                    let duplicates = if let Some(names) = &duplicate_names {
+                        names
+                    } else {
+                        let mut statement = c.prepare("SELECT k.name FROM skills k JOIN sources s ON s.alias=k.source WHERE s.active=1 AND k.published=1 AND k.missing=0 AND k.error IS NULL GROUP BY k.name HAVING count(*)>1")?;
+                        duplicate_names.insert(
+                            statement
+                                .query_map([], |r| r.get::<_, String>(0))?
+                                .collect::<rusqlite::Result<HashSet<_>>>()?,
+                        )
+                    };
+                    let duplicates = duplicates.contains(original);
+                    if name == "skilvella-search" || duplicates {
                         name.truncate(55);
                         name = format!("{}-{suffix}", name.trim_end_matches('-'));
                     }
@@ -239,7 +422,7 @@ mod codex_index {
                     };
                     let description: String = description.chars().take(1024).collect();
                     let text = format!(
-                        "---\nname: {}\ndescription: {}\n---\nUse Skilvella MCP load_skill with the fixed id {} before following this skill. Read references only through read_skill_file with this id. If MCP is unavailable, report that it must be connected; do not substitute local files.\n",
+                        "---\nname: {}\ndescription: {}\n---\nUse Skilvella MCP load_skill with the fixed id {} before following this skill. Read references only through read_skill_file with this id.\n\n{MCP_ACCESS}",
                         serde_json::to_string(&name)?,
                         serde_json::to_string(&description)?,
                         serde_json::to_string(&id)?
@@ -249,7 +432,7 @@ mod codex_index {
                         format!("{name}/agents/openai.yaml"),
                         format!(
                             "interface:\n  display_name: {}\npolicy:\n  allow_implicit_invocation: {}\n",
-                            serde_json::to_string(&if duplicates > 1 {
+                            serde_json::to_string(&if duplicates {
                                 format!("{} ({}/{}, {})", original, entry.source, entry.relative_path, suffix)
                             } else { original.clone() })?,
                             policy.automatic
@@ -899,7 +1082,7 @@ mod migration {
         path_is_within(left, right) || path_is_within(right, left)
     }
 
-    fn path_is_within(path: &Path, root: &Path) -> bool {
+    pub(super) fn path_is_within(path: &Path, root: &Path) -> bool {
         let mut path = path.components();
         root.components().all(|part| {
             path.next().is_some_and(|candidate| {
@@ -1157,6 +1340,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use saphyr::LoadableYamlNode;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
@@ -1321,16 +1505,75 @@ impl Library {
                 .context("Invalid database location")?
                 .to_string_lossy()
         ));
-        let candidate = candidates
-            .into_iter()
-            .find(|p| p.is_dir() && reject_links(p).is_ok() && fs::read_dir(p).is_ok());
+        let (owned_codex, mut inconclusive, _) = self.owned_codex_markers();
+        let excluded = owned_codex.iter().map(|p| path_key(p)).collect();
+        let mut candidate = None;
+        for p in candidates {
+            if inconclusive {
+                break;
+            }
+            if !p.is_dir() || reject_links(&p).is_err() || fs::read_dir(&p).is_err() {
+                continue;
+            }
+            let Ok(root) = p.canonicalize() else {
+                continue;
+            };
+            let mut present = false;
+            for marker in owned_codex
+                .iter()
+                .filter(|owned| migration::path_is_within(owned, &root))
+            {
+                if reject_links(marker).is_err() {
+                    inconclusive = true;
+                    break;
+                }
+                match fs::symlink_metadata(marker) {
+                    Ok(meta) => present |= meta.is_file(),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => {
+                        inconclusive = true;
+                        break;
+                    }
+                }
+            }
+            if inconclusive {
+                break;
+            }
+            if !present {
+                candidate = Some(p);
+                break;
+            }
+            // 生成で作られた探索先は、入口以外に原本がある場合だけ候補にする。
+            let mut found = Vec::new();
+            let mut blocked = Vec::new();
+            let result = discover(
+                &root,
+                &mut found,
+                &mut blocked,
+                &excluded,
+                &Default::default(),
+                true,
+            );
+            if !found.is_empty() {
+                candidate = Some(p);
+                break;
+            }
+            if result.is_err() {
+                inconclusive = true;
+                break;
+            }
+        }
         let has_candidate = candidate.is_some();
         let detected = candidate.unwrap_or(fallback);
         let mut c = self.connection()?;
         let tx = c.transaction()?;
         let mut settings = Self::directory_on(&tx)?;
         let persisted_auto = settings.mode == "auto";
-        settings.detected_path = detected.to_string_lossy().into_owned();
+        settings.detected_path = if inconclusive {
+            String::new()
+        } else {
+            detected.to_string_lossy().into_owned()
+        };
         if settings.mode.is_empty() {
             // 既存登録があるライブラリへ、推測したルートを追加しない。
             if let Some(source) = Self::sources_on(&tx)?.into_iter().next() {
@@ -1346,6 +1589,12 @@ impl Library {
             } else {
                 settings.mode = "auto".into();
             }
+        }
+        if inconclusive && settings.mode == "auto" {
+            Self::save_directory(&tx, &settings)?;
+            self.scan_on(&tx)?;
+            tx.commit()?;
+            return Ok(());
         }
         // 保存済みルートが一時的に不在でも、管理画面から設定を変更できるよう起動する。
         // 索引と公開判定には通常の走査失敗・消失処理を使い、履歴は保持する。
@@ -1502,7 +1751,7 @@ impl Library {
         Self::sources_on(&c)
     }
     fn sources_on(c: &Connection) -> Result<Vec<Source>> {
-        let mut statement = c.prepare("SELECT s.alias,s.path,(SELECT count(*) FROM skills k WHERE k.source=s.alias AND k.missing=0),(SELECT count(*) FROM skills k WHERE k.source=s.alias AND (k.error IS NOT NULL OR k.missing=1)) FROM sources s WHERE active=1 ORDER BY s.alias")?;
+        let mut statement = c.prepare("SELECT s.alias,s.path,coalesce(k.skill_count,0),coalesce(k.error_count,0) FROM sources s LEFT JOIN (SELECT source,sum(CASE WHEN missing=0 THEN 1 ELSE 0 END) AS skill_count,sum(CASE WHEN error IS NOT NULL OR missing=1 THEN 1 ELSE 0 END) AS error_count FROM skills GROUP BY source) k ON k.source=s.alias WHERE s.active=1 ORDER BY s.alias")?;
         let mut sources = statement
             .query_map([], |r| {
                 Ok(Source {
@@ -1658,29 +1907,67 @@ impl Library {
     fn scan_on(&self, tx: &Connection) -> Result<ScanReport> {
         self.refresh_repository_cache(tx)?;
         let sources = Self::sources_on(tx)?;
+        let (owned_codex, uncertain, regions) = self.owned_codex_markers();
+        let excluded = owned_codex.iter().map(|p| path_key(p)).collect();
+        let regions = if uncertain {
+            regions
+        } else {
+            Default::default()
+        };
         let mut report = ScanReport::default();
         for source in sources {
             let root = PathBuf::from(&source.path);
             let mut found = Vec::new();
             let mut blocked = Vec::new();
-            let result =
-                reject_links(&root).and_then(|_| discover(&root, &mut found, &mut blocked));
+            let result = reject_links(&root).and_then(|_| {
+                discover(&root, &mut found, &mut blocked, &excluded, &regions, false)
+            });
+            for region in &regions {
+                if migration::overlaps(&root, region) {
+                    let path = if migration::path_is_within(region, &root) {
+                        region
+                    } else {
+                        &root
+                    };
+                    if !blocked.iter().any(|p| path_key(p) == path_key(path)) {
+                        blocked.push(path.clone());
+                    }
+                }
+            }
+            // 部分読取失敗でも、既知の生成入口の旧索引を原本として残さない。
+            for marker in &owned_codex {
+                if let Ok(relative) = relative_key(&root, marker) {
+                    tx.execute(
+                        &format!("UPDATE skills SET missing=1 WHERE source=?1 AND relative_path=?2 COLLATE {}", path_collation()),
+                        params![source.alias,relative],
+                    )?;
+                }
+            }
             // 部分的な読取失敗では未走査の行を消失扱いにせず、読めた兄弟を反映する。
-            if result.is_ok() || !root.is_dir() {
+            if (result.is_ok() && blocked.is_empty()) || !root.is_dir() {
                 tx.execute(
                     "UPDATE skills SET missing=1 WHERE source=?1",
                     [&source.alias],
                 )?;
             }
-            if result.is_err() {
+            if result.is_err() || !blocked.is_empty() {
                 if blocked.is_empty() {
                     blocked.push(root.clone());
                 }
                 report.errors += blocked.len();
                 for path in blocked {
+                    let ownership_blocked = regions
+                        .iter()
+                        .any(|region| migration::overlaps(&path, region));
                     let key = relative_key(&root, &path).unwrap_or_default();
                     let prefix = format!("{key}/");
-                    tx.execute("UPDATE skills SET error='Scan unavailable; check source permissions and rescan' WHERE source=?1 AND (?2='' OR relative_path=?2 OR substr(relative_path,1,length(?3))=?3)", params![source.alias,key,prefix])?;
+                    let message = if ownership_blocked {
+                        "Codex index ownership is unverified; check index records and rescan"
+                    } else {
+                        "Scan unavailable; check source permissions and rescan"
+                    };
+                    let collation = path_collation();
+                    tx.execute(&format!("UPDATE skills SET error=?4 WHERE source=?1 AND (?2='' OR relative_path=?2 COLLATE {collation} OR substr(relative_path,1,length(?3))=?3 COLLATE {collation})"), params![source.alias,key,prefix,message])?;
                 }
             }
             for path in found {
@@ -1813,11 +2100,24 @@ impl Library {
 
     pub fn repository_groups(&self) -> Result<Vec<RepositoryGroup>> {
         let c = self.connection()?;
+        Self::repository_groups_on(&c)
+    }
+
+    fn repository_for<'a>(relative: &str, repositories: impl Iterator<Item = &'a str>) -> &'a str {
+        repositories
+            .filter(|root| {
+                !root.is_empty() && (*root == "." || relative.starts_with(&format!("{root}/")))
+            })
+            .max_by_key(|root| *root != ".")
+            .unwrap_or_default()
+    }
+
+    fn repository_groups_on(c: &Connection) -> Result<Vec<RepositoryGroup>> {
         let mut groups: std::collections::BTreeMap<(String, String), RepositoryGroup> =
             Default::default();
         let mut roots = std::collections::BTreeMap::new();
-        for source in Self::sources_on(&c)? {
-            match Self::repository_roots(&c, &source) {
+        for source in Self::sources_on(c)? {
+            match Self::repository_roots(c, &source) {
                 Ok(repositories) => {
                     for repository in &repositories {
                         groups.insert(
@@ -1827,6 +2127,7 @@ impl Library {
                                 repository: repository.clone(),
                                 count: 0,
                                 missing: 0,
+                                available: 0,
                                 unknown: false,
                             },
                         );
@@ -1841,6 +2142,7 @@ impl Library {
                             repository: String::new(),
                             count: 0,
                             missing: 0,
+                            available: 0,
                             unknown: true,
                         },
                     );
@@ -1848,25 +2150,26 @@ impl Library {
                 }
             }
         }
-        let mut statement = c.prepare("SELECT k.source,k.relative_path,k.missing FROM skills k JOIN sources s ON s.alias=k.source WHERE s.active=1")?;
+        let mut statement = c.prepare("SELECT k.source,k.relative_path,k.missing,k.error IS NULL FROM skills k JOIN sources s ON s.alias=k.source WHERE s.active=1")?;
         for row in statement.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, bool>(2)?,
+                row.get::<_, bool>(3)?,
             ))
         })? {
-            let (source, relative, missing) = row?;
-            let repository = roots
-                .get(&source)
-                .and_then(|roots| roots.as_ref())
-                .and_then(|roots| {
-                    roots.iter().find(|root| {
-                        root.as_str() == "." || relative.starts_with(&format!("{root}/"))
-                    })
-                })
-                .cloned()
-                .unwrap_or_default();
+            let (source, relative, missing, valid) = row?;
+            let repository = Self::repository_for(
+                &relative,
+                roots
+                    .get(&source)
+                    .and_then(|roots| roots.as_ref())
+                    .into_iter()
+                    .flatten()
+                    .map(String::as_str),
+            )
+            .to_owned();
             let group = groups
                 .entry((source.clone(), repository.clone()))
                 .or_insert(RepositoryGroup {
@@ -1874,10 +2177,12 @@ impl Library {
                     repository,
                     count: 0,
                     missing: 0,
+                    available: 0,
                     unknown: false,
                 });
             group.count += 1;
             group.missing += usize::from(missing);
+            group.available += usize::from(!missing && valid);
         }
         Ok(groups.into_values().collect())
     }
@@ -1888,12 +2193,9 @@ impl Library {
             .into_iter()
             .find(|source| source.alias == skill.source)
             .context("Source not found")?;
-        let repository = Self::repository_roots(&c, &source)?
-            .into_iter()
-            .find(|repository| {
-                repository == "." || skill.relative_path.starts_with(&format!("{repository}/"))
-            })
-            .unwrap_or_default();
+        let roots = Self::repository_roots(&c, &source)?;
+        let repository =
+            Self::repository_for(&skill.relative_path, roots.iter().map(String::as_str)).to_owned();
         Ok(RepositorySelection {
             repository_source: skill.source.clone(),
             repository,
@@ -1905,11 +2207,20 @@ impl Library {
         query: SearchQuery,
         selection: RepositorySelection,
     ) -> Result<SearchResults> {
-        self.search_inner(query, false, Some(selection))
+        self.search_inner(query, false, Some(selection), None)
+    }
+
+    pub(crate) fn search_repository_with_groups(
+        &self,
+        query: SearchQuery,
+        selection: RepositorySelection,
+        groups: &[RepositoryGroup],
+    ) -> Result<SearchResults> {
+        self.search_inner(query, false, Some(selection), Some(groups))
     }
 
     pub fn search(&self, query: SearchQuery, published_only: bool) -> Result<SearchResults> {
-        self.search_inner(query, published_only, None)
+        self.search_inner(query, published_only, None, None)
     }
 
     fn search_inner(
@@ -1917,11 +2228,16 @@ impl Library {
         query: SearchQuery,
         published_only: bool,
         selection: Option<RepositorySelection>,
+        shared_groups: Option<&[RepositoryGroup]>,
     ) -> Result<SearchResults> {
-        let groups = if selection.is_some() {
-            self.repository_groups()?
+        let owned_groups;
+        let groups: &[RepositoryGroup] = if let Some(groups) = shared_groups {
+            groups
+        } else if selection.is_some() {
+            owned_groups = self.repository_groups()?;
+            &owned_groups
         } else {
-            Vec::new()
+            &[]
         };
         if let Some(selection) = &selection {
             ensure!(
@@ -1979,62 +2295,71 @@ impl Library {
         )? {
             let (s, content) = row?;
             if let Some(selection) = &selection {
-                let repository = groups
-                    .iter()
-                    .filter(|group| {
-                        group.source == s.source
-                            && !group.repository.is_empty()
-                            && (group.repository == "."
-                                || s.relative_path
-                                    .starts_with(&format!("{}/", group.repository)))
-                    })
-                    .max_by_key(|group| group.repository != ".")
-                    .map(|group| group.repository.as_str())
-                    .unwrap_or_default();
+                let repository = Self::repository_for(
+                    &s.relative_path,
+                    groups
+                        .iter()
+                        .filter(|group| group.source == s.source)
+                        .map(|group| group.repository.as_str()),
+                );
                 if s.source != selection.repository_source || repository != selection.repository {
                     continue;
                 }
             }
-            let haystack = format!(
-                "{} {} {} {} {}",
-                s.name,
-                s.description,
-                s.tags.join(" "),
-                s.category,
-                content
-            )
-            .to_lowercase();
-            // Literal contains is the Unicode-safe fallback for short terms and verifies FTS candidates.
-            if !words.iter().all(|w| haystack.contains(w)) {
-                continue;
-            }
-            let name = s.name.to_lowercase();
-            let tags = s.tags.join(" ").to_lowercase();
-            let score = words
-                .iter()
-                .map(|w| {
-                    if name.contains(w) {
-                        10
-                    } else if tags.contains(w) {
-                        5
-                    } else {
-                        1
-                    }
-                })
-                .sum::<usize>();
+            let score = if words.is_empty() {
+                0
+            } else {
+                let haystack = format!(
+                    "{} {} {} {} {}",
+                    s.name,
+                    s.description,
+                    s.tags.join(" "),
+                    s.category,
+                    content
+                )
+                .to_lowercase();
+                // Literal contains is the Unicode-safe fallback for short terms and verifies FTS candidates.
+                if !words.iter().all(|w| haystack.contains(w)) {
+                    continue;
+                }
+                let name = s.name.to_lowercase();
+                let tags = s.tags.join(" ").to_lowercase();
+                words
+                    .iter()
+                    .map(|w| {
+                        if name.contains(w) {
+                            10
+                        } else if tags.contains(w) {
+                            5
+                        } else {
+                            1
+                        }
+                    })
+                    .sum::<usize>()
+            };
             matches.push((score, s));
         }
-        matches.sort_by(|a, b| {
-            b.0.cmp(&a.0)
-                .then_with(|| a.1.name.cmp(&b.1.name))
-                .then_with(|| a.1.id.cmp(&b.1.id))
-        });
         let total = matches.len();
         let limit = if query.limit == 0 {
             50
         } else {
             query.limit.min(100)
         };
+        let compare = |a: &(usize, SkillSummary), b: &(usize, SkillSummary)| {
+            b.0.cmp(&a.0)
+                .then_with(|| a.1.name.cmp(&b.1.name))
+                .then_with(|| a.1.id.cmp(&b.1.id))
+        };
+        if query.offset >= total {
+            matches.clear();
+        } else {
+            let keep = query.offset.saturating_add(limit).min(total);
+            if keep < total {
+                matches.select_nth_unstable_by(keep, compare);
+                matches.truncate(keep);
+            }
+            matches.sort_by(compare);
+        }
         let skills = matches
             .into_iter()
             .skip(query.offset)
@@ -2259,32 +2584,130 @@ impl Library {
         let additions = normalize_tags(add_tags)?;
         let c = self.connection()?;
         let tx = c.unchecked_transaction()?;
+        self.bulk_settings_on(&tx, ids, published, &additions, codex.as_ref())?;
+        rebuild_fts(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn bulk_settings_on(
+        &self,
+        c: &Connection,
+        ids: &[String],
+        published: Option<bool>,
+        additions: &[String],
+        codex: Option<&CodexSkillPolicy>,
+    ) -> Result<()> {
         for id in ids {
-            let (_, path) = self.locate(&tx, id)?;
+            let (_, path) = self.locate(c, id)?;
             if published == Some(true) {
-                refresh_valid(&tx, id, &path)?;
+                refresh_valid(c, id, &path)?;
             }
             let (raw, old): (String, bool) =
-                tx.query_row("SELECT tags,published FROM skills WHERE id=?1", [id], |r| {
+                c.query_row("SELECT tags,published FROM skills WHERE id=?1", [id], |r| {
                     Ok((r.get(0)?, r.get(1)?))
                 })?;
             let mut tags: Vec<String> = serde_json::from_str(&raw)?;
-            tags.extend(additions.clone());
+            tags.extend(additions.iter().cloned());
             let tags = normalize_tags(&tags)?;
-            tx.execute(
+            c.execute(
                 "UPDATE skills SET tags=?2,published=?3 WHERE id=?1",
                 params![id, serde_json::to_string(&tags)?, published.unwrap_or(old)],
             )?;
-            if let Some(policy) = &codex {
-                tx.execute(
+            if let Some(policy) = codex {
+                c.execute(
                     "INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     params![format!("codex_policy:{id}"), serde_json::to_string(policy)?],
                 )?;
             }
         }
+        Ok(())
+    }
+
+    pub fn bulk_repository_settings(
+        &self,
+        selections: &[RepositorySelection],
+        published: Option<bool>,
+        codex: Option<CodexSkillPolicy>,
+    ) -> Result<(usize, usize)> {
+        ensure!(!selections.is_empty(), "取得元を選択してください。");
+        ensure!(
+            published.is_some() || codex.is_some(),
+            "変更する設定を選択してください。"
+        );
+        if let Some(policy) = &codex {
+            ensure!(
+                !policy.automatic || policy.command,
+                "Automatic invocation requires a visible Codex command"
+            );
+        }
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
+        let c = self.connection()?;
+        let tx = c.unchecked_transaction()?;
+        let groups = Self::repository_groups_on(&tx)?;
+        let scopes: HashSet<_> = selections
+            .iter()
+            .map(|selection| {
+                (
+                    selection.repository_source.as_str(),
+                    selection.repository.as_str(),
+                )
+            })
+            .collect();
+        for (source, repository) in &scopes {
+            ensure!(
+                groups.iter().any(|group| group.source == *source
+                    && group.repository == *repository
+                    && !group.unknown
+                    && group.count > 0),
+                "取得元が存在しないか、対象のスキルがありません。再スキャンしてください。"
+            );
+        }
+        // キャッシュされた取得元でも、切断中のソースへ設定を書き込まない。
+        for source in Self::sources_on(&tx)? {
+            if scopes.iter().any(|(alias, _)| *alias == source.alias) {
+                Self::detect_repositories(Path::new(&source.path))?;
+            }
+        }
+        let mut ids = Vec::new();
+        let mut skipped = 0;
+        {
+            let mut statement = tx.prepare("SELECT k.id,k.source,k.relative_path,k.missing,k.error IS NULL FROM skills k JOIN sources s ON s.alias=k.source WHERE s.active=1")?;
+            for row in statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, bool>(3)?,
+                    row.get::<_, bool>(4)?,
+                ))
+            })? {
+                let (id, source, relative, missing, valid) = row?;
+                let repository = Self::repository_for(
+                    &relative,
+                    groups
+                        .iter()
+                        .filter(|group| group.source == source)
+                        .map(|group| group.repository.as_str()),
+                );
+                if scopes.contains(&(source.as_str(), repository)) {
+                    if missing || !valid {
+                        skipped += 1;
+                    } else {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+        ensure!(
+            !ids.is_empty(),
+            "設定を変更できるスキルがありません。再スキャンしてください。"
+        );
+        self.bulk_settings_on(&tx, &ids, published, &[], codex.as_ref())?;
         rebuild_fts(&tx)?;
         tx.commit()?;
-        Ok(())
+        Ok((ids.len(), skipped))
     }
     pub fn restore(&self, id: &str, history_id: i64, expected_revision: &str) -> Result<()> {
         let _guard = self.write_guard()?;
@@ -2334,10 +2757,10 @@ impl Library {
         let relative = relative_key(&root, &path)?;
         Ok(skill_id(source, &relative))
     }
-    fn nested_skill_roots(c: &Connection, id: &str, root: &Path) -> Result<Vec<PathBuf>> {
+    fn nested_skill_roots(c: &Connection, id: &str, root: &Path) -> Result<HashSet<PathBuf>> {
         // 消失扱いの子も境界として残す。マーカーを移動しただけでは親の公開範囲を広げない。
         let mut statement = c.prepare("SELECT s.path,k.relative_path FROM skills k JOIN sources s ON s.alias=k.source WHERE k.source=(SELECT source FROM skills WHERE id=?1) AND k.id<>?1")?;
-        let mut boundaries = Vec::new();
+        let mut boundaries = HashSet::new();
         for row in statement.query_map([id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })? {
@@ -2347,7 +2770,7 @@ impl Library {
                 && directory != root
                 && directory.starts_with(root)
             {
-                boundaries.push(directory.to_path_buf());
+                boundaries.insert(directory.to_path_buf());
             }
         }
         Ok(boundaries)
@@ -2392,14 +2815,12 @@ impl Library {
             "Conflict: skill changed during file read"
         );
         Self::check_file_boundary(&c, id, root, &target)?;
-        let lines: Vec<_> = text.lines().collect();
+        let total_lines = text.lines().count();
         let start = start_line.max(1);
-        let total_lines = lines.len();
-        let text = lines
-            .iter()
+        let text = text
+            .lines()
             .skip(start - 1)
             .take(max_lines.clamp(1, 1000))
-            .copied()
             .collect::<Vec<_>>()
             .join("\n");
         Ok(SkillFile {
@@ -2462,7 +2883,16 @@ fn refresh_valid(c: &Connection, id: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 fn revision(text: &str) -> String {
-    format!("{:x}", Sha256::digest(text.as_bytes()))
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .flat_map(|byte| {
+            let hex = b"0123456789abcdef";
+            [
+                hex[(byte >> 4) as usize] as char,
+                hex[(byte & 15) as usize] as char,
+            ]
+        })
+        .collect()
 }
 fn skill_id(alias: &str, path: &str) -> String {
     revision(&format!("{alias}\0{path}"))
@@ -2638,11 +3068,30 @@ fn is_link(meta: &fs::Metadata) -> bool {
     }
     meta.file_type().is_symlink()
 }
-fn discover(dir: &Path, found: &mut Vec<PathBuf>, blocked: &mut Vec<PathBuf>) -> Result<()> {
+fn discover(
+    dir: &Path,
+    found: &mut Vec<PathBuf>,
+    blocked: &mut Vec<PathBuf>,
+    excluded: &std::collections::HashSet<String>,
+    unverified: &std::collections::HashSet<PathBuf>,
+    first_only: bool,
+) -> Result<()> {
+    if unverified
+        .iter()
+        .any(|region| migration::path_is_within(dir, region))
+    {
+        blocked.push(dir.to_path_buf());
+        anyhow::bail!("Codex index ownership is unverified");
+    }
     let skill = dir.join("SKILL.md");
     match fs::symlink_metadata(&skill) {
         Ok(meta) if meta.is_file() && !is_link(&meta) => {
-            found.push(skill);
+            if !excluded.contains(&path_key(&skill)) {
+                found.push(skill);
+                if first_only {
+                    return Ok(());
+                }
+            }
         }
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
             blocked.push(dir.to_path_buf());
@@ -2663,12 +3112,25 @@ fn discover(dir: &Path, found: &mut Vec<PathBuf>, blocked: &mut Vec<PathBuf>) ->
                 blocked.push(entry.path());
             })?;
             if !is_link(&meta) && meta.is_dir() && !skipped(&entry.file_name().to_string_lossy()) {
-                discover(&entry.path(), found, blocked)?;
+                discover(
+                    &entry.path(),
+                    found,
+                    blocked,
+                    excluded,
+                    unverified,
+                    first_only,
+                )?;
             }
             Ok(())
         })();
         if let Err(error) = result {
+            if first_only {
+                return Err(error);
+            }
             first_error.get_or_insert(error);
+        }
+        if first_only && !found.is_empty() {
+            return Ok(());
         }
     }
     match first_error {
@@ -2677,8 +3139,12 @@ fn discover(dir: &Path, found: &mut Vec<PathBuf>, blocked: &mut Vec<PathBuf>) ->
     }
 }
 fn relative_key(root: &Path, path: &Path) -> Result<String> {
-    path.strip_prefix(root)?
-        .components()
+    ensure!(
+        migration::path_is_within(path, root),
+        "Path is outside its source"
+    );
+    path.components()
+        .skip(root.components().count())
         .map(|component| {
             component
                 .as_os_str()
@@ -2689,11 +3155,28 @@ fn relative_key(root: &Path, path: &Path) -> Result<String> {
         .collect::<Result<Vec<_>>>()
         .map(|parts| parts.join("/"))
 }
+fn path_collation() -> &'static str {
+    if cfg!(any(windows, target_os = "macos")) {
+        "NOCASE"
+    } else {
+        "BINARY"
+    }
+}
+fn path_key(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    if cfg!(windows) {
+        path.replace('\\', "/").to_ascii_lowercase()
+    } else if cfg!(target_os = "macos") {
+        path.to_ascii_lowercase()
+    } else {
+        path.into_owned()
+    }
+}
 fn auxiliary(
     root: &Path,
     dir: &Path,
     files: &mut Vec<String>,
-    boundaries: &[PathBuf],
+    boundaries: &HashSet<PathBuf>,
 ) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -2702,7 +3185,7 @@ fn auxiliary(
             continue;
         }
         if meta.is_dir() {
-            if boundaries.iter().any(|boundary| entry.path() == *boundary)
+            if boundaries.contains(&entry.path())
                 || fs::symlink_metadata(entry.path().join("SKILL.md")).is_ok()
             {
                 continue;

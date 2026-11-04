@@ -36,6 +36,35 @@ fn publish(l: &Library, id: &str) {
     )
     .unwrap();
 }
+fn link_directory(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let status = std::process::Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(
+                link.to_string_lossy()
+                    .trim_start_matches(r"\\?\")
+                    .replace('/', "\\"),
+            )
+            .arg(
+                target
+                    .to_string_lossy()
+                    .trim_start_matches(r"\\?\")
+                    .replace('/', "\\"),
+            )
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(
+            status.status.success(),
+            "{}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+    }
+}
 
 #[test]
 fn detects_preferred_home_and_recurses_below_skill_markers() {
@@ -79,6 +108,430 @@ fn detects_codex_home_then_legacy_home_and_creates_separate_fallback() {
         b.join("empty-data-skills").canonicalize().unwrap()
     );
     assert!(all(&fallback).is_empty());
+}
+
+#[test]
+fn automatic_selection_ignores_owned_entries_and_still_finds_original_skills() {
+    let b = base();
+    let home = b.join("home");
+    let l = Library::open(&b.join("data")).unwrap();
+    l.initialize_directory(&home, None).unwrap();
+    let fallback = l.directory_settings().unwrap();
+    let original = Path::new(&fallback.path).join("one");
+    skill(&original, "Original");
+    l.scan().unwrap();
+    let id = all(&l)[0].id.clone();
+    publish(&l, &id);
+    l.set_codex_policy(&id, false, true).unwrap();
+    l.set_codex_enabled(true).unwrap();
+    l.sync_codex_entries().unwrap();
+    let export = PathBuf::from(l.codex_settings().unwrap().path);
+    assert!(export.join("skilvella-search/SKILL.md").is_file());
+    let original_bytes = fs::read(original.join("SKILL.md")).unwrap();
+    drop(l);
+
+    for _ in 0..2 {
+        let reopened = Library::open(&b.join("data")).unwrap();
+        reopened.initialize_directory(&home, None).unwrap();
+        assert_eq!(reopened.directory_settings().unwrap().path, fallback.path);
+        assert_eq!(
+            reopened.directory_settings().unwrap().source_alias,
+            fallback.source_alias
+        );
+        assert_eq!(all(&reopened).len(), 1);
+        assert_eq!(all(&reopened)[0].id, id);
+        assert!(all(&reopened)[0].published);
+        reopened.sync_codex_entries().unwrap();
+        assert!(reopened.codex_settings().unwrap().last_error.is_empty());
+    }
+    assert_eq!(fs::read(original.join("SKILL.md")).unwrap(), original_bytes);
+
+    // 所有出力の子を直接ソースとして登録しても、入口を原本に取り込まない。
+    let check = Library::open(&b.join("data")).unwrap();
+    check
+        .add_source("entry", &export.join("skilvella-search"))
+        .unwrap();
+    assert_eq!(all(&check).len(), 1);
+    assert_eq!(all(&check)[0].id, id);
+    check.remove_source("entry").unwrap();
+
+    // 手編集した既知の入口を原本として再登録せず、同期の衝突として保護する。
+    let finder = export.join("skilvella-search/SKILL.md");
+    let saved = fs::read(&finder).unwrap();
+    fs::write(
+        &finder,
+        "---\nname: edited\ndescription: Edited entry\n---\nkeep\n",
+    )
+    .unwrap();
+    check.initialize_directory(&home, None).unwrap();
+    assert_eq!(check.directory_settings().unwrap().path, fallback.path);
+    assert!(check.sync_codex_entries().is_err());
+    assert!(fs::read_to_string(&finder).unwrap().contains("keep"));
+    fs::write(&finder, &saved).unwrap();
+    check.sync_codex_entries().unwrap();
+
+    // 一つの入口をリンクへ差し替えても、他の正常な入口まで原本扱いしない。
+    let command = fs::read_dir(&export)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.is_dir() && p.file_name().unwrap() != "skilvella-search")
+        .unwrap();
+    fs::rename(&command, b.join("saved-command")).unwrap();
+    let external = b.join("external");
+    skill(&external, "External original");
+    link_directory(&external, &command);
+    check.initialize_directory(&home, None).unwrap();
+    assert_eq!(check.directory_settings().unwrap().path, fallback.path);
+    assert_eq!(all(&check).len(), 1);
+    assert!(check.sync_codex_entries().is_err());
+    fs::rename(&command, b.join("saved-index-link")).unwrap();
+    fs::rename(b.join("saved-command"), &command).unwrap();
+    check.sync_codex_entries().unwrap();
+
+    // 生成先全体が原本へのリンクになっても、そのリンク先を保留領域にしない。
+    fs::rename(&export, b.join("saved-whole-index")).unwrap();
+    link_directory(Path::new(&fallback.path), &export);
+    check.initialize_directory(&home, None).unwrap();
+    assert_eq!(check.directory_settings().unwrap().path, fallback.path);
+    assert!(check.detail(&id, true).is_ok());
+    assert!(check.sync_codex_entries().is_err());
+    fs::rename(&export, b.join("saved-whole-link")).unwrap();
+    fs::rename(b.join("saved-whole-index"), &export).unwrap();
+    check.sync_codex_entries().unwrap();
+
+    // 未知の原本を出力先に追加しても隠さず、元のファイルを保護する。
+    skill(&export.join("user"), "Unknown original");
+    check.initialize_directory(&home, None).unwrap();
+    assert_eq!(all(&check).len(), 1);
+    assert_eq!(all(&check)[0].name, "Unknown original");
+    assert!(check.sync_codex_entries().is_err());
+    fs::rename(export.join("user"), b.join("saved-user-skill")).unwrap();
+    check.initialize_directory(&home, None).unwrap();
+    assert_eq!(check.directory_settings().unwrap().path, fallback.path);
+    assert_eq!(all(&check)[0].id, id);
+
+    // 出力が消えた後の空フォルダーは、従来どおり既存候補として扱う。
+    fs::rename(&export, b.join("saved-export")).unwrap();
+    check.initialize_directory(&home, None).unwrap();
+    assert_eq!(
+        Path::new(&check.directory_settings().unwrap().path),
+        home.join(".agents/skills").canonicalize().unwrap()
+    );
+    fs::rename(b.join("saved-export"), &export).unwrap();
+    check.initialize_directory(&home, None).unwrap();
+    assert_eq!(check.directory_settings().unwrap().path, fallback.path);
+
+    // 生成物だけの優先候補を飛ばし、次の標準探索先にある原本を選べる。
+    let legacy = home.join(".codex/skills");
+    skill(&legacy.join("real"), "Legacy original");
+    let reopened = Library::open(&b.join("data")).unwrap();
+    reopened.initialize_directory(&home, None).unwrap();
+    assert_eq!(
+        Path::new(&reopened.directory_settings().unwrap().path),
+        legacy.canonicalize().unwrap()
+    );
+    assert_eq!(all(&reopened).len(), 1);
+    assert_eq!(all(&reopened)[0].name, "Legacy original");
+    reopened.sync_codex_entries().unwrap();
+
+    // 同じ候補内に原本が増えた場合は優先順位を維持し、生成物を索引に混ぜない。
+    skill(&home.join(".agents/skills/real"), "Preferred original");
+    reopened.initialize_directory(&home, None).unwrap();
+    assert_eq!(
+        Path::new(&reopened.directory_settings().unwrap().path),
+        home.join(".agents/skills").canonicalize().unwrap()
+    );
+    let indexed = all(&reopened);
+    assert_eq!(
+        indexed
+            .iter()
+            .filter(|s| !s.missing)
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Preferred original"]
+    );
+    assert!(
+        indexed
+            .iter()
+            .any(|s| s.name == "Unknown original" && s.missing)
+    );
+    let generated = fs::read(export.join("skilvella-search/SKILL.md")).unwrap();
+    assert!(
+        reopened
+            .sync_codex_entries()
+            .unwrap_err()
+            .to_string()
+            .contains("overlaps")
+    );
+    assert_eq!(
+        fs::read(export.join("skilvella-search/SKILL.md")).unwrap(),
+        generated
+    );
+    assert_eq!(fs::read(original.join("SKILL.md")).unwrap(), original_bytes);
+}
+
+#[test]
+fn an_unowned_folder_named_skilvella_remains_a_normal_source() {
+    let b = base();
+    let home = b.join("home");
+    skill(&home.join(".agents/skills/skilvella/real"), "User original");
+    let l = Library::open(&b.join("data")).unwrap();
+    l.initialize_directory(&home, None).unwrap();
+    assert_eq!(all(&l).len(), 1);
+    assert_eq!(all(&l)[0].name, "User original");
+}
+
+#[test]
+fn uncertain_records_hold_the_index_of_an_already_selected_native_source() {
+    let b = base();
+    let home = b.join("home");
+    let l = Library::open(&b.join("data")).unwrap();
+    l.initialize_directory(&home, None).unwrap();
+    l.set_codex_enabled(true).unwrap();
+    skill(&home.join(".agents/skills/real"), "Real original");
+    l.initialize_directory(&home, None).unwrap();
+    let current = l.directory_settings().unwrap();
+    let id = all(&l)[0].id.clone();
+    publish(&l, &id);
+    assert!(l.detail(&id, true).is_ok());
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        let export = home.join(".agents/skills/skilvella");
+        let renamed = home.join(".agents/skills/Skilvella");
+        fs::rename(&export, &renamed).unwrap();
+        if !export.exists() {
+            fs::rename(renamed, export).unwrap();
+        } // 大小文字を区別するFSでは通常ケースを確認。
+    }
+    let path = b.join("data/codex-index/manifest.json");
+    let saved = fs::read(&path).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+    let files = manifest["files"].as_object_mut().unwrap();
+    let hash = files.remove("skilvella-search/SKILL.md").unwrap();
+    files.insert("../outside/SKILL.md".into(), hash);
+    fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    fs::write(
+        home.join(".agents/skills/real/SKILL.md"),
+        "---\nname: Real original\ndescription: Refreshed sibling\n---\nafter\n",
+    )
+    .unwrap();
+    l.initialize_directory(&home, None).unwrap();
+    assert_eq!(l.directory_settings().unwrap().path, current.path);
+    assert_eq!(all(&l).len(), 1);
+    assert_eq!(all(&l)[0].id, id);
+    assert!(all(&l)[0].published);
+    assert!(all(&l)[0].error.is_none());
+    assert_eq!(all(&l)[0].description, "Refreshed sibling");
+    assert!(l.detail(&id, true).unwrap().content.ends_with("after\n"));
+    // 記録全体が壊れ、固定名の予定先しか分からなくても、大文字小文字の別名を辿らない。
+    fs::write(&path, "{").unwrap();
+    l.initialize_directory(&home, None).unwrap();
+    assert_eq!(l.scan().unwrap().errors, 1);
+    assert_eq!(all(&l).len(), 1);
+    assert!(l.detail(&id, true).is_ok());
+    fs::write(&path, saved).unwrap();
+    l.scan().unwrap();
+    assert!(l.detail(&id, true).is_ok());
+    assert_eq!(all(&l).len(), 1);
+}
+
+#[test]
+fn automatic_selection_distinguishes_staged_and_published_first_entries() {
+    for published in [false, true] {
+        let b = base();
+        let home = b.join("home");
+        let l = Library::open(&b.join("data")).unwrap();
+        l.initialize_directory(&home, None).unwrap();
+        let fallback = l.directory_settings().unwrap();
+        skill(&Path::new(&fallback.path).join("one"), "original");
+        l.scan().unwrap();
+        publish(&l, &all(&l)[0].id);
+        l.set_codex_enabled(true).unwrap();
+        let export = PathBuf::from(l.codex_settings().unwrap().path);
+        let state = b.join("data/codex-index");
+        let next: serde_json::Value =
+            serde_json::from_slice(&fs::read(state.join("manifest.json")).unwrap()).unwrap();
+        let agents = export.parent().unwrap().parent().unwrap();
+        let stage = agents
+            .join("skilvella-staging")
+            .join(uuid::Uuid::new_v4().to_string());
+        let retired = PathBuf::new();
+        let previous = serde_json::json!({"owner": next["owner"], "root": "", "files": {}});
+        fs::rename(state.join("manifest.json"), b.join("saved-manifest.json")).unwrap();
+        fs::write(state.join("pending.json"), serde_json::to_vec(&serde_json::json!({"previous": previous,"next": next,"stage": stage,"retired": retired})).unwrap()).unwrap();
+        if !published {
+            fs::create_dir_all(stage.parent().unwrap()).unwrap();
+            fs::rename(&export, &stage).unwrap();
+            skill(&export.join("skilvella-search"), "User replacement");
+        }
+        let reopened = Library::open(&b.join("data")).unwrap();
+        reopened.initialize_directory(&home, None).unwrap();
+        if published {
+            assert_eq!(reopened.directory_settings().unwrap().path, fallback.path);
+            reopened.sync_codex_entries().unwrap();
+            assert_eq!(all(&reopened)[0].name, "original");
+            assert!(!state.join("pending.json").exists());
+        } else {
+            assert_eq!(all(&reopened).len(), 1);
+            assert_eq!(all(&reopened)[0].name, "User replacement");
+            assert!(reopened.sync_codex_entries().is_err());
+            assert!(
+                fs::read_to_string(export.join("skilvella-search/SKILL.md"))
+                    .unwrap()
+                    .contains("User replacement")
+            );
+        }
+    }
+}
+
+#[test]
+fn an_original_at_the_retired_output_location_is_not_excluded() {
+    let b = base();
+    let home = b.join("home");
+    let l = Library::open(&b.join("data")).unwrap();
+    l.initialize_directory(&home, None).unwrap();
+    l.set_codex_enabled(true).unwrap();
+    let export = PathBuf::from(l.codex_settings().unwrap().path);
+    let state = b.join("data/codex-index");
+    let previous: serde_json::Value =
+        serde_json::from_slice(&fs::read(state.join("manifest.json")).unwrap()).unwrap();
+    let agents = export.parent().unwrap().parent().unwrap();
+    let stage = agents
+        .join("skilvella-staging")
+        .join(uuid::Uuid::new_v4().to_string());
+    let retired = agents
+        .join("skilvella-retired")
+        .join(uuid::Uuid::new_v4().to_string());
+    for relative in previous["files"].as_object().unwrap().keys() {
+        let file = stage.join(relative);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::copy(export.join(relative), file).unwrap();
+    }
+    fs::create_dir_all(retired.parent().unwrap()).unwrap();
+    fs::rename(&export, &retired).unwrap();
+    skill(&export.join("skilvella-search"), "User replacement");
+    fs::write(state.join("pending.json"), serde_json::to_vec(&serde_json::json!({"previous":previous,"next":previous,"stage":stage,"retired":retired})).unwrap()).unwrap();
+    l.initialize_directory(&home, None).unwrap();
+    assert_eq!(all(&l).len(), 1);
+    assert_eq!(all(&l)[0].name, "User replacement");
+    assert!(l.sync_codex_entries().is_err());
+    assert!(stage.join("skilvella-search/SKILL.md").is_file());
+    assert!(retired.join("skilvella-search/SKILL.md").is_file());
+    assert!(
+        fs::read_to_string(export.join("skilvella-search/SKILL.md"))
+            .unwrap()
+            .contains("User replacement")
+    );
+}
+
+#[test]
+fn unverified_ownership_never_becomes_a_confirmed_automatic_directory() {
+    for mode in ["auto", "custom", "disabled"] {
+        for problem in ["invalid-marker", "foreign-owner", "corrupt-json"] {
+            let b = base();
+            let home = b.join("home");
+            let l = Library::open(&b.join("data")).unwrap();
+            l.initialize_directory(&home, None).unwrap();
+            let fallback = l.directory_settings().unwrap();
+            skill(&Path::new(&fallback.path).join("one"), "original");
+            l.scan().unwrap();
+            let id = all(&l)[0].id.clone();
+            publish(&l, &id);
+            l.set_codex_policy(&id, false, true).unwrap();
+            l.set_codex_enabled(true).unwrap();
+            l.set_directory(mode, &fallback.path).unwrap();
+            let before = l.directory_settings().unwrap();
+            let path = b.join("data/codex-index/manifest.json");
+            let mut manifest: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            match problem {
+                "invalid-marker" => {
+                    let files = manifest["files"].as_object_mut().unwrap();
+                    let hash = files.remove("original/SKILL.md").unwrap();
+                    files.insert("../outside/SKILL.md".into(), hash);
+                    fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+                }
+                "foreign-owner" => {
+                    manifest["owner"] = serde_json::json!(b.join("other/library.sqlite3"));
+                    fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+                }
+                _ => fs::write(&path, "{").unwrap(),
+            }
+            l.initialize_directory(&home, None).unwrap();
+            let after = l.directory_settings().unwrap();
+            assert_eq!(after.path, before.path);
+            assert_eq!(after.mode, before.mode);
+            assert_eq!(after.source_alias, before.source_alias);
+            assert!(after.detected_path.is_empty());
+            assert!(l.set_directory("auto", "").is_err());
+            assert_eq!(l.directory_settings().unwrap().path, before.path);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_candidates_keep_the_current_source_and_retire_old_entry_rows() {
+    use std::os::unix::fs::PermissionsExt;
+    struct Restore(PathBuf);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700));
+        }
+    }
+    let b = base();
+    let home = b.join("home");
+    let l = Library::open(&b.join("data")).unwrap();
+    l.initialize_directory(&home, None).unwrap();
+    let fallback = l.directory_settings().unwrap();
+    skill(&Path::new(&fallback.path).join("one"), "original");
+    l.scan().unwrap();
+    let original = all(&l)[0].id.clone();
+    publish(&l, &original);
+    l.set_codex_policy(&original, false, true).unwrap();
+    l.set_codex_enabled(true).unwrap();
+    let native = home.join(".agents/skills");
+    let denied = native.join("denied");
+    skill(&denied, "Unreadable original");
+    fs::set_permissions(&denied, fs::Permissions::from_mode(0o0)).unwrap();
+    let guard = Restore(denied.clone());
+    if fs::read_dir(&denied).is_ok() {
+        return;
+    } // 特権実行では読取拒否条件を作れない。
+    l.initialize_directory(&home, None).unwrap();
+    assert_eq!(l.directory_settings().unwrap().path, fallback.path);
+    assert_eq!(all(&l)[0].id, original);
+    drop(guard);
+
+    let owned_entry = native.join("skilvella/original");
+    fs::set_permissions(&owned_entry, fs::Permissions::from_mode(0o0)).unwrap();
+    let guard = Restore(owned_entry);
+    l.initialize_directory(&home, None).unwrap();
+    assert_eq!(l.directory_settings().unwrap().path, fallback.path);
+    drop(guard);
+
+    // 旧版で入口を索引済みの状態を作り、部分走査失敗でもその行だけは無効化する。
+    let state = b.join("data/codex-index/manifest.json");
+    let saved = b.join("saved-manifest.json");
+    fs::rename(&state, &saved).unwrap();
+    l.set_directory("custom", native.to_str().unwrap()).unwrap();
+    let old_entries = all(&l)
+        .into_iter()
+        .filter(|s| s.relative_path.starts_with("skilvella/"))
+        .map(|s| s.id)
+        .collect::<Vec<_>>();
+    assert_eq!(old_entries.len(), 2);
+    for id in &old_entries {
+        publish(&l, id);
+    }
+    fs::rename(&saved, &state).unwrap();
+    fs::set_permissions(&denied, fs::Permissions::from_mode(0o0)).unwrap();
+    let _guard = Restore(denied);
+    assert!(l.scan().unwrap().errors > 0);
+    for id in old_entries {
+        assert!(all(&l).iter().find(|s| s.id == id).unwrap().missing);
+        assert!(l.detail(&id, true).is_err());
+    }
 }
 
 #[test]

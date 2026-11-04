@@ -31,6 +31,7 @@ async fn headless_process_serves_ui_and_mcp_on_the_bound_port() {
             .env("USERPROFILE", &home)
             .env("HOME", &home)
             .env("CODEX_HOME", home.join(".codex"))
+            .env_remove("LOCALAPPDATA")
             .stdout(Stdio::piped())
             .spawn()
             .unwrap(),
@@ -70,6 +71,37 @@ async fn headless_process_serves_ui_and_mcp_on_the_bound_port() {
         .await
         .unwrap();
     assert_eq!(response["result"]["serverInfo"]["name"], "skilvella");
+}
+
+#[test]
+fn help_does_not_require_the_default_data_directory() {
+    for args in [
+        vec!["--help"],
+        vec!["--data-dir", "explicit-data", "--help"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_skilvella"))
+            .args(args)
+            .env_remove("LOCALAPPDATA")
+            .env_remove("HOME")
+            .env_remove("XDG_DATA_HOME")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Usage: skilvella"));
+    }
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+#[test]
+fn help_uses_xdg_data_home_without_home() {
+    let output = Command::new(env!("CARGO_BIN_EXE_skilvella"))
+        .arg("--help")
+        .env_remove("HOME")
+        .env("XDG_DATA_HOME", "/explicit-data")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("/explicit-data/skilvella"));
 }
 
 #[test]

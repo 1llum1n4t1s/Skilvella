@@ -107,6 +107,7 @@ pub struct RepositoryGroup {
     pub repository: String,
     pub count: usize,
     pub missing: usize,
+    pub available: usize,
     pub unknown: bool,
 }
 

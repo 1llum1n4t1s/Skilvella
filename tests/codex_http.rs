@@ -2,6 +2,115 @@ use reqwest::{Client, StatusCode};
 use skilvella::{AppState, library::Library};
 use std::fs;
 
+mod common;
+
+#[tokio::test]
+async fn disconnected_policy_save_remains_observable_until_sync_finishes() {
+    let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("navigation-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(root.join("source/one")).unwrap();
+    fs::write(
+        root.join("source/one/SKILL.md"),
+        "---\nname: one\ndescription: Test\n---\nBody\n",
+    )
+    .unwrap();
+    let library = Library::open_for_user(&root.join("data"), &root.join("home"), None).unwrap();
+    library.add_source("test", &root.join("source")).unwrap();
+    let id = library.search(Default::default(), false).unwrap().skills[0]
+        .id
+        .clone();
+    let state = AppState::new(library);
+    let server = common::HttpServer::start(state.clone()).await;
+    let operation = uuid::Uuid::new_v4();
+    let status_url = format!("{}/settings/policy-operations/{operation}", server.base);
+    let client = Client::new();
+    let db = rusqlite::Connection::open(root.join("data/library.sqlite3")).unwrap();
+    db.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let request = client
+        .post(format!("{}/skills/{id}/codex", server.base))
+        .header("accept", "application/json")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!(
+            "csrf={}&mode=automatic&operation={operation}",
+            state.csrf
+        ));
+    let pending = tokio::spawn(async move { request.send().await });
+    for i in 0..100 {
+        let status: serde_json::Value = client
+            .get(&status_url)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if status["state"] == "pending" {
+            break;
+        }
+        assert!(i < 99, "Save was not registered");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    pending.abort();
+    db.execute_batch("ROLLBACK").unwrap();
+    for i in 0..100 {
+        let status: serde_json::Value = client
+            .get(&status_url)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if status["state"] == "complete" {
+            break;
+        }
+        assert!(i < 99, "Disconnected save did not finish");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(state.library.codex_policy(&id).unwrap().automatic);
+    let response = client
+        .post(format!("{}/skills/{id}/codex", server.base))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!(
+            "csrf={}&mode=search&operation={operation}",
+            state.csrf
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(state.library.codex_policy(&id).unwrap().automatic);
+    let cancelled = uuid::Uuid::new_v4();
+    let status: serde_json::Value = client
+        .post(format!(
+            "{}/settings/policy-operations/{cancelled}",
+            server.base
+        ))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!("csrf={}", state.csrf))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status["state"], "cancelled");
+    let late = client
+        .post(format!("{}/skills/{id}/codex", server.base))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!(
+            "csrf={}&mode=search&operation={cancelled}",
+            state.csrf
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(late.status(), StatusCode::CONFLICT);
+    assert!(state.library.codex_policy(&id).unwrap().automatic);
+}
+
 #[tokio::test]
 async fn codex_forms_validate_requests_and_preserve_modes() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -22,20 +131,8 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         .id
         .clone();
     let state = AppState::new(library);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let router = skilvella::server::router(state.clone(), port);
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    struct Stop(tokio::task::JoinHandle<()>);
-    impl Drop for Stop {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
-    let _stop = Stop(task);
-    let base = format!("http://127.0.0.1:{port}");
+    let server = common::HttpServer::start(state.clone()).await;
+    let base = server.base.clone();
     let client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -183,6 +280,101 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         .unwrap();
     assert!(listing.contains("name=\"codex_mode\""));
     assert!(listing.contains("自動選択＋コマンド候補"));
+    let row = |body: &str, skill_id: &str| {
+        let start = body.find(&format!("id=\"skill-{skill_id}\"")).unwrap();
+        let end = body[start..].find("</tr>").unwrap() + start;
+        body[start..end].to_owned()
+    };
+    assert!(row(&listing, &id).contains("value=\"command\" checked"));
+    assert!(row(&listing, second).contains("value=\"search\" checked"));
+    let inline_url = format!(
+        "{base}/skills/{second}/codex?repository_source=test&repository=&q=two%20words&tag=a%2Bb&offset=50"
+    );
+    let response = client
+        .post(&inline_url)
+        .header("accept", "application/json")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!("csrf={token}&mode=automatic"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let sync: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(sync["enabled"], false);
+    assert!(state.library.codex_policy(second).unwrap().automatic);
+    assert!(state.library.codex_policy(&id).unwrap().command);
+    assert_eq!(
+        state.library.codex_policy(untouched).unwrap(),
+        Default::default()
+    );
+    let listing = client
+        .get(format!("{base}/?repository_source=test&repository="))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(row(&listing, second).contains("value=\"automatic\" checked"));
+    assert_eq!(
+        client
+            .post(&inline_url)
+            .header("accept", "application/json")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body("csrf=bad&mode=search")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert!(state.library.codex_policy(second).unwrap().automatic);
+    let fallback = client
+        .post(&inline_url)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!("csrf={token}&mode=search"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(fallback.status(), StatusCode::SEE_OTHER);
+    let location = fallback.headers()["location"].to_str().unwrap();
+    assert!(location.contains("q=two%20words"));
+    assert!(location.contains("tag=a%2Bb"));
+    assert!(location.contains("offset=50"));
+    assert!(location.ends_with(&format!("#skill-{second}")));
+    let db = rusqlite::Connection::open(root.join("data/library.sqlite3")).unwrap();
+    db.execute(
+        "INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        rusqlite::params![format!("codex_policy:{untouched}"), "{broken"],
+    ).unwrap();
+    let listing = client
+        .get(format!("{base}/?repository_source=test&repository="))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let unknown = row(&listing, untouched);
+    assert!(unknown.contains("不明な設定です。使い方を選んでください。"));
+    assert!(!unknown.contains(" checked"));
+    assert_eq!(
+        client
+            .post(format!("{base}/skills/{untouched}/codex"))
+            .header("accept", "application/json")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(format!("csrf={token}&mode=search"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        state.library.codex_policy(untouched).unwrap(),
+        Default::default()
+    );
+    drop(db);
     for (mode, automatic, command) in [
         ("command", false, true),
         ("automatic", true, true),
@@ -383,11 +575,53 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
                 );
             }
             assert!(!home.join(".agents/skills/skilvella/untouched").exists());
+            let response = client
+                .post(&policy_url)
+                .header("accept", "application/json")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(format!("csrf={token}&mode=command"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let sync: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(sync["enabled"], true);
+            assert_eq!(sync["last_error"], "");
+            let config = home.join(".agents/skills/skilvella/example/agents/openai.yaml");
+            assert!(
+                fs::read_to_string(config)
+                    .unwrap()
+                    .contains("allow_implicit_invocation: false")
+            );
             fs::write(&unknown_file, "User-owned file").unwrap();
+            let response = client
+                .post(&policy_url)
+                .header("accept", "application/json")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(format!("csrf={token}&mode=automatic"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let sync: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(sync["enabled"], true);
+            assert!(!sync["last_error"].as_str().unwrap().is_empty());
         } else {
             let settings = saved.codex_settings().unwrap();
             assert!(!settings.last_error.is_empty());
             assert!(settings.exported > 0);
+            let response = client
+                .post(&policy_url)
+                .header("accept", "application/json")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(format!("csrf={token}&mode=search"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let sync: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(sync["enabled"], false);
+            assert!(!sync["last_error"].as_str().unwrap().is_empty());
             let warning = "同期が停止しています。保存した設定はCodexへまだ反映されていません。以前の候補や自動選択が残っている可能性があります。";
             assert!(body.contains(warning));
             let detail = client

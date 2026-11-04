@@ -3,11 +3,64 @@ use askama::Template;
 use axum::{
     Router,
     extract::{Form, Path, Query, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+// サービス再起動でも、実行中の保存と完了記録を同じプロセスで共有する。
+type PolicyOperations = Mutex<BTreeMap<uuid::Uuid, (&'static str, Instant)>>;
+static POLICY_OPERATIONS: OnceLock<PolicyOperations> = OnceLock::new();
+fn policy_operations() -> &'static PolicyOperations {
+    POLICY_OPERATIONS.get_or_init(Mutex::default)
+}
+async fn policy_operation_status(Path(id): Path<String>) -> Response {
+    let Ok(id) = uuid::Uuid::parse_str(&id) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    match policy_operations().lock() {
+        Ok(operations) => axum::Json(
+            serde_json::json!({"state": operations.get(&id).map_or("unknown", |entry| entry.0)}),
+        )
+        .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+async fn policy_operation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Form(form): Form<Token>,
+) -> Response {
+    if let Some(response) = csrf_error(&state, &form.csrf) {
+        return response;
+    }
+    let Ok(id) = uuid::Uuid::parse_str(&id) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    match policy_operations().lock() {
+        Ok(mut operations) => {
+            operations.retain(|_, (state, time)| {
+                *state == "pending" || time.elapsed() < Duration::from_secs(600)
+            });
+            if !operations.contains_key(&id) {
+                if operations.len() >= 256 {
+                    return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                }
+                // 未受付なら取消を先に確定し、遅れて到着するPOSTを拒否する。
+                operations.insert(id, ("cancelled", Instant::now()));
+            }
+            axum::Json(serde_json::json!({"state": operations[&id].0})).into_response()
+        }
+        Err(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "保存状態を確認できません。再読み込みしてください。",
+        ),
+    }
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -15,6 +68,10 @@ pub fn router() -> Router<AppState> {
         .route("/sources", get(sources))
         .route("/settings", get(settings))
         .route("/settings/codex", post(set_codex_enabled))
+        .route(
+            "/settings/policy-operations/{id}",
+            get(policy_operation_status).post(policy_operation),
+        )
         .route("/settings/updates/check", post(check_update))
         .route("/settings/updates/install", post(install_update))
         .route("/sources/add", post(add_source))
@@ -23,6 +80,7 @@ pub fn router() -> Router<AppState> {
         .route("/sources/directory", post(set_directory))
         .route("/scan", post(scan))
         .route("/bulk", post(bulk))
+        .route("/repositories/bulk", post(repository_bulk))
         .route("/skills/new", get(new_skill))
         .route("/skills/create", post(create))
         .route("/skills/{id}", get(detail))
@@ -80,6 +138,8 @@ async fn set_codex_enabled(
 struct CodexPolicyForm {
     csrf: String,
     mode: String,
+    #[serde(default)]
+    operation: String,
 }
 fn codex_mode(mode: &str) -> Option<crate::model::CodexSkillPolicy> {
     let (automatic, command) = match mode {
@@ -93,6 +153,9 @@ fn codex_mode(mode: &str) -> Option<crate::model::CodexSkillPolicy> {
 async fn set_codex_policy(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<SearchQuery>,
+    Query(selection): Query<RepositorySelection>,
+    headers: HeaderMap,
     Form(form): Form<CodexPolicyForm>,
 ) -> Response {
     if let Some(response) = csrf_error(&state, &form.csrf) {
@@ -105,10 +168,81 @@ async fn set_codex_policy(
         );
     };
     let key = id.clone();
-    match state
-        .run_mut(move |lib| lib.set_codex_policy(&key, policy.automatic, policy.command))
-        .await
-    {
+    let operation = if form.operation.is_empty() {
+        None
+    } else {
+        let Ok(id) = uuid::Uuid::parse_str(&form.operation) else {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "保存状態を確認できません。再読み込みしてください。",
+            );
+        };
+        let Ok(mut operations) = policy_operations().lock() else {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "保存状態を確認できません。再読み込みしてください。",
+            );
+        };
+        operations.retain(|_, (state, time)| {
+            *state == "pending" || time.elapsed() < Duration::from_secs(600)
+        });
+        if operations.contains_key(&id) || operations.len() >= 256 {
+            return error(
+                StatusCode::CONFLICT,
+                "保存状態を確認できません。再読み込みしてください。",
+            );
+        }
+        operations.insert(id, ("pending", Instant::now()));
+        Some(id)
+    };
+    let owner = state.clone();
+    // HTTPが切断されても保存・同期・完了記録まで実行する。
+    let result = tokio::spawn(async move {
+        let result = owner
+            .run_mut(move |lib| lib.set_codex_policy(&key, policy.automatic, policy.command))
+            .await;
+        let completion = if result.is_err() {
+            "failed"
+        } else {
+            match owner.run(|lib| lib.codex_settings()).await {
+                Ok(sync) if sync.last_error.is_empty() => "complete",
+                Ok(_) => "sync_failed",
+                Err(_) => "failed",
+            }
+        };
+        if let Some(id) = operation
+            && let Ok(mut operations) = policy_operations().lock()
+        {
+            operations.insert(id, (completion, Instant::now()));
+        }
+        result
+    })
+    .await;
+    match result.unwrap_or_else(|e| Err(e.into())) {
+        Ok(_)
+            if headers
+                .get(header::ACCEPT)
+                .and_then(|h| h.to_str().ok())
+                .is_some_and(|h| {
+                    h.split(',')
+                        .any(|v| v.trim().starts_with("application/json"))
+                }) =>
+        {
+            match state.run(|lib| lib.codex_settings()).await {
+                Ok(sync) => axum::Json(
+                    serde_json::json!({"enabled": sync.enabled, "last_error": sync.last_error}),
+                )
+                .into_response(),
+                Err(e) => failure(e),
+            }
+        }
+        Ok(_) if !selection.repository_source.is_empty() => Redirect::to(&format!(
+            "{}&message={}#skill-{}",
+            repository_page_url(&selection, &query),
+            encoded("Codex設定を保存しました。同期状態を確認してください。"),
+            encoded(&id),
+        ))
+        .into_response(),
         Ok(_) => redirect(
             &format!("/skills/{}", encoded(&id)),
             "Codex設定を保存しました。同期状態を確認してください。",
@@ -228,6 +362,8 @@ struct IndexPage {
     selected: bool,
     reset: String,
     results: SearchResults,
+    policies: BTreeMap<String, Option<CodexSkillPolicy>>,
+    current_query: String,
     sources: Vec<Source>,
     codex: CodexSyncSettings,
     message: String,
@@ -235,6 +371,27 @@ struct IndexPage {
     next: String,
 }
 impl IndexPage {
+    fn policy_mode(&self, id: &str) -> &'static str {
+        match self.policies.get(id) {
+            Some(Some(CodexSkillPolicy {
+                automatic: false,
+                command: false,
+            })) => "search",
+            Some(Some(CodexSkillPolicy {
+                automatic: false,
+                command: true,
+            })) => "command",
+            Some(Some(CodexSkillPolicy {
+                automatic: true,
+                command: true,
+            })) => "automatic",
+            _ => "",
+        }
+    }
+    fn group_value(&self, group: &RepositoryGroup) -> String {
+        serde_json::json!({"repository_source": group.source, "repository": group.repository})
+            .to_string()
+    }
     fn group_url(&self, group: &RepositoryGroup) -> String {
         if group.unknown {
             return "/sources".into();
@@ -253,6 +410,19 @@ impl IndexPage {
             .unwrap_or_else(|| alias.to_owned())
     }
 }
+fn repository_page_url(selection: &RepositorySelection, query: &SearchQuery) -> String {
+    format!(
+        "/?repository_source={}&repository={}&q={}&source={}&tag={}&category={}&status={}&offset={}",
+        encoded(&selection.repository_source),
+        encoded(&selection.repository),
+        encoded(&query.q),
+        encoded(&selection.repository_source),
+        encoded(&query.tag),
+        encoded(&query.category),
+        encoded(&query.status),
+        query.offset,
+    )
+}
 async fn index(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
@@ -269,7 +439,7 @@ async fn index(
         .run(move |lib| {
             let groups = lib.repository_groups()?;
             let results = if selected {
-                lib.search_repository(q, scope)?
+                lib.search_repository_with_groups(q, scope, &groups)?
             } else {
                 SearchResults {
                     skills: Vec::new(),
@@ -277,26 +447,34 @@ async fn index(
                     indexed_at: String::new(),
                 }
             };
-            Ok((results, groups, lib.sources()?, lib.codex_settings()?))
+            let ids = results
+                .skills
+                .iter()
+                .map(|skill| skill.id.clone())
+                .collect::<Vec<_>>();
+            let policies = lib.codex_policies(&ids)?;
+            Ok((
+                results,
+                groups,
+                policies,
+                lib.sources()?,
+                lib.codex_settings()?,
+            ))
         })
         .await
     {
-        Ok((results, groups, sources, codex)) => {
+        Ok((results, groups, policies, sources, codex)) => {
             let reset = format!(
                 "/?repository_source={}&repository={}",
                 encoded(&selection.repository_source),
                 encoded(&selection.repository)
             );
             let page_url = |offset| {
-                format!(
-                    "{reset}&q={}&source={}&tag={}&category={}&status={}&offset={offset}",
-                    encoded(&query.q),
-                    encoded(&query.source),
-                    encoded(&query.tag),
-                    encoded(&query.category),
-                    encoded(&query.status)
-                )
+                let mut page = query.clone();
+                page.offset = offset;
+                repository_page_url(&selection, &page)
             };
+            let current_query = page_url(query.offset).trim_start_matches("/?").to_owned();
             let previous = if query.offset > 0 {
                 page_url(query.offset.saturating_sub(50))
             } else {
@@ -315,6 +493,8 @@ async fn index(
                 selected,
                 reset,
                 results,
+                policies,
+                current_query,
                 sources,
                 codex,
                 message: notice.message,
@@ -624,6 +804,88 @@ async fn bulk(State(state): State<AppState>, Form(f): Form<BulkForm>) -> Respons
         Err(e) => failure(e),
     }
 }
+// 重複する selected は保持し、単一フィールドの重複や未知のキーは拒否する。
+async fn repository_bulk(
+    State(state): State<AppState>,
+    Form(fields): Form<Vec<(String, String)>>,
+) -> Response {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Scope {
+        repository_source: String,
+        repository: String,
+    }
+    let mut csrf = None;
+    let mut published = None;
+    let mut mode = None;
+    let mut selections = Vec::new();
+    for (key, value) in fields {
+        let slot = match key.as_str() {
+            "csrf" => &mut csrf,
+            "published" => &mut published,
+            "codex_mode" => &mut mode,
+            "selected" => {
+                let Ok(scope) = serde_json::from_str::<Scope>(&value) else {
+                    return error(StatusCode::BAD_REQUEST, "取得元の選択が不正です。");
+                };
+                if scope.repository_source.is_empty() {
+                    return error(StatusCode::BAD_REQUEST, "取得元の選択が不正です。");
+                }
+                selections.push(RepositorySelection {
+                    repository_source: scope.repository_source,
+                    repository: scope.repository,
+                });
+                continue;
+            }
+            _ => return error(StatusCode::BAD_REQUEST, "取得元の一括設定が不正です。"),
+        };
+        if slot.replace(value).is_some() {
+            return error(StatusCode::BAD_REQUEST, "取得元の一括設定が不正です。");
+        }
+    }
+    let (Some(csrf), Some(published), Some(mode)) = (csrf, published, mode) else {
+        return error(StatusCode::BAD_REQUEST, "取得元の一括設定が不正です。");
+    };
+    if let Some(response) = csrf_error(&state, &csrf) {
+        return response;
+    }
+    if selections.is_empty() {
+        return error(StatusCode::BAD_REQUEST, "取得元を1件以上選んでください。");
+    }
+    let published = match published.as_str() {
+        "" => None,
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => return error(StatusCode::BAD_REQUEST, "公開状態が不正です。"),
+    };
+    let codex = if mode.is_empty() {
+        None
+    } else {
+        let Some(policy) = codex_mode(&mode) else {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "Codexでの使い方を選択してください。",
+            );
+        };
+        Some(policy)
+    };
+    if published.is_none() && codex.is_none() {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "変更する公開状態・Codexでの使い方を指定してください。",
+        );
+    }
+    match state
+        .run_mut(move |lib| lib.bulk_repository_settings(&selections, published, codex))
+        .await
+    {
+        Ok((updated, skipped)) => redirect(
+            "/",
+            &format!("取得元の一括設定: {updated}件更新、{skipped}件対象外。"),
+        ),
+        Err(e) => failure(e),
+    }
+}
 #[derive(Template)]
 #[template(path = "detail.html")]
 struct DetailPage {
@@ -915,6 +1177,10 @@ async fn asset(Path(name): Path<String>) -> Response {
             "text/javascript; charset=utf-8",
             include_bytes!("../static/app.js"),
         ),
+        "policy-navigation.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../static/policy-navigation.js"),
+        ),
         "i18n.js" => (
             "text/javascript; charset=utf-8",
             include_bytes!("../static/i18n.js"),
@@ -922,10 +1188,6 @@ async fn asset(Path(name): Path<String>) -> Response {
         "theme.js" => (
             "text/javascript; charset=utf-8",
             include_bytes!("../static/theme.js"),
-        ),
-        "htmx.min.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../static/htmx.min.js"),
         ),
         "icon-32.png" => ("image/png", include_bytes!("../static/icons/icon-32.png")),
         "icon-180.png" => ("image/png", include_bytes!("../static/icons/icon-180.png")),

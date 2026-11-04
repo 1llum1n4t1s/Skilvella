@@ -1,4 +1,7 @@
 [hidden] { display: none !important; }
+.policy-recovery { display: none; }
+.policy-restoring main { visibility: hidden; }
+.policy-restoring .policy-recovery { display: block; margin: 24px; }
 
 :root {
   color-scheme: light;
@@ -123,14 +126,14 @@ button:disabled, select:disabled { cursor: default; opacity: .45; box-shadow: no
 .small { min-height: 34px; padding: 6px 12px; font-size: .9rem; }
 .destructive { color: var(--danger); }
 .destructive:hover { color: var(--danger); background: var(--danger-bg); border-color: var(--danger); box-shadow: none; }
-input:not([type=checkbox]), select, textarea {
+input:not([type=checkbox]):not([type=radio]), select, textarea {
   width: 100%; min-width: 0; min-height: 41px; padding: 10px 12px;
   border: 1px solid var(--line); border-radius: 4px;
   background: var(--input); color: var(--ink);
   caret-color: var(--accent);
 }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .85; }
-input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
+input[type=checkbox], input[type=radio] { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
 textarea { resize: vertical; }
 label { display: flex; flex-direction: column; gap: 8px; font-weight: 600; font-size: .9rem; }
 input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible, summary:focus-visible {
@@ -220,8 +223,13 @@ code, .path { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; o
 .bulk-note { margin: 0; padding: 10px 18px; background: var(--paper); border-inline: 1px solid var(--line); }
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 4px 10px; background: var(--paper); }
 table { border-collapse: collapse; width: 100%; text-align: left; }
-.table-wrap table { min-width: 800px; }
+.table-wrap table { min-width: 1050px; }
 .table-wrap .states { min-width: 160px; }
+.codex-mode-cell { min-width: 220px; }
+.codex-mode-options { display: grid; gap: 7px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.codex-mode-options label { flex-direction: row; align-items: flex-start; gap: 7px; font-size: 12px; font-weight: 500; line-height: 1.35; }
+.codex-mode-options input { flex: 0 0 auto; margin: 0; }
+.codex-policy-status:not(:empty) { display: block; margin-top: 8px; }
 th { background: var(--input); color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .05em; white-space: nowrap; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 td { padding: 18px; vertical-align: top; border-bottom: 1px solid var(--line); font-size: 12px; }
 tr:last-child td { border-bottom: 0; }
@@ -271,8 +279,7 @@ tbody tr:hover { background: var(--violet-soft); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 .skip { position: fixed; left: 12px; top: -80px; z-index: 30; background: var(--paper); padding: 12px; }
 .skip:focus { top: 12px; }
-.htmx-indicator { display: none; }
-.htmx-request .htmx-indicator { display: inline; color: var(--muted); font-size: 12px; }
+[data-preview-status] { color: var(--muted); font-size: 12px; }
 .confirmation-dialog { width: calc(100% - 32px); max-width: 560px; max-height: calc(100dvh - 32px); margin: auto; padding: 26px; border: 1px solid var(--accent); border-radius: 3px 14px 3px 14px; background: var(--paper); color: var(--ink); overflow: auto; box-shadow: 0 0 0 5px var(--violet-soft), 0 20px 80px #0005; }
 .confirmation-dialog::backdrop { background: #040815b8; backdrop-filter: blur(4px); }
 .confirmation-dialog h2 { margin: 0 0 16px; font-size: 20px; }
@@ -345,4 +352,13 @@ tbody tr:hover { background: var(--violet-soft); }
 
 .repository-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
 .repository-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; border: 1px solid var(--line); background: var(--paper); text-decoration: none; overflow-wrap: anywhere; }
-.repository-card:hover, .repository-card:focus-visible { border-color: var(--accent); background: var(--raised); }
+.repository-card { position: relative; }
+.repository-card:hover, .repository-card:focus-within { border-color: var(--accent); background: var(--raised); }
+.repository-card .repository-link { color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.repository-link::after { content: ""; position: absolute; inset: 0; z-index: 1; }
+.repository-link:hover { text-decoration: underline; }
+.repository-select { position: relative; z-index: 2; display: flex; flex-direction: row; align-items: center; gap: .5rem; font-size: .875rem; }
+.repository-select input { width: auto; flex: 0 0 auto; }
+.repository-select:has(input:disabled) { opacity: .6; }
+.repository-card:has(input:checked) { border-color: var(--accent); background: var(--raised); }
+.repository-bulk { margin-top: 1rem; }
