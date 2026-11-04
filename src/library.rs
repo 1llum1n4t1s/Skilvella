@@ -1333,9 +1333,7 @@ mod migration {
     }
 }
 
-#[cfg(windows)]
-use anyhow::bail;
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use saphyr::LoadableYamlNode;
 use sha2::{Digest, Sha256};
