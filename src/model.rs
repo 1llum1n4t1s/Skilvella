@@ -134,6 +134,7 @@ pub struct SkillMetadata {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct SkillFile {
+    pub revision: String,
     pub path: String,
     pub text: String,
     pub start_line: usize,

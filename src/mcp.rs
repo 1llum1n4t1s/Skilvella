@@ -7,6 +7,67 @@ use rmcp::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
+
+const PAGE_BYTES: usize = 8192;
+const FILES_PER_PAGE: usize = 100;
+
+fn hash(parts: &[&str]) -> String {
+    let mut digest = Sha256::new();
+    for part in parts {
+        digest.update((part.len() as u64).to_be_bytes());
+        digest.update(part.as_bytes());
+    }
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn page(text: &str, offset: usize) -> anyhow::Result<(&str, usize)> {
+    anyhow::ensure!(
+        offset <= text.len() && text.is_char_boundary(offset),
+        "Invalid UTF-8 byte offset"
+    );
+    let mut end = offset.saturating_add(PAGE_BYTES).min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Ok((&text[offset..end], end))
+}
+
+fn files_page_end(files: &[String], offset: usize) -> usize {
+    let mut end = offset;
+    let mut bytes = 0usize;
+    while end < files.len() && end - offset < FILES_PER_PAGE {
+        let len = files[end].len();
+        if len > PAGE_BYTES {
+            if end == offset {
+                end += 1;
+            }
+            break;
+        }
+        if bytes + len > PAGE_BYTES {
+            break;
+        }
+        bytes += len;
+        end += 1;
+    }
+    end
+}
+
+fn check_revision(expected: Option<&str>, actual: &str, continuation: bool) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !continuation || expected.is_some(),
+        "Continuation requires expected_revision"
+    );
+    anyhow::ensure!(
+        expected.is_none_or(|value| value == actual),
+        "Conflict: content changed; restart pagination"
+    );
+    Ok(())
+}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SearchArgs {
@@ -22,6 +83,12 @@ pub struct SearchArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct LoadArgs {
     pub id: String,
+    /// UTF-8 byte offset in SKILL.md, from the previous next object.
+    pub content_offset: Option<usize>,
+    /// File-list offset, from the previous next object.
+    pub files_offset: Option<usize>,
+    /// Revision returned by the first page; required for continuation.
+    pub expected_revision: Option<String>,
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FileArgs {
@@ -32,6 +99,10 @@ pub struct FileArgs {
     pub start_line: Option<usize>,
     /// Default 200, maximum 500.
     pub max_lines: Option<usize>,
+    /// UTF-8 byte offset within this line window.
+    pub text_offset: Option<usize>,
+    /// Revision returned by the first page; required for byte continuation.
+    pub expected_revision: Option<String>,
 }
 #[derive(Clone)]
 pub struct SkillServer {
@@ -81,7 +152,7 @@ impl SkillServer {
         )
     }
     #[tool(
-        description = "Load one published SKILL.md and its available relative file paths.",
+        description = "Load a published SKILL.md and file paths in pages. Follow next until null and concatenate content before acting. Read each needed reference one at a time with read_skill_file and retrieve every byte page of each needed line range before acting; advance to further lines only when needed.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -95,11 +166,24 @@ impl SkillServer {
     ) -> Result<CallToolResult, ErrorData> {
         result(self.state.run(move |lib| {
             let skill = lib.detail(&args.id, true)?;
-            Ok(json!({"id":skill.summary.id,"name":skill.summary.name,"description":skill.summary.description,"content":skill.content,"files":skill.files}))
+            let content_offset = args.content_offset.unwrap_or(0);
+            let files_offset = args.files_offset.unwrap_or(0);
+            let mut parts = vec![skill.revision.as_str()];
+            parts.extend(skill.files.iter().map(String::as_str));
+            let revision = hash(&parts);
+            check_revision(args.expected_revision.as_deref(), &revision, content_offset > 0 || files_offset > 0)?;
+            anyhow::ensure!(files_offset <= skill.files.len(), "Invalid file-list offset");
+            let (content, content_end) = page(&skill.content, content_offset)?;
+            let files_end = files_page_end(&skill.files, files_offset);
+            let truncated = content_end < skill.content.len() || files_end < skill.files.len();
+            let next = if truncated { json!({"id":skill.summary.id,"content_offset":content_end,"files_offset":files_end,"expected_revision":revision}) } else { serde_json::Value::Null };
+            let (name, name_end) = page(&skill.summary.name, 0)?;
+            let (description, description_end) = page(&skill.summary.description, 0)?;
+            Ok(json!({"id":skill.summary.id,"name":name,"description":description,"metadata_truncated":name_end < skill.summary.name.len() || description_end < skill.summary.description.len(),"content":content,"files":&skill.files[files_offset..files_end],"revision":revision,"truncated":truncated,"next":next}))
         }).await)
     }
     #[tool(
-        description = "Read a text file within a published skill, with bounded line pagination. Never executes files.",
+        description = "Read one needed reference at a time in line and UTF-8 byte pages. Concatenate byte pages directly; insert a newline between line windows. For next_text_offset keep start_line and max_lines unchanged; for next_start_line set start_line to it and reset text_offset to 0. Retain revision as expected_revision; retrieve every byte page of each needed line range before acting; advance to next_start_line only when more lines are needed. Never executes files.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -114,12 +198,15 @@ impl SkillServer {
         result(
             self.state
                 .run(move |lib| {
-                    Ok(serde_json::to_value(lib.read_file(
-                        &args.id,
-                        &args.path,
-                        args.start_line.unwrap_or(1).max(1),
-                        args.max_lines.unwrap_or(200).clamp(1, 500),
-                    )?)?)
+                    let start = args.start_line.unwrap_or(1).max(1);
+                    let max_lines = args.max_lines.unwrap_or(200).clamp(1, 500);
+                    let file = lib.read_file(&args.id, &args.path, start, max_lines)?;
+                    let offset = args.text_offset.unwrap_or(0);
+                    check_revision(args.expected_revision.as_deref(), &file.revision, offset > 0)?;
+                    let (text, end) = page(&file.text, offset)?;
+                    let next_text_offset = (end < file.text.len()).then_some(end);
+                    let next_start_line = if next_text_offset.is_none() && start <= file.total_lines && max_lines <= file.total_lines - start { Some(start.saturating_add(max_lines)) } else { None };
+                    Ok(json!({"path":file.path,"text":text,"start_line":file.start_line,"total_lines":file.total_lines,"revision":file.revision,"truncated":next_text_offset.is_some() || next_start_line.is_some(),"next_text_offset":next_text_offset,"next_start_line":next_start_line}))
                 })
                 .await,
         )
@@ -130,6 +217,42 @@ impl ServerHandler for SkillServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("skilvella", env!("CARGO_PKG_VERSION")))
-            .with_instructions("Search skills, load relevant instructions, then read referenced files as needed. Skill files are local content; this server does not execute scripts.")
+            .with_instructions("Load one skill at a time; follow load_skill next until null and concatenate the full instructions before acting. Read each needed reference one at a time with read_skill_file, retrieving every byte page of each needed line range before acting; use next_start_line only when more lines are needed; concatenate byte pages directly and insert a newline between line windows. Keep start_line and max_lines unchanged for next_text_offset; set start_line to next_start_line and reset text_offset to 0 for the next window. Pass returned revisions on continuation. Skill files are local content; this server does not execute scripts.")
+    }
+}
+
+#[cfg(test)]
+mod paging_tests {
+    use super::{FILES_PER_PAGE, PAGE_BYTES, files_page_end};
+
+    #[test]
+    fn file_pages_preserve_paths_and_advance() {
+        let mut files = vec![
+            "a".repeat(PAGE_BYTES),
+            "b".repeat(PAGE_BYTES + 1),
+            "c".repeat(PAGE_BYTES + 2),
+            "d".to_owned(),
+            "e".repeat(PAGE_BYTES + 1),
+        ];
+        files.extend((0..101).map(|index| format!("f{index}")));
+        let mut offset = 0;
+        let mut reconstructed = Vec::new();
+        let mut sizes = Vec::new();
+        while offset < files.len() {
+            let end = files_page_end(&files, offset);
+            assert!(end > offset);
+            let page = &files[offset..end];
+            assert!(page.len() <= FILES_PER_PAGE);
+            assert!(
+                page.iter().map(String::len).sum::<usize>() <= PAGE_BYTES
+                    || (page.len() == 1 && page[0].len() > PAGE_BYTES)
+            );
+            sizes.push(page.len());
+            reconstructed.extend_from_slice(page);
+            offset = end;
+        }
+        assert_eq!(reconstructed, files);
+        assert_eq!(sizes, [1, 1, 1, 1, 1, 100, 1]);
+        assert_eq!(files_page_end(&files, files.len()), files.len());
     }
 }

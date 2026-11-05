@@ -38,7 +38,7 @@ mod codex_index {
     }
 
     // 個別の入口と検索の入口で、直接接続・集約接続の案内を共通化する。
-    const MCP_ACCESS: &str = "MCP tool access: use the connected Skilvella tools directly when available, including their advertised namespace. If Toolport is available, use toolport_search_tools to discover each required capability (query: load_skill, read_skill_file, or search_skills), then invoke the exact returned tool name with toolport_call_tool, passing the tool parameters inside arguments. Do not guess a server prefix or treat a tool missing from the initial tool list as a disconnected MCP. If the Toolport helpers are deferred, discover them in the available tool inventory first. Only report MCP as unavailable after tool discovery or an actual MCP request fails; include that failure. Never replace MCP retrieval with local skill files.\n";
+    const MCP_ACCESS: &str = "MCP tool access: use the connected Skilvella tools directly when available, including their advertised namespace. If Toolport is available, use toolport_search_tools to discover each required capability (query: load_skill, read_skill_file, or search_skills), then invoke the exact returned tool name with toolport_call_tool, passing the tool parameters inside arguments. Do not guess a server prefix or treat a tool missing from the initial tool list as a disconnected MCP. If the Toolport helpers are deferred, discover them in the available tool inventory first. Only report MCP as unavailable after tool discovery or an actual MCP request fails; include that failure. Load one skill at a time; follow load_skill next until null and concatenate all content before acting. Read each needed reference one at a time with read_skill_file, retrieving every byte page of each needed line range before acting and using next_start_line only when more lines are needed; concatenate byte pages directly and insert a newline between line windows; keep start_line and max_lines unchanged for next_text_offset, then set start_line to next_start_line and reset text_offset to 0; pass returned revisions on continuation. Never replace MCP retrieval with local skill files.\n";
 
     fn setting(c: &Connection, key: &str) -> Result<Option<String>> {
         Ok(
@@ -2864,6 +2864,7 @@ impl Library {
             "Conflict: skill changed during file read"
         );
         Self::check_file_boundary(&c, id, root, &target)?;
+        let file_revision = revision(&format!("{}\0{}", before.revision, text));
         let total_lines = text.lines().count();
         let start = start_line.max(1);
         let text = text
@@ -2873,6 +2874,7 @@ impl Library {
             .collect::<Vec<_>>()
             .join("\n");
         Ok(SkillFile {
+            revision: file_revision,
             path: path.to_owned(),
             text,
             start_line: start,

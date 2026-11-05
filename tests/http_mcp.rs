@@ -63,6 +63,13 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         "first\nsecond\nthird\n",
     )
     .unwrap();
+    for index in 0..110 {
+        fs::write(
+            source.join(format!("example/references/{index:03}.txt")),
+            "x",
+        )
+        .unwrap();
+    }
     let state = AppState::new(Library::open(&base.join("data")).unwrap());
     let token = state.csrf.to_string();
     let server = common::HttpServer::start(state.clone()).await;
@@ -274,8 +281,215 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     )
     .await;
     assert_eq!(loaded["structuredContent"]["content"], original);
+    let mut short_files: Vec<String> = loaded["structuredContent"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| path.as_str().unwrap().to_owned())
+        .collect();
+    let mut next = loaded["structuredContent"]["next"].clone();
+    assert!(!next.is_null());
+    while !next.is_null() {
+        let response = rpc(
+            &client,
+            &base_url,
+            71,
+            "tools/call",
+            json!({"name":"load_skill","arguments":next}),
+        )
+        .await;
+        let data = &response["structuredContent"];
+        assert_eq!(data["content"], "");
+        short_files.extend(
+            data["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|path| path.as_str().unwrap().to_owned()),
+        );
+        next = data["next"].clone();
+    }
+    assert_eq!(short_files, state.library.detail(&id, true).unwrap().files);
+
     let file = rpc(&client, &base_url, 6, "tools/call", json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt","start_line":2,"max_lines":1}})).await;
     assert_eq!(file["structuredContent"]["text"], "second");
+    let large_content = format!(
+        "---\nname: rust-example\ndescription: Build useful Rust tools\n---\n{}",
+        "日本語".repeat(4000)
+    );
+    let before = state.library.detail(&id, false).unwrap();
+    state
+        .library
+        .save_content(&id, &before.revision, &large_content)
+        .unwrap();
+    let mut args = json!({"id":id});
+    let mut collected = String::new();
+    let mut files = Vec::new();
+    let mut first = Value::Null;
+    let mut saw_files_finish_before_content = false;
+    loop {
+        let response = rpc(
+            &client,
+            &base_url,
+            60,
+            "tools/call",
+            json!({"name":"load_skill","arguments":args}),
+        )
+        .await;
+        let data = &response["structuredContent"];
+        collected.push_str(data["content"].as_str().unwrap());
+        let file_page = data["files"].as_array().unwrap();
+        assert!(file_page.len() <= 100);
+        assert!(
+            file_page
+                .iter()
+                .map(|path| path.as_str().unwrap().len())
+                .sum::<usize>()
+                <= 8192
+        );
+        files.extend(
+            file_page
+                .iter()
+                .map(|path| path.as_str().unwrap().to_owned()),
+        );
+        if first.is_null() {
+            first = data.clone();
+        }
+        if data["next"].is_null() {
+            break;
+        }
+        args = data["next"].clone();
+        if args["files_offset"].as_u64().unwrap() as usize
+            == state.library.detail(&id, true).unwrap().files.len()
+            && (args["content_offset"].as_u64().unwrap() as usize) < large_content.len()
+        {
+            saw_files_finish_before_content = true;
+        }
+    }
+    assert_eq!(collected, large_content);
+    assert!(saw_files_finish_before_content);
+    assert_eq!(files, state.library.detail(&id, true).unwrap().files);
+    let invalid_offset = rpc(&client, &base_url, 61, "tools/call", json!({"name":"load_skill","arguments":{"id":id,"content_offset":1,"expected_revision":first["revision"]}})).await;
+    // Offset 1 is valid ASCII; use the middle of the first Japanese character instead.
+    assert_ne!(invalid_offset["isError"], true);
+    let bad = large_content.find('日').unwrap() + 1;
+    let invalid_offset = rpc(&client, &base_url, 62, "tools/call", json!({"name":"load_skill","arguments":{"id":id,"content_offset":bad,"expected_revision":first["revision"]}})).await;
+    assert_eq!(invalid_offset["isError"], true);
+    fs::write(source.join("example/references/added.txt"), "added").unwrap();
+    let stale_list = rpc(
+        &client,
+        &base_url,
+        69,
+        "tools/call",
+        json!({"name":"load_skill","arguments":first["next"]}),
+    )
+    .await;
+    assert_eq!(stale_list["isError"], true);
+    assert!(
+        stale_list["structuredContent"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Conflict: content changed")
+    );
+    let fresh = rpc(
+        &client,
+        &base_url,
+        70,
+        "tools/call",
+        json!({"name":"load_skill","arguments":{"id":id}}),
+    )
+    .await;
+    let current = state.library.detail(&id, false).unwrap();
+    let modified_content = large_content.replace("日本語", "語本日");
+    state
+        .library
+        .save_content(&id, &current.revision, &modified_content)
+        .unwrap();
+    let stale_page = rpc(
+        &client,
+        &base_url,
+        63,
+        "tools/call",
+        json!({"name":"load_skill","arguments":fresh["structuredContent"]["next"]}),
+    )
+    .await;
+    assert_eq!(stale_page["isError"], true);
+    assert!(
+        stale_page["structuredContent"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Conflict: content changed")
+    );
+    let current = state.library.detail(&id, false).unwrap();
+    state
+        .library
+        .save_content(&id, &current.revision, original)
+        .unwrap();
+
+    let long_line = "日本語".repeat(4000);
+    fs::write(
+        source.join("example/references/help.txt"),
+        format!("first\r\n{long_line}\r\nlast\r\n"),
+    )
+    .unwrap();
+    let mut offset = 0;
+    let mut reconstructed = String::new();
+    let mut revision = Value::Null;
+    loop {
+        let response = rpc(&client, &base_url, 64, "tools/call", json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt","start_line":2,"max_lines":1,"text_offset":offset,"expected_revision":revision}})).await;
+        let data = &response["structuredContent"];
+        reconstructed.push_str(data["text"].as_str().unwrap());
+        revision = data["revision"].clone();
+        if data["next_text_offset"].is_null() {
+            assert_eq!(data["next_start_line"], 3);
+            break;
+        }
+        offset = data["next_text_offset"].as_u64().unwrap();
+    }
+    assert_eq!(reconstructed, long_line);
+    let last = rpc(&client, &base_url, 67, "tools/call", json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt","start_line":3,"max_lines":1,"expected_revision":revision}})).await;
+    assert_eq!(
+        format!(
+            "{}\n{}",
+            reconstructed,
+            last["structuredContent"]["text"].as_str().unwrap()
+        ),
+        format!("{long_line}\nlast")
+    );
+    let bad_file = rpc(&client, &base_url, 65, "tools/call", json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt","start_line":2,"max_lines":1,"text_offset":1,"expected_revision":revision}})).await;
+    assert_eq!(bad_file["isError"], true);
+    fs::write(
+        source.join("example/references/help.txt"),
+        "x".repeat(1024 * 1024 + 1),
+    )
+    .unwrap();
+    let oversized = rpc(
+        &client,
+        &base_url,
+        68,
+        "tools/call",
+        json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt"}}),
+    )
+    .await;
+    assert_eq!(oversized["isError"], true);
+    fs::write(
+        source.join("example/references/help.txt"),
+        format!("first\r\n{}\r\nlast\r\n", "語本日".repeat(4000)),
+    )
+    .unwrap();
+    let changed_file = rpc(&client, &base_url, 66, "tools/call", json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt","start_line":2,"max_lines":1,"text_offset":offset,"expected_revision":revision}})).await;
+    assert_eq!(changed_file["isError"], true);
+    assert!(
+        changed_file["structuredContent"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("Conflict: content changed")
+    );
+    fs::write(
+        source.join("example/references/help.txt"),
+        "first\nsecond\nthird\n",
+    )
+    .unwrap();
     let escaped = rpc(
         &client,
         &base_url,
