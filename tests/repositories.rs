@@ -9,6 +9,107 @@ use std::{fs, path::PathBuf};
 mod common;
 
 #[tokio::test]
+async fn scan_errors_link_to_global_list_editor_and_disappear_after_fix() {
+    let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("error-flow-{}", uuid::Uuid::new_v4()));
+    let source = root.join("source");
+    fs::create_dir_all(source.join("broken")).unwrap();
+    fs::write(source.join("broken/SKILL.md"), "---\nname: [\n---\nBody").unwrap();
+    let library = Library::open_for_user(&root.join("data"), &root.join("home"), None).unwrap();
+    library.add_source("test", &source).unwrap();
+    let broken = library
+        .search(
+            SearchQuery {
+                status: "error".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap()
+        .skills
+        .remove(0);
+    let revision = library.detail(&broken.id, false).unwrap().revision;
+    let state = AppState::new(library);
+    let csrf = state.csrf.to_string();
+    let server = common::HttpServer::start(state).await;
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let scan = client
+        .post(format!("{}/scan", server.base))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!("csrf={csrf}"))
+        .send()
+        .await
+        .unwrap();
+    let landing = client
+        .get(format!(
+            "{}{}",
+            server.base,
+            scan.headers()["location"].to_str().unwrap()
+        ))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(landing.contains("エラー1件"));
+    assert!(landing.contains("href=\"/?status=error\""));
+    let errors = client
+        .get(format!("{}/?status=error", server.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(errors.contains(&format!("href=\"/skills/{}\"", broken.id)));
+    assert!(errors.contains("broken/SKILL.md"));
+    assert!(errors.contains("構文の誤りは本文を修正して保存してください。"));
+    assert!(!errors.contains("id=\"repository-bulk-form\""));
+    let detail = client
+        .get(format!("{}/skills/{}", server.base, broken.id))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(detail.contains("読み取りエラー:"));
+    assert!(detail.contains("id=\"content\""));
+    let saved = client
+        .post(format!("{}/skills/{}/content", server.base, broken.id))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(format!("csrf={csrf}&revision={revision}&content=---%0Aname%3A%20repaired%0Adescription%3A%20repaired%20skill%0A---%0ABody"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), reqwest::StatusCode::SEE_OTHER);
+    let home = client
+        .get(&server.base)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!home.contains("読み取りエラーを確認・修正"));
+    let errors = client
+        .get(format!("{}/?status=error", server.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(errors.contains("該当するスキルはありません"));
+}
+
+#[tokio::test]
 async fn forget_missing_checks_paths_and_deletes_filtered_records_across_pages() {
     let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
         .map(PathBuf::from)

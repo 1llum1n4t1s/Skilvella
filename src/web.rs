@@ -363,6 +363,7 @@ struct IndexPage {
     selected: bool,
     reset: String,
     results: SearchResults,
+    error_count: usize,
     policies: BTreeMap<String, Option<CodexSkillPolicy>>,
     current_query: String,
     sources: Vec<Source>,
@@ -438,7 +439,7 @@ async fn index(
     query.source = selection.repository_source.clone();
     let q = query.clone();
     let selected = !selection.repository_source.is_empty()
-        || matches!(query.status.as_str(), "missing" | "all");
+        || matches!(query.status.as_str(), "error" | "missing" | "all");
     let scope = selection.clone();
     match state
         .run(move |lib| {
@@ -460,17 +461,28 @@ async fn index(
                 .map(|skill| skill.id.clone())
                 .collect::<Vec<_>>();
             let policies = lib.codex_policies(&ids)?;
+            let error_count = lib
+                .search(
+                    SearchQuery {
+                        status: "error".into(),
+                        limit: 1,
+                        ..Default::default()
+                    },
+                    false,
+                )?
+                .total;
             Ok((
                 results,
                 groups,
                 policies,
                 lib.sources()?,
                 lib.codex_settings()?,
+                error_count,
             ))
         })
         .await
     {
-        Ok((results, groups, policies, sources, codex)) => {
+        Ok((results, groups, policies, sources, codex, error_count)) => {
             let reset = format!(
                 "/?repository_source={}&repository={}",
                 encoded(&selection.repository_source),
@@ -500,6 +512,7 @@ async fn index(
                 selected,
                 reset,
                 results,
+                error_count,
                 policies,
                 current_query,
                 sources,

@@ -8,6 +8,8 @@
 {% if query.status != "missing" %}<p><a href="/?status=missing"><!--i18n-->存在しないスキルの登録を整理<!--/i18n--></a></p>{% endif %}
 <div class="heading"><h1><!--i18n-->ライブラリ <!--/i18n--><span class="count">{{ results.total }}</span></h1><form method="post" action="/scan"><input type="hidden" name="repository_source" value="{{ selection.repository_source }}"><input type="hidden" name="repository" value="{{ selection.repository }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" data-busy="スキャン中…"><!--i18n-->再スキャン<!--/i18n--></button></form></div>
 {% if !message.is_empty() %}<div class="notice" role="status">{{ message }}</div>{% endif %}
+{% if error_count > 0 && query.status != "error" %}<div class="notice warning"><a href="/?status=error"><!--i18n-->読み取りエラーを確認・修正<!--/i18n--> ({{ error_count }})</a></div>{% endif %}
+{% if query.status == "error" %}<p class="notice warning"><!--i18n-->スキル名またはパスを開くと、エラーの詳細と本文を確認できます。構文の誤りは本文を修正して保存してください。読み取りに失敗した場合は、ファイルの場所・権限・文字コードを確認して再スキャンしてください。<!--/i18n--></p>{% endif %}
 <div id="codex-sync-warning" class="notice warning" role="status" {% if codex.last_error.is_empty() %}hidden{% endif %}><p><!--i18n-->同期が停止しています。保存した設定はCodexへまだ反映されていません。以前の候補や自動選択が残っている可能性があります。<!--/i18n--></p><p id="codex-sync-error">{{ codex.last_error }}</p><a href="/settings#codex"><!--i18n-->Codex連携の設定<!--/i18n--></a></div>
 <p class="note"><!--i18n-->MCP公開だけではCodexの標準探索から外れません。二重読み込みを避けるには、標準探索先以外にスキルを配置して登録してください。<!--/i18n--> <a href="/sources"><!--i18n-->フォルダー<!--/i18n--></a></p>
 {% if !selected %}
