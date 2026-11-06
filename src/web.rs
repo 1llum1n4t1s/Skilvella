@@ -328,15 +328,18 @@ fn failure(e: anyhow::Error) -> Response {
     )
 }
 fn encoded(s: &str) -> String {
-    s.bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
-                (b as char).to_string()
-            } else {
-                format!("%{b:02X}")
-            }
-        })
-        .collect()
+    let mut result = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            result.push(b as char);
+        } else {
+            let hex = b"0123456789ABCDEF";
+            result.push('%');
+            result.push(hex[(b >> 4) as usize] as char);
+            result.push(hex[(b & 15) as usize] as char);
+        }
+    }
+    result
 }
 fn redirect(path: &str, message: &str) -> Response {
     Redirect::to(&format!("{path}?message={}", encoded(message))).into_response()
@@ -443,7 +446,7 @@ async fn index(
     let scope = selection.clone();
     match state
         .run(move |lib| {
-            let groups = lib.repository_groups()?;
+            let (groups, error_count) = lib.repository_groups_with_error_count()?;
             let results = if selected && scope.repository_source.is_empty() {
                 lib.search(q, false)?
             } else if selected {
@@ -461,16 +464,6 @@ async fn index(
                 .map(|skill| skill.id.clone())
                 .collect::<Vec<_>>();
             let policies = lib.codex_policies(&ids)?;
-            let error_count = lib
-                .search(
-                    SearchQuery {
-                        status: "error".into(),
-                        limit: 1,
-                        ..Default::default()
-                    },
-                    false,
-                )?
-                .total;
             Ok((
                 results,
                 groups,
@@ -1267,4 +1260,17 @@ async fn favicon() -> Response {
         include_bytes!("../static/icons/skilvella.ico").as_slice(),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn encodes_query_bytes() {
+        assert_eq!(super::encoded(""), "");
+        assert_eq!(super::encoded("aZ09-._~"), "aZ09-._~");
+        assert_eq!(
+            super::encoded(" /?&=+%日本語"),
+            "%20%2F%3F%26%3D%2B%25%E6%97%A5%E6%9C%AC%E8%AA%9E"
+        );
+    }
 }

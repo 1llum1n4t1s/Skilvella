@@ -12,17 +12,19 @@ use sha2::{Digest, Sha256};
 const PAGE_BYTES: usize = 8192;
 const FILES_PER_PAGE: usize = 100;
 
-fn hash(parts: &[&str]) -> String {
+fn hash<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
     let mut digest = Sha256::new();
     for part in parts {
         digest.update((part.len() as u64).to_be_bytes());
         digest.update(part.as_bytes());
     }
-    digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut revision = String::with_capacity(64);
+    for byte in digest.finalize() {
+        revision.push(HEX[(byte >> 4) as usize] as char);
+        revision.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    revision
 }
 
 fn page(text: &str, offset: usize) -> anyhow::Result<(&str, usize)> {
@@ -168,9 +170,7 @@ impl SkillServer {
             let skill = lib.mcp_detail(&args.id)?;
             let content_offset = args.content_offset.unwrap_or(0);
             let files_offset = args.files_offset.unwrap_or(0);
-            let mut parts = vec![skill.revision.as_str()];
-            parts.extend(skill.files.iter().map(String::as_str));
-            let revision = hash(&parts);
+            let revision = hash(std::iter::once(skill.revision.as_str()).chain(skill.files.iter().map(String::as_str)));
             check_revision(args.expected_revision.as_deref(), &revision, content_offset > 0 || files_offset > 0)?;
             anyhow::ensure!(files_offset <= skill.files.len(), "Invalid file-list offset");
             let (content, content_end) = page(&skill.content, content_offset)?;
@@ -218,6 +218,40 @@ impl ServerHandler for SkillServer {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("skilvella", env!("CARGO_PKG_VERSION")))
             .with_instructions("Load one skill at a time; follow load_skill next until null and concatenate the full instructions before acting. Read each needed reference one at a time with read_skill_file, retrieving every byte page of each needed line range before acting; use next_start_line only when more lines are needed; concatenate byte pages directly and insert a newline between line windows. Keep start_line and max_lines unchanged for next_text_offset; set start_line to next_start_line and reset text_offset to 0 for the next window. Pass returned revisions on continuation. Skill files are local content; this server does not execute scripts.")
+    }
+}
+
+#[cfg(test)]
+mod revision_tests {
+    use super::hash;
+
+    #[test]
+    fn revision_hash_matches_fixed_vectors() {
+        let vectors: &[(&[&str], &str)] = &[
+            (
+                &["revision-only"],
+                "2e2c2f28a442772afabf1a96f34b4b3ec68e584c2c58833f2871055562ea97cb",
+            ),
+            (
+                &["revision", "SKILL.md", "references/guide.md"],
+                "53d000a6dee96fecec3f5f97d136a8443ac33cff28206ad796a60681926e1065",
+            ),
+            (
+                &["更新版", "資料/使い方.md"],
+                "128b8805836822054e39261515e05f221f8544881b662c6b95b2eb6711b7a6ff",
+            ),
+            (
+                &["ab", "c"],
+                "601d5476e2ccfe2c87a2bba7a322659734a05749d5b5aa781f513e4912db0d5f",
+            ),
+            (
+                &["a", "bc"],
+                "3fafa1cf2f19a7c1129beb20cf0983f73a489a221fc0dd2f16d1be292d089205",
+            ),
+        ];
+        for &(parts, expected) in vectors {
+            assert_eq!(hash(parts.iter().copied()), expected, "{parts:?}");
+        }
     }
 }
 

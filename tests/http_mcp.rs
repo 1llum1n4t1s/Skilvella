@@ -447,6 +447,15 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         offset = data["next_text_offset"].as_u64().unwrap();
     }
     assert_eq!(reconstructed, long_line);
+    assert_eq!(revision, {
+        use sha2::{Digest, Sha256};
+        let body_revision = state.library.detail(&id, true).unwrap().revision;
+        let full_text = format!("first\r\n{long_line}\r\nlast\r\n");
+        Sha256::digest(format!("{body_revision}\0{full_text}").as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    });
     let last = rpc(&client, &base_url, 67, "tools/call", json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt","start_line":3,"max_lines":1,"expected_revision":revision}})).await;
     assert_eq!(
         format!(

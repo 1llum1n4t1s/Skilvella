@@ -1,6 +1,8 @@
 use crate::model::*;
 mod codex_index {
-    use super::{CONTENT_LIMIT, Library, atomic_write, parse, read_text, reject_links, revision};
+    use super::{
+        CONTENT_LIMIT, Library, atomic_write, parse, read_text, reject_links, revision, safe_join,
+    };
     use crate::model::{CodexSkillPolicy, CodexSyncSettings};
     use anyhow::{Context, Result, ensure};
     use rusqlite::{Connection, OptionalExtension, params};
@@ -242,10 +244,16 @@ mod codex_index {
             &self,
             ids: &[String],
         ) -> Result<BTreeMap<String, Option<CodexSkillPolicy>>> {
+            if ids.is_empty() {
+                return Ok(BTreeMap::new());
+            }
             let c = self.connection()?;
+            let mut statement = c.prepare("SELECT value FROM settings WHERE key=?1")?;
             ids.iter()
                 .map(|id| {
-                    let value = setting(&c, &format!("codex_policy:{id}"))?;
+                    let value: Option<String> = statement
+                        .query_row([format!("codex_policy:{id}")], |row| row.get(0))
+                        .optional()?;
                     let policy = match value {
                         None => Some(CodexSkillPolicy::default()),
                         Some(value) => serde_json::from_str(&value).ok(),
@@ -556,11 +564,11 @@ mod codex_index {
             Ok(count)
         }
         fn codex_entry(&self, c: &Connection, id: &str) -> Result<Option<Entry>> {
-            let row: Option<(String, String, String)> = c.query_row("SELECT k.source,k.relative_path,k.revision FROM skills k JOIN sources s ON s.alias=k.source WHERE k.id=?1 AND s.active=1 AND k.published=1 AND k.missing=0 AND k.error IS NULL", [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-            let Some((source, relative_path, expected)) = row else {
+            let row: Option<(String, String, String, String)> = c.query_row("SELECT k.source,k.relative_path,k.revision,s.path FROM skills k JOIN sources s ON s.alias=k.source WHERE k.id=?1 AND s.active=1 AND k.published=1 AND k.missing=0 AND k.error IS NULL", [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+            let Some((source, relative_path, expected, root)) = row else {
                 return Ok(None);
             };
-            let (_, path) = self.locate(c, id)?;
+            let path = safe_join(Path::new(&root), &relative_path)?;
             let content = match read_text(&path, CONTENT_LIMIT) {
                 Ok(content) => content,
                 Err(error) => {
@@ -2097,6 +2105,13 @@ impl Library {
     }
 
     pub fn repository_groups(&self) -> Result<Vec<RepositoryGroup>> {
+        self.repository_groups_with_error_count()
+            .map(|(groups, _)| groups)
+    }
+
+    pub(crate) fn repository_groups_with_error_count(
+        &self,
+    ) -> Result<(Vec<RepositoryGroup>, usize)> {
         let c = self.connection()?;
         Self::repository_groups_on(&c)
     }
@@ -2104,13 +2119,17 @@ impl Library {
     fn repository_for<'a>(relative: &str, repositories: impl Iterator<Item = &'a str>) -> &'a str {
         repositories
             .filter(|root| {
-                !root.is_empty() && (*root == "." || relative.starts_with(&format!("{root}/")))
+                !root.is_empty()
+                    && (*root == "."
+                        || relative
+                            .strip_prefix(*root)
+                            .is_some_and(|rest| rest.starts_with('/')))
             })
             .max_by_key(|root| *root != ".")
             .unwrap_or_default()
     }
 
-    fn repository_groups_on(c: &Connection) -> Result<Vec<RepositoryGroup>> {
+    fn repository_groups_on(c: &Connection) -> Result<(Vec<RepositoryGroup>, usize)> {
         let mut groups: std::collections::BTreeMap<(String, String), RepositoryGroup> =
             Default::default();
         let mut roots = std::collections::BTreeMap::new();
@@ -2148,6 +2167,7 @@ impl Library {
                 }
             }
         }
+        let mut error_count = 0;
         let mut statement = c.prepare("SELECT k.source,k.relative_path,k.missing,k.error IS NULL FROM skills k JOIN sources s ON s.alias=k.source WHERE s.active=1")?;
         for row in statement.query_map([], |row| {
             Ok((
@@ -2158,6 +2178,7 @@ impl Library {
             ))
         })? {
             let (source, relative, missing, valid) = row?;
+            error_count += usize::from(!valid);
             let repository = Self::repository_for(
                 &relative,
                 roots
@@ -2182,7 +2203,7 @@ impl Library {
             group.missing += usize::from(missing);
             group.available += usize::from(!missing && valid);
         }
-        Ok(groups.into_values().collect())
+        Ok((groups.into_values().collect(), error_count))
     }
 
     pub fn repository_selection(&self, skill: &SkillSummary) -> Result<RepositorySelection> {
@@ -2712,7 +2733,7 @@ impl Library {
         self.ensure_no_pending_migration()?;
         let c = self.connection()?;
         let tx = c.unchecked_transaction()?;
-        let groups = Self::repository_groups_on(&tx)?;
+        let (groups, _) = Self::repository_groups_on(&tx)?;
         let scopes: HashSet<_> = selections
             .iter()
             .map(|selection| {
@@ -2882,7 +2903,7 @@ impl Library {
             "Conflict: skill changed during file read"
         );
         Self::check_file_boundary(&c, id, root, &target)?;
-        let file_revision = revision(&format!("{}\0{}", before.revision, text));
+        let file_revision = revision_parts(&[before.revision.as_bytes(), b"\0", text.as_bytes()]);
         let total_lines = text.lines().count();
         let start = start_line.max(1);
         let text = text
@@ -2963,7 +2984,14 @@ fn refresh_valid(c: &Connection, id: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 fn revision(text: &str) -> String {
-    Sha256::digest(text.as_bytes())
+    revision_parts(&[text.as_bytes()])
+}
+fn revision_parts(parts: &[&[u8]]) -> String {
+    let mut hash = Sha256::new();
+    for part in parts {
+        hash.update(part);
+    }
+    hash.finalize()
         .iter()
         .flat_map(|byte| {
             let hex = b"0123456789abcdef";

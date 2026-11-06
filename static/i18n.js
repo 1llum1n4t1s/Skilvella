@@ -1964,9 +1964,15 @@ const patterns = Object.keys(catalog).filter(key => /\{\w+\}/.test(key)).map(key
 function t(key, values = {}) {
   let source = key;
   if (!Object.hasOwn(catalog, source)) {
-    const match = patterns.map(item => ({ item, match: key.match(item.pattern) })).find(item => item.match);
-    if (match) { source = match.item.key; values = Object.fromEntries(match.item.names.map((name, index) => [name, match.match[index + 1]])); }
-    else return key;
+    let matchedItem;
+    let captures;
+    for (const item of patterns) {
+      captures = key.match(item.pattern);
+      if (captures) { matchedItem = item; break; }
+    }
+    if (!matchedItem) return key;
+    source = matchedItem.key;
+    values = Object.fromEntries(matchedItem.names.map((name, index) => [name, captures[index + 1]]));
   }
   const translated = language === "ja" ? source : catalog[source][languages.indexOf(language)];
   return translated.replace(/\{(\w+)\}/g, (token, name) => Object.hasOwn(values, name) ? values[name] : token);

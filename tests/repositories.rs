@@ -33,7 +33,7 @@ async fn scan_errors_link_to_global_list_editor_and_disappear_after_fix() {
     let revision = library.detail(&broken.id, false).unwrap().revision;
     let state = AppState::new(library);
     let csrf = state.csrf.to_string();
-    let server = common::HttpServer::start(state).await;
+    let server = common::HttpServer::start(state.clone()).await;
     let client = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -107,6 +107,89 @@ async fn scan_errors_link_to_global_list_editor_and_disappear_after_fix() {
         .await
         .unwrap();
     assert!(errors.contains("該当するスキルはありません"));
+
+    // 消失した正常行はエラーに含めず、消失したエラー行と別ソースのエラーは含める。
+    for (alias, folders) in [
+        ("mixed", vec![("invalid", false), ("valid", true)]),
+        ("other", vec![("invalid", false)]),
+        ("inactive", vec![("invalid", false)]),
+    ] {
+        let source = root.join(alias);
+        for (folder, valid) in folders {
+            fs::create_dir_all(source.join(folder)).unwrap();
+            fs::write(
+                source.join(folder).join("SKILL.md"),
+                if valid {
+                    "---\nname: normal\ndescription: Normal skill\n---\nBody"
+                } else {
+                    "---\nname: [\n---\nBody"
+                },
+            )
+            .unwrap();
+        }
+        state.library.add_source(alias, &source).unwrap();
+    }
+    state.library.remove_source("inactive").unwrap();
+    for folder in ["invalid", "valid"] {
+        fs::rename(
+            root.join("mixed").join(folder).join("SKILL.md"),
+            root.join("mixed").join(folder).join("saved.md"),
+        )
+        .unwrap();
+    }
+    state.library.scan().unwrap();
+    let errors = state
+        .library
+        .search(
+            SearchQuery {
+                status: "error".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+    assert_eq!(errors.total, 2);
+    assert!(errors.skills.iter().any(|skill| skill.source == "mixed"
+        && skill.relative_path == "invalid/SKILL.md"
+        && skill.missing
+        && skill.error.is_some()));
+    assert!(errors.skills.iter().any(|skill| skill.source == "other"
+        && skill.relative_path == "invalid/SKILL.md"
+        && !skill.missing
+        && skill.error.is_some()));
+    assert!(errors.skills.iter().all(|skill| skill.source != "inactive"));
+    let missing = state
+        .library
+        .search(
+            SearchQuery {
+                status: "missing".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+    assert!(missing.skills.iter().any(|skill| skill.source == "mixed"
+        && skill.relative_path == "valid/SKILL.md"
+        && skill.missing
+        && skill.error.is_none()));
+    let home = client
+        .get(&server.base)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(home.contains(&format!("<!--/i18n--> ({})", errors.total)));
+    let error_page = client
+        .get(format!("{}/?status=error", server.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(error_page.contains(&format!("class=\"count\">{}</span>", errors.total)));
 }
 
 #[tokio::test]
