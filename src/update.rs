@@ -623,6 +623,19 @@ pub fn run_installer_if_requested() -> anyhow::Result<bool> {
         return Ok(false);
     }
     ensure!(args.len() == 2, "Invalid updater invocation");
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+
+        // ヘルパーの標準エラーはログファイル。再起動先の標準エラーをnullにしても、
+        // 継承可能なままでは未使用のハンドルとして子へ残る。
+        let log = std::io::stderr();
+        if unsafe { SetHandleInformation(log.as_raw_handle(), HANDLE_FLAG_INHERIT, 0) } == 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("Could not prevent updater log inheritance");
+        }
+    }
     let path = PathBuf::from(&args[1]);
     plain_path(&path)?;
     let directory = path.parent().context("Missing update directory")?;
