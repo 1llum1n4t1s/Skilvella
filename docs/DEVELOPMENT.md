@@ -1,13 +1,12 @@
 # 開発
 
-Rust 1.99.1を `rust-toolchain.toml` に固定しています。`Cargo.lock` を使ってビルドしてください。WindowsではMSVC C++ビルドツールとWindows SDK、macOSではXcode Command Line Tools、LinuxではCコンパイラーが必要です。SQLiteのCソースは `rusqlite/bundled` で同梱します。Windows x64はCRTも静的リンクします。
+`rust-toolchain.toml` に固定されたRustを使用し、`Cargo.lock` を使ってビルドしてください。WindowsではMSVC C++ビルドツールとWindows SDK、macOSではXcode Command Line Tools、LinuxではCコンパイラーが必要です。SQLiteのCソースは `rusqlite/bundled` で同梱します。Windows x64はCRTも静的リンクします。
 
 ```sh
-cargo fmt --all --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
 cargo build --release --locked
 ```
+
+コード変更時の全チェックは [開発と検証](../AGENTS.md#開発と検証) に従ってください。
 
 テスト用のファイル・DBは次の隔離先に作成します。実際のスキルフォルダーやクライアント設定は使わず、ディレクトリ初期化・Codex入口生成にはテスト用のホームを明示します。
 
@@ -15,12 +14,12 @@ cargo build --release --locked
 | --- | --- |
 | `.work/test-library` | `tests/library.rs` |
 | `.work/test-directory` | `tests/directory.rs` |
-| `.work/test-http` | `tests/http_mcp.rs`、`tests/codex_http.rs`、`tests/localization.rs` |
+| `.work/test-http` | `tests/http_mcp.rs`、`tests/codex_http.rs` の通常フォーム検証、`tests/localization.rs` |
 | `.work/test-watch` | `tests/watch.rs` |
 | `.work/test-startup` | `tests/startup.rs`、`src/service.rs` 内のテスト |
 | `.work/test-codex-index` | `tests/codex_index.rs` |
 | `.work/test-launcher` | `tests/launcher.rs`（`launcher` 機能を指定した場合） |
-| `SKILVELLA_MIGRATION_TEST_ROOT` 配下（未指定時はOSの一時ディレクトリ配下） | `tests/migration.rs`、`tests/repositories.rs`、`tests/update.rs`、`src/update.rs` 内の一部テスト |
+| `SKILVELLA_MIGRATION_TEST_ROOT` 配下（未指定時はOSの一時ディレクトリ配下） | `tests/migration.rs`、`tests/repositories.rs`、`tests/update.rs`、`tests/codex_http.rs` の切断中保存検証、`src/update.rs` 内の一部テスト |
 
 ローカル検証では、`SKILVELLA_MIGRATION_TEST_ROOT` と子プロセスの `TEMP` / `TMP` をGit作業ツリー外の作業専用フォルダーへ設定してください。CIは `SKILVELLA_MIGRATION_TEST_ROOT` に `runner.temp` を指定します。調査用に残るデータは、不要になった時点で今回のテストが作成したフォルダーだけを清掃してください。
 

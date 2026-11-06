@@ -4,7 +4,7 @@ SkilvellaはRust製のローカルスキル管理アプリです。構造・デ�
 
 ## 開発と検証
 
-- `rust-toolchain.toml` のRust 1.99.1を使用し、依存解決は `Cargo.lock` に従ってください。manifestの最小Rust版は1.89、editionは2024です。
+- `rust-toolchain.toml` に固定されたRustを使用し、依存解決は `Cargo.lock` に従ってください。manifestの最小Rust版は1.89、editionは2024です。
 - WindowsではMSVC C++ビルドツールとWindows SDK、macOSではXcode Command Line Tools、LinuxではCコンパイラーが必要です。SQLiteはbundledビルド、Windows x64のCRT静的リンク設定は `.cargo/config.toml` にあります。
 - コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。CIはWindows / macOS / Linuxを対象とします。
 
