@@ -165,7 +165,7 @@ impl SkillServer {
         Parameters(args): Parameters<LoadArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         result(self.state.run(move |lib| {
-            let skill = lib.detail(&args.id, true)?;
+            let skill = lib.mcp_detail(&args.id)?;
             let content_offset = args.content_offset.unwrap_or(0);
             let files_offset = args.files_offset.unwrap_or(0);
             let mut parts = vec![skill.revision.as_str()];

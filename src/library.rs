@@ -2387,6 +2387,21 @@ impl Library {
         Ok((root, path))
     }
     pub fn detail(&self, id: &str, published_only: bool) -> Result<SkillDetail> {
+        self.detail_inner(id, published_only, true, true)
+    }
+
+    pub(crate) fn mcp_detail(&self, id: &str) -> Result<SkillDetail> {
+        self.detail_inner(id, true, true, false)
+    }
+
+    // 公開・実ファイルの検査を共通化し、取得先が使わない一覧や履歴は読まない。
+    fn detail_inner(
+        &self,
+        id: &str,
+        published_only: bool,
+        include_files: bool,
+        include_history: bool,
+    ) -> Result<SkillDetail> {
         let c = self.connection()?;
         let mut st=c.prepare("SELECT id,source,relative_path,name,description,tags,category,published,error,missing,updated_at,(SELECT count(*)>1 FROM skills d JOIN sources ds ON ds.alias=d.source WHERE ds.active=1 AND d.missing=0 AND d.error IS NULL AND d.name=k.name AND k.name<>'') FROM skills k WHERE id=?1")?;
         let mut summary = st.query_row([id], summary_row).context("Skill not found")?;
@@ -2434,7 +2449,7 @@ impl Library {
             }
         }
         let mut files = Vec::new();
-        if path.parent().is_some_and(Path::is_dir) {
+        if include_files && path.parent().is_some_and(Path::is_dir) {
             let boundaries = Self::nested_skill_roots(&c, id, path.parent().unwrap())?;
             auxiliary(
                 path.parent().context("Missing skill directory")?,
@@ -2444,18 +2459,21 @@ impl Library {
             )?;
         }
         files.sort();
-        let mut hs = c.prepare(
-            "SELECT id,created_at,reason FROM history WHERE skill_id=?1 ORDER BY id DESC",
-        )?;
-        let history = hs
-            .query_map([id], |r| {
+        let history = if include_history {
+            let mut hs = c.prepare(
+                "SELECT id,created_at,reason FROM history WHERE skill_id=?1 ORDER BY id DESC",
+            )?;
+            hs.query_map([id], |r| {
                 Ok(HistoryEntry {
                     id: r.get(0)?,
                     created_at: r.get(1)?,
                     reason: r.get(2)?,
                 })
             })?
-            .collect::<rusqlite::Result<_>>()?;
+            .collect::<rusqlite::Result<_>>()?
+        } else {
+            Vec::new()
+        };
         Ok(SkillDetail {
             codex_policy: Self::codex_policy_on(&c, id)?,
             summary,
@@ -2849,7 +2867,7 @@ impl Library {
         start_line: usize,
         max_lines: usize,
     ) -> Result<SkillFile> {
-        let before = self.detail(id, true)?;
+        let before = self.detail_inner(id, true, false, false)?;
         let c = self.connection()?;
         let (_, skill) = self.locate(&c, id)?;
         let root = skill.parent().context("Invalid skill directory")?;
@@ -2858,7 +2876,7 @@ impl Library {
         ensure!(target.is_file(), "Not a file");
         let text = read_text(&target, FILE_LIMIT)?;
         // Recheck publication and authoritative frontmatter immediately before returning reference text.
-        let after = self.detail(id, true)?;
+        let after = self.detail_inner(id, true, false, false)?;
         ensure!(
             before.revision == after.revision,
             "Conflict: skill changed during file read"
