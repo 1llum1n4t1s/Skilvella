@@ -1,53 +1,53 @@
-{% extends "base.html" %}{% block translate_title %}true{% endblock %}
+{% extends "base.html" %}
 {% block folders_current %}page{% endblock %}
-{% block title %}フォルダー · Skilvella{% endblock %}
+{% block title %}{{ locale.text("フォルダー · Skilvella") }}{% endblock %}
 {% block content %}
 <div class="folder-page">
-  <div class="heading"><h1><!--i18n-->スキルフォルダー<!--/i18n--></h1></div>
+  <div class="heading"><h1>{{ locale.text("スキルフォルダー") }}</h1></div>
   {% if !message.is_empty() %}<div class="notice" role="status">{{ message }}</div>{% endif %}
   <div class="folder-connection">
-    <p><span class="muted"><!--i18n-->MCP接続先<!--/i18n--></span> <code data-mcp-address><!--i18n-->/mcp（この画面と同じ接続先）<!--/i18n--></code></p>
+    <p><span class="muted">{{ locale.text("MCP接続先") }}</span> <code data-mcp-address>{{ locale.text("/mcp（この画面と同じ接続先）") }}</code></p>
   </div>
   <section id="mcp-directory" aria-labelledby="folders-heading">
-    <h2 id="folders-heading"><!--i18n-->管理中のフォルダー <!--/i18n--><span class="count">{{ sources.len() }}</span></h2>
+    <h2 id="folders-heading">{{ locale.text("管理中のフォルダー") }} <span class="count">{{ sources.len() }}</span></h2>
     {% if sources.is_empty() %}
-    <p class="panel muted"><!--i18n-->管理中のフォルダーはありません。下の「フォルダーを追加」から登録してください。<!--/i18n--></p>
+    <p class="panel muted">{{ locale.text("管理中のフォルダーはありません。下の「フォルダーを追加」から登録してください。") }}</p>
     {% else %}
     {% for s in sources %}
     <article class="panel folder-card">
-      <div class="folder-card-heading"><h3>{{ s.display_name }}</h3>{% if s.alias == directory.source_alias %}<span class="badge"><!--i18n-->既定<!--/i18n--></span>{% endif %}</div>
-      {% if s.display_name != s.alias %}<p class="note"><!--i18n-->識別子<!--/i18n-->: <code>{{ s.alias }}</code></p>{% endif %}
+      <div class="folder-card-heading"><h3>{{ s.display_name }}</h3>{% if s.alias == directory.source_alias %}<span class="badge">{{ locale.text("既定") }}</span>{% endif %}</div>
+      {% if s.display_name != s.alias %}<p class="note">{{ locale.text("識別子") }}: <code>{{ s.alias }}</code></p>{% endif %}
       <details class="folder-secondary">
-        <summary><!--i18n-->表示名を変更<!--/i18n--></summary>
+        <summary>{{ locale.text("表示名を変更") }}</summary>
         <form method="post" action="/sources/name" class="stack">
           <input type="hidden" name="csrf" value="{{ csrf }}">
           <input type="hidden" name="alias" value="{{ s.alias }}">
-          <label><!--i18n-->表示名<!--/i18n--><input name="display_name" value="{{ s.display_name }}" aria-describedby="source-name-help-{{ s.alias }}"></label>
-          <p class="note" id="source-name-help-{{ s.alias }}"><!--i18n-->画面上の名前だけを変更します。空欄で保存すると識別子に戻ります。<!--/i18n--></p>
-          <div class="actions"><button type="submit"><!--i18n-->保存<!--/i18n--></button></div>
+          <label>{{ locale.text("表示名") }}<input name="display_name" value="{{ s.display_name }}" aria-describedby="source-name-help-{{ s.alias }}"></label>
+          <p class="note" id="source-name-help-{{ s.alias }}">{{ locale.text("画面上の名前だけを変更します。空欄で保存すると識別子に戻ります。") }}</p>
+          <div class="actions"><button type="submit">{{ locale.text("保存") }}</button></div>
         </form>
       </details>
-      <p class="folder-location"><span class="muted"><!--i18n-->現在の場所<!--/i18n--></span><code>{{ self.display_path(s.path) }}</code></p>
-      <p class="note"><!--i18n-->スキル <!--/i18n-->{{ s.skill_count }}<!--i18n-->件<!--/i18n-->{% if s.error_count > 0 %} · <span class="error-text"><!--i18n-->読み取りエラー <!--/i18n-->{{ s.error_count }}<!--i18n-->件<!--/i18n--></span>{% endif %}</p>
+      <p class="folder-location"><span class="muted">{{ locale.text("現在の場所") }}</span><code>{{ self.display_path(s.path) }}</code></p>
+      <p class="note">{{ locale.text("スキル") }} {{ s.skill_count }}{{ locale.text("件") }}{% if s.error_count > 0 %} · <span class="error-text">{{ locale.text("読み取りエラー") }} {{ s.error_count }}{{ locale.text("件") }}</span>{% endif %}</p>
       {% if s.native_discovery_unknown %}
-      <p class="notice warning"><!--i18n-->Codexの探索先かどうか確認できません。フォルダーやドライブへの接続・読み取り権限を確認してください。<!--/i18n--></p>
+      <p class="notice warning">{{ locale.text("Codexの探索先かどうか確認できません。フォルダーやドライブへの接続・読み取り権限を確認してください。") }}</p>
       {% else %}
       {% if s.native_discovery %}
-      <p class="notice warning"><!--i18n-->Codexもこのフォルダーを直接読み込みます。二重読み込みを避けるには、Codexの標準探索先以外にスキルを配置して、そのフォルダーを登録してください。<!--/i18n--></p>
+      <p class="notice warning">{{ locale.text("Codexもこのフォルダーを直接読み込みます。二重読み込みを避けるには、Codexの標準探索先以外にスキルを配置して、そのフォルダーを登録してください。") }}</p>
       {% else %}
-      <p class="note"><!--i18n-->Codexの標準探索先の外です。独自の探索設定がある場合は、そちらも確認してください。<!--/i18n--></p>
+      <p class="note">{{ locale.text("Codexの標準探索先の外です。独自の探索設定がある場合は、そちらも確認してください。") }}</p>
       {% endif %}
       {% endif %}
       <div class="folder-card-secondary">
         {% if s.alias == directory.source_alias %}
         <details class="folder-secondary" {% if directory_editing %}open{% endif %}>
-          <summary><!--i18n-->参照するフォルダーを変更<!--/i18n--></summary>
+          <summary>{{ locale.text("参照するフォルダーを変更") }}</summary>
           {% include "directory_form.html" %}
         </details>
         {% endif %}
-        <form method="post" action="/sources/remove" data-confirm="このフォルダーを管理から外しますか？ フォルダーとファイルは削除しません。既定のフォルダーの場合は自動登録も停止します。">
+        <form method="post" action="/sources/remove" data-confirm="{{ locale.text("このフォルダーを管理から外しますか？ フォルダーとファイルは削除しません。既定のフォルダーの場合は自動登録も停止します。") }}">
           <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="alias" value="{{ s.alias }}">
-          <button class="destructive" type="submit" data-busy="解除中…"><!--i18n-->管理から外す<!--/i18n--></button><span class="note"><!--i18n-->ファイルは削除しません<!--/i18n--></span>
+          <button class="destructive" type="submit" data-busy="{{ locale.text("解除中…") }}">{{ locale.text("管理から外す") }}</button><span class="note">{{ locale.text("ファイルは削除しません") }}</span>
         </form>
       </div>
     </article>
@@ -55,19 +55,19 @@
     {% endif %}
   </section>
   <details class="panel folder-add" {% if sources.is_empty() || !alias.is_empty() || !path.is_empty() %}open{% endif %}>
-    <summary><!--i18n-->フォルダーを追加<!--/i18n--></summary>
-    <p class="note"><!--i18n-->既存のフォルダーを追加して、すべての階層のスキルを読み込みます。ファイルは移動せず、新しいスキルは非公開で登録します。<!--/i18n--></p>
+    <summary>{{ locale.text("フォルダーを追加") }}</summary>
+    <p class="note">{{ locale.text("既存のフォルダーを追加して、すべての階層のスキルを読み込みます。ファイルは移動せず、新しいスキルは非公開で登録します。") }}</p>
     <form method="post" action="/sources/add" class="stack">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label><!--i18n-->名前<!--/i18n--><input name="alias" value="{{ alias }}" required maxlength="100" placeholder="例: personal"></label>
-      <label><!--i18n-->フォルダーの場所（絶対パス）<!--/i18n--><input name="path" value="{{ self.display_path(path) }}" required placeholder="例: D:\Skills または /Users/you/Skills" spellcheck="false"></label>
-      <div><button type="submit" data-busy="追加中…"><!--i18n-->追加してスキャン<!--/i18n--></button></div>
+      <label>{{ locale.text("名前") }}<input name="alias" value="{{ alias }}" required maxlength="100" placeholder="{{ locale.text("例: personal") }}"></label>
+      <label>{{ locale.text("フォルダーの場所（絶対パス）") }}<input name="path" value="{{ self.display_path(path) }}" required placeholder="{{ locale.text("例: D:\\Skills または /Users/you/Skills") }}" spellcheck="false"></label>
+      <div><button type="submit" data-busy="{{ locale.text("追加中…") }}">{{ locale.text("追加してスキャン") }}</button></div>
     </form>
   </details>
   {% if !self.has_directory_source() %}
   <details class="panel folder-secondary" {% if directory_editing %}open{% endif %}>
-    <summary><!--i18n-->既定のフォルダーを指定する<!--/i18n--></summary>
-    {% if directory.mode == "disabled" %}<p class="note"><!--i18n-->既定のフォルダーの自動登録は停止中です。指定して保存すると管理を再開します。<!--/i18n--></p>{% endif %}
+    <summary>{{ locale.text("既定のフォルダーを指定する") }}</summary>
+    {% if directory.mode == "disabled" %}<p class="note">{{ locale.text("既定のフォルダーの自動登録は停止中です。指定して保存すると管理を再開します。") }}</p>{% endif %}
     {% include "directory_form.html" %}
   </details>
   {% endif %}

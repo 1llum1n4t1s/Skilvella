@@ -180,7 +180,7 @@ async fn scan_errors_link_to_global_list_editor_and_disappear_after_fix() {
         .text()
         .await
         .unwrap();
-    assert!(home.contains(&format!("<!--/i18n--> ({})", errors.total)));
+    assert!(home.contains(&format!("読み取りエラーを確認・修正 ({})", errors.total)));
     let error_page = client
         .get(format!("{}/?status=error", server.base))
         .send()
@@ -590,7 +590,7 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
         .unwrap();
     assert!(card.contains("取得元を確認できません"));
     assert!(card.contains("disabled"));
-    assert!(!card.contains("<!--i18n-->対象:"));
+    assert!(!card.contains("<span>対象:"));
 }
 
 #[tokio::test]
@@ -747,8 +747,7 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
     assert!(!top.contains("repository_source=test&#38;repository=."));
     assert!(top.contains("repository=repo\""));
     assert!(top.contains("repository=\""));
-    assert!(top.contains("現在のファイル: <!--/i18n-->51 ·"));
-    assert!(top.contains("<!--/i18n-->1</span>"));
+    assert!(top.contains("現在のファイル: 51 · 見つからない: 1</span>"));
     let page = get("?repository_source=test&repository=repo")
         .send()
         .await

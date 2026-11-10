@@ -1,9 +1,13 @@
+mod i18n;
+
+use self::i18n::Locale;
 use crate::{AppState, model::*};
 use askama::Template;
 use axum::{
-    Router,
+    Extension, Router,
     extract::{Form, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
+    middleware,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
@@ -31,11 +35,12 @@ async fn policy_operation_status(Path(id): Path<String>) -> Response {
     }
 }
 async fn policy_operation(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Form(form): Form<Token>,
 ) -> Response {
-    if let Some(response) = csrf_error(&state, &form.csrf) {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
         return response;
     }
     let Ok(id) = uuid::Uuid::parse_str(&id) else {
@@ -56,6 +61,7 @@ async fn policy_operation(
             axum::Json(serde_json::json!({"state": operations[&id].0})).into_response()
         }
         Err(_) => error(
+            locale,
             StatusCode::INTERNAL_SERVER_ERROR,
             "保存状態を確認できません。再読み込みしてください。",
         ),
@@ -67,6 +73,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(index))
         .route("/sources", get(sources))
         .route("/settings", get(settings))
+        .route("/settings/language", post(set_language))
         .route("/settings/codex", post(set_codex_enabled))
         .route(
             "/settings/policy-operations/{id}",
@@ -92,10 +99,12 @@ pub fn router() -> Router<AppState> {
         .route("/preview", post(preview))
         .route("/assets/{name}", get(asset))
         .route("/favicon.ico", get(favicon))
+        .layer(middleware::from_fn(i18n::localize))
 }
 #[derive(Template)]
 #[template(path = "settings.html")]
 struct SettingsPage {
+    locale: Locale,
     csrf: String,
     version: &'static str,
     codex: CodexSyncSettings,
@@ -105,15 +114,45 @@ impl SettingsPage {
         display_path(&self.codex.path)
     }
 }
-async fn settings(State(state): State<AppState>) -> Response {
+async fn settings(Extension(locale): Extension<Locale>, State(state): State<AppState>) -> Response {
     match state.run(|lib| lib.codex_settings()).await {
-        Ok(codex) => render(SettingsPage {
-            csrf: state.csrf.to_string(),
-            version: env!("CARGO_PKG_VERSION"),
-            codex,
-        }),
-        Err(e) => failure(e),
+        Ok(codex) => render(
+            locale,
+            SettingsPage {
+                locale,
+                csrf: state.csrf.to_string(),
+                version: env!("CARGO_PKG_VERSION"),
+                codex,
+            },
+        ),
+        Err(e) => failure(locale, e),
     }
+}
+#[derive(Deserialize)]
+struct LanguageForm {
+    csrf: String,
+    language: String,
+}
+async fn set_language(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(form): Form<LanguageForm>,
+) -> Response {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
+        return response;
+    }
+    let Some(language) = Locale::valid_preference(&form.language) else {
+        return error(
+            locale,
+            StatusCode::BAD_REQUEST,
+            "表示言語を選択してください。",
+        );
+    };
+    (
+        [(header::SET_COOKIE, locale.set_cookie(language))],
+        Redirect::to("/settings"),
+    )
+        .into_response()
 }
 #[derive(Deserialize)]
 struct CodexSettingsForm {
@@ -121,10 +160,11 @@ struct CodexSettingsForm {
     enabled: bool,
 }
 async fn set_codex_enabled(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Form(form): Form<CodexSettingsForm>,
 ) -> Response {
-    if let Some(response) = csrf_error(&state, &form.csrf) {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
         return response;
     }
     match state
@@ -132,7 +172,7 @@ async fn set_codex_enabled(
         .await
     {
         Ok(_) => Redirect::to("/settings#codex").into_response(),
-        Err(e) => failure(e),
+        Err(e) => failure(locale, e),
     }
 }
 #[derive(Deserialize)]
@@ -152,6 +192,7 @@ fn codex_mode(mode: &str) -> Option<crate::model::CodexSkillPolicy> {
     Some(crate::model::CodexSkillPolicy { automatic, command })
 }
 async fn set_codex_policy(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(query): Query<SearchQuery>,
@@ -159,11 +200,12 @@ async fn set_codex_policy(
     headers: HeaderMap,
     Form(form): Form<CodexPolicyForm>,
 ) -> Response {
-    if let Some(response) = csrf_error(&state, &form.csrf) {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
         return response;
     }
     let Some(policy) = codex_mode(&form.mode) else {
         return error(
+            locale,
             StatusCode::BAD_REQUEST,
             "Codexでの使い方を選択してください。",
         );
@@ -174,12 +216,14 @@ async fn set_codex_policy(
     } else {
         let Ok(id) = uuid::Uuid::parse_str(&form.operation) else {
             return error(
+                locale,
                 StatusCode::BAD_REQUEST,
                 "保存状態を確認できません。再読み込みしてください。",
             );
         };
         let Ok(mut operations) = policy_operations().lock() else {
             return error(
+                locale,
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "保存状態を確認できません。再読み込みしてください。",
             );
@@ -189,6 +233,7 @@ async fn set_codex_policy(
         });
         if operations.contains_key(&id) || operations.len() >= 256 {
             return error(
+                locale,
                 StatusCode::CONFLICT,
                 "保存状態を確認できません。再読み込みしてください。",
             );
@@ -234,25 +279,25 @@ async fn set_codex_policy(
                     serde_json::json!({"enabled": sync.enabled, "last_error": sync.last_error}),
                 )
                 .into_response(),
-                Err(e) => failure(e),
+                Err(e) => failure(locale, e),
             }
         }
         Ok(_) if !selection.repository_source.is_empty() => Redirect::to(&format!(
-            "{}&message={}#skill-{}",
+            "{}&message=codex-saved#skill-{}",
             repository_page_url(&selection, &query),
-            encoded("Codex設定を保存しました。同期状態を確認してください。"),
             encoded(&id),
         ))
         .into_response(),
-        Ok(_) => redirect(
-            &format!("/skills/{}", encoded(&id)),
-            "Codex設定を保存しました。同期状態を確認してください。",
-        ),
-        Err(e) => failure(e),
+        Ok(_) => redirect(&format!("/skills/{}", encoded(&id)), "codex-saved"),
+        Err(e) => failure(locale, e),
     }
 }
-async fn check_update(State(state): State<AppState>, Form(form): Form<Token>) -> Response {
-    if let Some(response) = csrf_error(&state, &form.csrf) {
+async fn check_update(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(form): Form<Token>,
+) -> Response {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
         return response;
     }
     match tokio::task::spawn_blocking(crate::update::check).await {
@@ -268,8 +313,12 @@ fn update_failure(message: String) -> Response {
     )
         .into_response()
 }
-async fn install_update(State(state): State<AppState>, Form(form): Form<Token>) -> Response {
-    if let Some(response) = csrf_error(&state, &form.csrf) {
+async fn install_update(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(form): Form<Token>,
+) -> Response {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
         return response;
     }
     let result = tokio::task::spawn_blocking(|| {
@@ -286,10 +335,11 @@ async fn install_update(State(state): State<AppState>, Form(form): Form<Token>) 
         Err(error) => update_failure(error.to_string()),
     }
 }
-fn render(t: impl Template) -> Response {
+fn render(locale: Locale, t: impl Template) -> Response {
     match t.render() {
         Ok(s) => Html(s).into_response(),
         Err(_) => error(
+            locale,
             StatusCode::INTERNAL_SERVER_ERROR,
             "画面を表示できませんでした。再読み込みしてください。",
         ),
@@ -298,34 +348,43 @@ fn render(t: impl Template) -> Response {
 #[derive(Template)]
 #[template(path = "error.html")]
 struct ErrorPage<'a> {
+    locale: Locale,
     message: &'a str,
 }
-fn error(status: StatusCode, message: &str) -> Response {
+fn error(locale: Locale, status: StatusCode, key: &str) -> Response {
+    error_page(locale, status, locale.text(key))
+}
+fn error_page(locale: Locale, status: StatusCode, message: &str) -> Response {
     (
         status,
         Html(
-            ErrorPage { message }
+            ErrorPage { locale, message }
                 .render()
-                .unwrap_or_else(|_| "エラー".into()),
+                .unwrap_or_else(|_| locale.text("エラー").into()),
         ),
     )
         .into_response()
 }
-fn csrf_error(state: &AppState, token: &str) -> Option<Response> {
+fn csrf_error(locale: Locale, state: &AppState, token: &str) -> Option<Response> {
     if token == state.csrf.as_ref() {
         None
     } else {
         Some(error(
+            locale,
             StatusCode::FORBIDDEN,
             "操作用トークンが一致しません。画面を再読み込みしてからやり直してください。",
         ))
     }
 }
-fn failure(e: anyhow::Error) -> Response {
-    error(
+fn failure(locale: Locale, e: anyhow::Error) -> Response {
+    error_page(
+        locale,
         StatusCode::BAD_REQUEST,
-        &format!("操作できませんでした: {e:#}"),
+        &with_detail(locale, "操作できませんでした: {detail}", e),
     )
+}
+fn with_detail(locale: Locale, key: &str, error: anyhow::Error) -> String {
+    locale.format(key, &[("detail", &format!("{error:#}"))])
 }
 fn encoded(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -341,8 +400,9 @@ fn encoded(s: &str) -> String {
     }
     result
 }
+// message は内部で決まる通知IDと数値だけを含む。表示言語は遷移先のリクエストで決める。
 fn redirect(path: &str, message: &str) -> Response {
-    Redirect::to(&format!("{path}?message={}", encoded(message))).into_response()
+    Redirect::to(&format!("{path}?message={message}")).into_response()
 }
 fn tags(s: &str) -> Vec<String> {
     s.split([',', '、', '\n'])
@@ -355,10 +415,62 @@ fn tags(s: &str) -> Vec<String> {
 #[serde(default)]
 struct Notice {
     message: String,
+    indexed: usize,
+    errors: usize,
+    missing: usize,
+    updated: usize,
+    skipped: usize,
+}
+impl Notice {
+    fn text(&self, locale: Locale) -> String {
+        let key = match self.message.as_str() {
+            "codex-saved" => "Codex設定を保存しました。同期状態を確認してください。",
+            "source-renamed" => "表示名を保存しました。",
+            "source-removed" => "登録を解除しました。元のフォルダーとファイルは保持されています。",
+            "missing-forgotten" => {
+                "不在スキルの登録情報と履歴を削除しました。実ファイルは変更していません。"
+            }
+            "skills-updated" => "選択したスキルを更新しました。",
+            "content-saved" => "SKILL.md を保存しました。",
+            "metadata-saved" => "管理情報を保存しました。",
+            "history-restored" => "履歴から復元しました。",
+            "skill-created" => {
+                "スキルを作成しました。公開するには管理情報で公開を有効にしてください。"
+            }
+            "scan" | "directory-saved" => {
+                let summary = locale.format(
+                    "スキャン完了: {count}件を登録、エラー{errors}件、見つからないスキル{missing}件。",
+                    &[("count", &self.indexed.to_string()), ("errors", &self.errors.to_string()), ("missing", &self.missing.to_string())],
+                );
+                return if self.message == "directory-saved" {
+                    let separator = if locale.language() == "ja" { "" } else { " " };
+                    format!(
+                        "{}{separator}{summary}",
+                        locale.text("管理対象フォルダーの設定を保存しました。")
+                    )
+                } else {
+                    summary
+                };
+            }
+            "repositories-updated" => {
+                return locale.format(
+                    "取得元の一括設定: {updated}件更新、{skipped}件対象外。",
+                    &[
+                        ("updated", &self.updated.to_string()),
+                        ("skipped", &self.skipped.to_string()),
+                    ],
+                );
+            }
+            // 以前のバージョンが生成したURLの通知も、原文のまま表示する。
+            _ => return self.message.clone(),
+        };
+        locale.text(key).to_owned()
+    }
 }
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexPage {
+    locale: Locale,
     csrf: String,
     query: SearchQuery,
     selection: RepositorySelection,
@@ -429,6 +541,7 @@ fn repository_page_url(selection: &RepositorySelection, query: &SearchQuery) -> 
     )
 }
 async fn index(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
     Query(selection): Query<RepositorySelection>,
@@ -497,30 +610,35 @@ async fn index(
             } else {
                 String::new()
             };
-            render(IndexPage {
-                csrf: state.csrf.to_string(),
-                query,
-                selection,
-                groups,
-                selected,
-                reset,
-                results,
-                error_count,
-                policies,
-                current_query,
-                sources,
-                codex,
-                message: notice.message,
-                previous,
-                next,
-            })
+            render(
+                locale,
+                IndexPage {
+                    locale,
+                    csrf: state.csrf.to_string(),
+                    query,
+                    selection,
+                    groups,
+                    selected,
+                    reset,
+                    results,
+                    error_count,
+                    policies,
+                    current_query,
+                    sources,
+                    codex,
+                    message: notice.text(locale),
+                    previous,
+                    next,
+                },
+            )
         }
-        Err(e) => failure(e),
+        Err(e) => failure(locale, e),
     }
 }
 #[derive(Template)]
 #[template(path = "sources.html")]
 struct SourcesPage {
+    locale: Locale,
     csrf: String,
     sources: Vec<Source>,
     message: String,
@@ -562,8 +680,12 @@ fn display_path(path: &str) -> String {
     path.to_owned()
 }
 
-async fn sources(State(state): State<AppState>, Query(n): Query<Notice>) -> Response {
-    source_page(&state, n.message, String::new(), String::new()).await
+async fn sources(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Query(n): Query<Notice>,
+) -> Response {
+    source_page(locale, &state, n.text(locale), String::new(), String::new()).await
 }
 #[derive(Deserialize)]
 struct SourceNameForm {
@@ -572,24 +694,32 @@ struct SourceNameForm {
     display_name: String,
 }
 async fn set_source_name(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Form(form): Form<SourceNameForm>,
 ) -> Response {
-    if let Some(response) = csrf_error(&state, &form.csrf) {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
         return response;
     }
     match state
         .run_mut(move |lib| lib.set_source_display_name(&form.alias, &form.display_name))
         .await
     {
-        Ok(()) => redirect("/sources", "表示名を保存しました。"),
-        Err(e) => error(StatusCode::BAD_REQUEST, &format!("{e:#}")),
+        Ok(()) => redirect("/sources", "source-renamed"),
+        Err(e) => error(locale, StatusCode::BAD_REQUEST, &format!("{e:#}")),
     }
 }
-async fn source_page(state: &AppState, message: String, alias: String, path: String) -> Response {
-    source_page_with_directory(state, message, alias, path, None).await
+async fn source_page(
+    locale: Locale,
+    state: &AppState,
+    message: String,
+    alias: String,
+    path: String,
+) -> Response {
+    source_page_with_directory(locale, state, message, alias, path, None).await
 }
 async fn source_page_with_directory(
+    locale: Locale,
     state: &AppState,
     message: String,
     alias: String,
@@ -609,18 +739,22 @@ async fn source_page_with_directory(
                     directory.path.clone()
                 }
             });
-            render(SourcesPage {
-                csrf: state.csrf.to_string(),
-                sources,
-                message,
-                alias,
-                path,
-                directory,
-                directory_path,
-                directory_editing,
-            })
+            render(
+                locale,
+                SourcesPage {
+                    locale,
+                    csrf: state.csrf.to_string(),
+                    sources,
+                    message,
+                    alias,
+                    path,
+                    directory,
+                    directory_path,
+                    directory_editing,
+                },
+            )
         }
-        Err(e) => failure(e),
+        Err(e) => failure(locale, e),
     }
 }
 #[derive(Deserialize)]
@@ -630,8 +764,12 @@ struct DirectoryForm {
     #[serde(default)]
     path: String,
 }
-async fn set_directory(State(state): State<AppState>, Form(form): Form<DirectoryForm>) -> Response {
-    if let Some(response) = csrf_error(&state, &form.csrf) {
+async fn set_directory(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(form): Form<DirectoryForm>,
+) -> Response {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
         return response;
     }
     let mode = form.mode.clone();
@@ -642,18 +780,17 @@ async fn set_directory(State(state): State<AppState>, Form(form): Form<Directory
     {
         Ok(report) => {
             state.rescan.notify_one();
-            redirect(
-                "/sources",
-                &format!(
-                    "管理対象フォルダーの設定を保存しました。{}",
-                    scan_message(report)
-                ),
-            )
+            redirect("/sources", &scan_notice("directory-saved", report))
         }
         Err(error) => {
             source_page_with_directory(
+                locale,
                 &state,
-                format!("設定を変更できませんでした: {error:#}。以前の設定は保持されています。"),
+                with_detail(
+                    locale,
+                    "設定を変更できませんでした: {detail}。以前の設定は保持されています。",
+                    error,
+                ),
                 String::new(),
                 String::new(),
                 Some((form.mode, form.path)),
@@ -671,14 +808,18 @@ struct SourceForm {
     #[serde(default)]
     action: String,
 }
-async fn add_source(State(state): State<AppState>, Form(f): Form<SourceForm>) -> Response {
-    if let Some(r) = csrf_error(&state, &f.csrf) {
+async fn add_source(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(f): Form<SourceForm>,
+) -> Response {
+    if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
     let alias = f.alias.clone();
     let path = f.path.clone();
     if !matches!(f.action.as_str(), "" | "register") {
-        return error(StatusCode::BAD_REQUEST, "登録方法が不正です。");
+        return error(locale, StatusCode::BAD_REQUEST, "登録方法が不正です。");
     }
     match state
         .run_mut(move |lib| lib.add_source(&alias, std::path::Path::new(&path)))
@@ -686,12 +827,13 @@ async fn add_source(State(state): State<AppState>, Form(f): Form<SourceForm>) ->
     {
         Ok(report) => {
             state.rescan.notify_one();
-            redirect("/sources", &scan_message(report))
+            redirect("/sources", &scan_notice("scan", report))
         }
         Err(e) => {
             source_page(
+                locale,
                 &state,
-                format!("登録できませんでした: {e:#}"),
+                with_detail(locale, "登録できませんでした: {detail}", e),
                 f.alias,
                 f.path,
             )
@@ -699,28 +841,29 @@ async fn add_source(State(state): State<AppState>, Form(f): Form<SourceForm>) ->
         }
     }
 }
-async fn remove_source(State(state): State<AppState>, Form(f): Form<SourceForm>) -> Response {
-    if let Some(r) = csrf_error(&state, &f.csrf) {
+async fn remove_source(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(f): Form<SourceForm>,
+) -> Response {
+    if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
     match state.run_mut(move |lib| lib.remove_source(&f.alias)).await {
         Ok(_) => {
             state.rescan.notify_one();
-            redirect(
-                "/sources",
-                "登録を解除しました。元のフォルダーとファイルは保持されています。",
-            )
+            redirect("/sources", "source-removed")
         }
-        Err(e) => failure(e),
+        Err(e) => failure(locale, e),
     }
 }
 #[derive(Deserialize)]
 struct Token {
     csrf: String,
 }
-fn scan_message(r: ScanReport) -> String {
+fn scan_notice(id: &str, r: ScanReport) -> String {
     format!(
-        "スキャン完了: {}件を登録、エラー{}件、見つからないスキル{}件。",
+        "{id}&indexed={}&errors={}&missing={}",
         r.indexed, r.errors, r.missing
     )
 }
@@ -735,24 +878,27 @@ fn repository_redirect(selection: &RepositorySelection, message: &str) -> Respon
         redirect("/", message)
     } else {
         Redirect::to(&format!(
-            "/?repository_source={}&repository={}&message={}",
+            "/?repository_source={}&repository={}&message={message}",
             encoded(&selection.repository_source),
-            encoded(&selection.repository),
-            encoded(message)
+            encoded(&selection.repository)
         ))
         .into_response()
     }
 }
-async fn scan(State(state): State<AppState>, Form(f): Form<RepositoryToken>) -> Response {
-    if let Some(r) = csrf_error(&state, &f.csrf) {
+async fn scan(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(f): Form<RepositoryToken>,
+) -> Response {
+    if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
     match state.run_mut(|lib| lib.scan()).await {
         Ok(r) => {
             state.rescan.notify_one();
-            repository_redirect(&f.selection, &scan_message(r))
+            repository_redirect(&f.selection, &scan_notice("scan", r))
         }
-        Err(e) => failure(e),
+        Err(e) => failure(locale, e),
     }
 }
 #[derive(Deserialize)]
@@ -783,10 +929,11 @@ struct ForgetMissingForm {
     category: String,
 }
 async fn forget_missing(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Form(f): Form<ForgetMissingForm>,
 ) -> Response {
-    if let Some(r) = csrf_error(&state, &f.csrf) {
+    if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
     let selection = f.selection.clone();
@@ -806,13 +953,9 @@ async fn forget_missing(
                 encoded(&f.selection.repository_source),
                 encoded(&f.selection.repository)
             );
-            Redirect::to(&format!(
-                "{target}&message={}",
-                encoded("不在スキルの登録情報と履歴を削除しました。実ファイルは変更していません。")
-            ))
-            .into_response()
+            Redirect::to(&format!("{target}&message=missing-forgotten")).into_response()
         }
-        Err(e) => failure(e),
+        Err(e) => failure(locale, e),
     }
 }
 fn bulk_settings(
@@ -833,8 +976,12 @@ fn bulk_settings(
     Ok((published, codex))
 }
 
-async fn bulk(State(state): State<AppState>, Form(f): Form<BulkForm>) -> Response {
-    if let Some(r) = csrf_error(&state, &f.csrf) {
+async fn bulk(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(f): Form<BulkForm>,
+) -> Response {
+    if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
     let ids: Vec<String> = f
@@ -845,17 +992,19 @@ async fn bulk(State(state): State<AppState>, Form(f): Form<BulkForm>) -> Respons
         .collect();
     if ids.is_empty() {
         return error(
+            locale,
             StatusCode::BAD_REQUEST,
             "スキルを1件以上選んでください。ブラウザーでJavaScriptを有効にしてください。",
         );
     }
     let (published, codex) = match bulk_settings(&f.published, &f.codex_mode) {
         Ok(settings) => settings,
-        Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        Err(message) => return error(locale, StatusCode::BAD_REQUEST, message),
     };
     let add_tags = tags(&f.tags);
     if published.is_none() && add_tags.is_empty() && codex.is_none() {
         return error(
+            locale,
             StatusCode::BAD_REQUEST,
             "変更する公開状態・追加タグ・Codexでの使い方のいずれかを指定してください。",
         );
@@ -864,12 +1013,13 @@ async fn bulk(State(state): State<AppState>, Form(f): Form<BulkForm>) -> Respons
         .run_mut(move |lib| lib.bulk_settings(&ids, published, &add_tags, codex))
         .await
     {
-        Ok(_) => repository_redirect(&f.selection, "選択したスキルを更新しました。"),
-        Err(e) => failure(e),
+        Ok(_) => repository_redirect(&f.selection, "skills-updated"),
+        Err(e) => failure(locale, e),
     }
 }
 // 重複する selected は保持し、単一フィールドの重複や未知のキーは拒否する。
 async fn repository_bulk(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Form(fields): Form<Vec<(String, String)>>,
 ) -> Response {
@@ -890,10 +1040,10 @@ async fn repository_bulk(
             "codex_mode" => &mut mode,
             "selected" => {
                 let Ok(scope) = serde_json::from_str::<Scope>(&value) else {
-                    return error(StatusCode::BAD_REQUEST, "取得元の選択が不正です。");
+                    return error(locale, StatusCode::BAD_REQUEST, "取得元の選択が不正です。");
                 };
                 if scope.repository_source.is_empty() {
-                    return error(StatusCode::BAD_REQUEST, "取得元の選択が不正です。");
+                    return error(locale, StatusCode::BAD_REQUEST, "取得元の選択が不正です。");
                 }
                 selections.push(RepositorySelection {
                     repository_source: scope.repository_source,
@@ -901,27 +1051,46 @@ async fn repository_bulk(
                 });
                 continue;
             }
-            _ => return error(StatusCode::BAD_REQUEST, "取得元の一括設定が不正です。"),
+            _ => {
+                return error(
+                    locale,
+                    StatusCode::BAD_REQUEST,
+                    "取得元の一括設定が不正です。",
+                );
+            }
         };
         if slot.replace(value).is_some() {
-            return error(StatusCode::BAD_REQUEST, "取得元の一括設定が不正です。");
+            return error(
+                locale,
+                StatusCode::BAD_REQUEST,
+                "取得元の一括設定が不正です。",
+            );
         }
     }
     let (Some(csrf), Some(published), Some(mode)) = (csrf, published, mode) else {
-        return error(StatusCode::BAD_REQUEST, "取得元の一括設定が不正です。");
+        return error(
+            locale,
+            StatusCode::BAD_REQUEST,
+            "取得元の一括設定が不正です。",
+        );
     };
-    if let Some(response) = csrf_error(&state, &csrf) {
+    if let Some(response) = csrf_error(locale, &state, &csrf) {
         return response;
     }
     if selections.is_empty() {
-        return error(StatusCode::BAD_REQUEST, "取得元を1件以上選んでください。");
+        return error(
+            locale,
+            StatusCode::BAD_REQUEST,
+            "取得元を1件以上選んでください。",
+        );
     }
     let (published, codex) = match bulk_settings(&published, &mode) {
         Ok(settings) => settings,
-        Err(message) => return error(StatusCode::BAD_REQUEST, message),
+        Err(message) => return error(locale, StatusCode::BAD_REQUEST, message),
     };
     if published.is_none() && codex.is_none() {
         return error(
+            locale,
             StatusCode::BAD_REQUEST,
             "変更する公開状態・Codexでの使い方を指定してください。",
         );
@@ -932,14 +1101,15 @@ async fn repository_bulk(
     {
         Ok((updated, skipped)) => redirect(
             "/",
-            &format!("取得元の一括設定: {updated}件更新、{skipped}件対象外。"),
+            &format!("repositories-updated&updated={updated}&skipped={skipped}"),
         ),
-        Err(e) => failure(e),
+        Err(e) => failure(locale, e),
     }
 }
 #[derive(Template)]
 #[template(path = "detail.html")]
 struct DetailPage {
+    locale: Locale,
     csrf: String,
     codex: CodexSyncSettings,
     source_label: String,
@@ -951,15 +1121,17 @@ struct DetailPage {
     dirty: bool,
 }
 async fn detail(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(n): Query<Notice>,
 ) -> Response {
-    detail_page(&state, id, n.message, None).await
+    detail_page(locale, &state, id, n.text(locale), None).await
 }
 #[derive(Template)]
 #[template(path = "draft.html")]
 struct DraftPage {
+    locale: Locale,
     csrf: String,
     id: String,
     content: String,
@@ -967,6 +1139,7 @@ struct DraftPage {
     message: String,
 }
 async fn detail_page(
+    locale: Locale,
     state: &AppState,
     id: String,
     message: String,
@@ -998,27 +1171,38 @@ async fn detail_page(
             }
             let preview = markdown(&detail.content);
             let tag_text = detail.summary.tags.join(", ");
-            render(DetailPage {
-                csrf: state.csrf.to_string(),
-                codex,
-                source_label,
-                library_url,
-                detail,
-                preview,
-                tag_text,
-                message,
-                dirty,
-            })
+            render(
+                locale,
+                DetailPage {
+                    locale,
+                    csrf: state.csrf.to_string(),
+                    codex,
+                    source_label,
+                    library_url,
+                    detail,
+                    preview,
+                    tag_text,
+                    message,
+                    dirty,
+                },
+            )
         }
         Err(e) => match draft {
-            Some((content, revision)) => render(DraftPage {
-                csrf: state.csrf.to_string(),
-                id,
-                content,
-                revision,
-                message: format!("{message} 最新内容の取得にも失敗しました: {e:#}"),
-            }),
-            None => failure(e),
+            Some((content, revision)) => render(
+                locale,
+                DraftPage {
+                    locale,
+                    csrf: state.csrf.to_string(),
+                    id,
+                    content,
+                    revision,
+                    message: format!(
+                        "{message} {}",
+                        with_detail(locale, "最新内容の取得にも失敗しました: {detail}", e)
+                    ),
+                },
+            ),
+            None => failure(locale, e),
         },
     }
 }
@@ -1029,17 +1213,25 @@ struct ContentForm {
     revision: String,
 }
 async fn save(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Form(f): Form<ContentForm>,
 ) -> Response {
-    if let Some(r) = csrf_error(&state, &f.csrf) {
+    if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
     let key = id.clone();
     let content = f.content.clone();
     let revision = f.revision.clone();
-    match state.run_mut(move|lib|lib.save_content(&key,&revision,&content)).await {Ok(_)=>redirect(&format!("/skills/{}",encoded(&id)),"SKILL.md を保存しました。"),Err(e)=>detail_page(&state,id,format!("保存できませんでした: {e:#}。下書きは下の編集欄に保持しています。競合時は下書きをコピーしてから「最新版を開く」で最新内容へ統合してください。"),Some((f.content,f.revision))).await}
+    match state.run_mut(move |lib| lib.save_content(&key, &revision, &content)).await {
+        Ok(_) => redirect(&format!("/skills/{}", encoded(&id)), "content-saved"),
+        Err(e) => detail_page(
+            locale, &state, id,
+            with_detail(locale, "保存できませんでした: {detail}。下書きは下の編集欄に保持しています。競合時は下書きをコピーしてから「最新版を開く」で最新内容へ統合してください。", e),
+            Some((f.content, f.revision)),
+        ).await,
+    }
 }
 #[derive(Deserialize)]
 struct MetadataForm {
@@ -1052,11 +1244,12 @@ struct MetadataForm {
     published: Option<String>,
 }
 async fn metadata(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Form(f): Form<MetadataForm>,
 ) -> Response {
-    if let Some(r) = csrf_error(&state, &f.csrf) {
+    if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
     let key = id.clone();
@@ -1069,11 +1262,8 @@ async fn metadata(
         .run_mut(move |lib| lib.set_metadata(&key, value))
         .await
     {
-        Ok(_) => redirect(
-            &format!("/skills/{}", encoded(&id)),
-            "管理情報を保存しました。",
-        ),
-        Err(e) => failure(e),
+        Ok(_) => redirect(&format!("/skills/{}", encoded(&id)), "metadata-saved"),
+        Err(e) => failure(locale, e),
     }
 }
 #[derive(Deserialize)]
@@ -1083,11 +1273,12 @@ struct RestoreForm {
     revision: String,
 }
 async fn restore(
+    Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
     Path(id): Path<String>,
     Form(f): Form<RestoreForm>,
 ) -> Response {
-    if let Some(r) = csrf_error(&state, &f.csrf) {
+    if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
     let key = id.clone();
@@ -1095,16 +1286,23 @@ async fn restore(
         .run_mut(move |lib| lib.restore(&key, f.history_id, &f.revision))
         .await
     {
-        Ok(_) => redirect(
-            &format!("/skills/{}", encoded(&id)),
-            "履歴から復元しました。",
-        ),
-        Err(e) => detail_page(&state, id, format!("復元できませんでした: {e:#}"), None).await,
+        Ok(_) => redirect(&format!("/skills/{}", encoded(&id)), "history-restored"),
+        Err(e) => {
+            detail_page(
+                locale,
+                &state,
+                id,
+                with_detail(locale, "復元できませんでした: {detail}", e),
+                None,
+            )
+            .await
+        }
     }
 }
 #[derive(Template)]
 #[template(path = "new.html")]
 struct NewPage {
+    locale: Locale,
     csrf: String,
     sources: Vec<Source>,
     source: String,
@@ -1112,8 +1310,12 @@ struct NewPage {
     content: String,
     message: String,
 }
-async fn new_skill(State(state): State<AppState>) -> Response {
+async fn new_skill(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+) -> Response {
     new_page(
+        locale,
         &state,
         String::new(),
         String::new(),
@@ -1123,6 +1325,7 @@ async fn new_skill(State(state): State<AppState>) -> Response {
     .await
 }
 async fn new_page(
+    locale: Locale,
     state: &AppState,
     source: String,
     relative_dir: String,
@@ -1130,15 +1333,19 @@ async fn new_page(
     message: String,
 ) -> Response {
     match state.run(|lib| lib.sources()).await {
-        Ok(sources) => render(NewPage {
-            csrf: state.csrf.to_string(),
-            sources,
-            source,
-            relative_dir,
-            content,
-            message,
-        }),
-        Err(e) => failure(e),
+        Ok(sources) => render(
+            locale,
+            NewPage {
+                locale,
+                csrf: state.csrf.to_string(),
+                sources,
+                source,
+                relative_dir,
+                content,
+                message,
+            },
+        ),
+        Err(e) => failure(locale, e),
     }
 }
 #[derive(Deserialize)]
@@ -1148,8 +1355,12 @@ struct CreateForm {
     relative_dir: String,
     content: String,
 }
-async fn create(State(state): State<AppState>, Form(f): Form<CreateForm>) -> Response {
-    if let Some(r) = csrf_error(&state, &f.csrf) {
+async fn create(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(f): Form<CreateForm>,
+) -> Response {
+    if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
     let source = f.source.clone();
@@ -1161,18 +1372,16 @@ async fn create(State(state): State<AppState>, Form(f): Form<CreateForm>) -> Res
     {
         Ok(id) => {
             state.rescan.notify_one();
-            redirect(
-                &format!("/skills/{}", encoded(&id)),
-                "スキルを作成しました。公開するには管理情報で公開を有効にしてください。",
-            )
+            redirect(&format!("/skills/{}", encoded(&id)), "skill-created")
         }
         Err(e) => {
             new_page(
+                locale,
                 &state,
                 f.source,
                 f.relative_dir,
                 f.content,
-                format!("作成できませんでした: {e:#}"),
+                with_detail(locale, "作成できませんでした: {detail}", e),
             )
             .await
         }
@@ -1202,12 +1411,17 @@ struct PreviewForm {
     csrf: String,
     content: String,
 }
-async fn preview(State(state): State<AppState>, Form(f): Form<PreviewForm>) -> Response {
-    if let Some(r) = csrf_error(&state, &f.csrf) {
+async fn preview(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(f): Form<PreviewForm>,
+) -> Response {
+    if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
     if f.content.len() > 2 * 1024 * 1024 {
         return error(
+            locale,
             StatusCode::PAYLOAD_TOO_LARGE,
             "本文は2 MiB以内にしてください。",
         );
@@ -1231,10 +1445,6 @@ async fn asset(Path(name): Path<String>) -> Response {
         "policy-navigation.js" => (
             "text/javascript; charset=utf-8",
             include_bytes!("../static/policy-navigation.js"),
-        ),
-        "i18n.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("../static/i18n.js"),
         ),
         "theme.js" => (
             "text/javascript; charset=utf-8",

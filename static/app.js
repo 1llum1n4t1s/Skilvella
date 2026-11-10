@@ -1,6 +1,30 @@
 "use strict";
 (() => {
-  const t = (key, values) => window.skilvellaI18n?.t(key, values) ?? key;
+  const languageSelector = document.querySelector("[data-language-selector]");
+  // 旧版のブラウザー設定は、最初のGETで同じ接続先のCookieへ引き継ぐ。
+  const languageCookie = document.body.dataset.languageCookie;
+  if (languageCookie) {
+    try {
+      const oldLanguage = localStorage.getItem("skilvella.language");
+      const legacyChoices = ["auto", "ja", "en", "zh-CN", "zh-TW", "ko", "es", "fr", "de", "pt-BR"];
+      const cookiePrefix = languageCookie + "=";
+      const readLanguageCookie = () => document.cookie.split(";").map(cookie => cookie.trim()).find(cookie => cookie.startsWith(cookiePrefix));
+      if (legacyChoices.includes(oldLanguage) && !legacyChoices.includes(readLanguageCookie()?.slice(cookiePrefix.length))) {
+        document.cookie = cookiePrefix + oldLanguage + "; Max-Age=31536000; Path=/; SameSite=Lax";
+        if (readLanguageCookie() === cookiePrefix + oldLanguage) {
+          try { localStorage.removeItem("skilvella.language"); } catch {}
+          if (oldLanguage !== "auto" && (oldLanguage !== document.documentElement.lang || languageSelector)) {
+            window.location.reload();
+            return;
+          }
+        }
+      }
+    } catch { /* ストレージを利用できない場合も自動選択で表示する。 */ }
+  }
+  const messages = JSON.parse(document.body.dataset.clientMessages);
+  const t = (id, values = {}) => (Object.hasOwn(messages, id) ? messages[id] : id).replace(/\{(\w+)\}/g, (token, name) =>
+    Object.hasOwn(values, name) ? values[name] : token);
+  languageSelector?.addEventListener("change", () => languageSelector.form.requestSubmit());
   const operationKey = "skilvella-policy-operation";
   async function refreshPolicyDisplay() {
     if (document.querySelector("form[data-editor]")) {
@@ -11,7 +35,6 @@
         const latest = new DOMParser().parseFromString(await response.text(), "text/html").querySelector('form[action$="/codex"]');
         if (!latest) throw new Error("Cannot refresh policy");
         form.replaceWith(latest);
-        window.skilvellaI18n?.applyLanguage?.();
       }
       document.documentElement.classList.remove("policy-restoring");
       showRecoveryNotice();
@@ -29,7 +52,7 @@
       try { record = sessionStorage.getItem(operationKey); } catch { await refreshPolicyDisplay(); return; }
       if (record) await recoverPolicyOperation();
       else await refreshPolicyDisplay();
-    })().catch(() => { document.getElementById("policy-recovery-status").textContent = t("保存状態を確認できません。再読み込みしてください。"); });
+    })().catch(() => { document.getElementById("policy-recovery-status").textContent = t("policy-unconfirmed"); });
   });
   async function recoverPolicyOperation() {
       try {
@@ -48,8 +71,8 @@
           const response = await fetch("/settings/policy-operations/" + encodeURIComponent(recovery.id), { method: "POST", body: new URLSearchParams({ csrf }), cache: "no-store" });
           if (!response.ok) throw new Error("Cannot confirm save");
           const status = await response.json();
-          if (status.state === "cancelled" || status.state === "failed") { recoveryNotice = "保存結果を確認できませんでした。最新の設定を表示しています。"; break; }
-          if (status.state === "sync_failed") { recoveryNotice = "保存しましたが、Codexへの同期に失敗しました。設定画面を確認してください。"; break; }
+          if (status.state === "cancelled" || status.state === "failed") { recoveryNotice = "policy-recovered"; break; }
+          if (status.state === "sync_failed") { recoveryNotice = "policy-sync-failed"; break; }
           if (status.state === "complete") break;
           if (Date.now() >= deadline) throw new Error("Cannot confirm save");
           await new Promise(resolve => setTimeout(resolve, 500));
@@ -58,7 +81,7 @@
         if (recoveryNotice) sessionStorage.setItem("skilvella-policy-cancelled", recoveryNotice);
         await refreshPolicyDisplay();
       } catch {
-        document.getElementById("policy-recovery-status").textContent = t("保存状態を確認できません。再読み込みしてください。");
+        document.getElementById("policy-recovery-status").textContent = t("policy-unconfirmed");
       }
   }
   if (document.documentElement.classList.contains("policy-restoring")) void recoverPolicyOperation();
@@ -85,7 +108,7 @@
   editor?.addEventListener("input", () => {
     dirty = true;
     const status = document.getElementById("edit-state");
-    if (status) status.textContent = t("未保存の変更");
+    if (status) status.textContent = t("dirty");
   });
   window.addEventListener("beforeunload", event => {
     if (dirty && !saving) { event.preventDefault(); event.returnValue = ""; }
@@ -96,19 +119,19 @@
   confirmationDialog.setAttribute("aria-describedby", "confirmation-message");
   const confirmationTitle = document.createElement("h2");
   confirmationTitle.id = "confirmation-title";
-  confirmationTitle.textContent = t("操作の確認");
+  confirmationTitle.textContent = t("confirm-title");
   const confirmationMessage = document.createElement("p");
   confirmationMessage.id = "confirmation-message";
   const confirmationActions = document.createElement("div");
   confirmationActions.className = "confirmation-actions";
   const cancelButton = document.createElement("button");
   cancelButton.type = "button";
-  cancelButton.textContent = t("キャンセル");
+  cancelButton.textContent = t("cancel");
   cancelButton.autofocus = true;
   const confirmButton = document.createElement("button");
   confirmButton.type = "button";
   confirmButton.className = "primary";
-  confirmButton.textContent = t("続行する");
+  confirmButton.textContent = t("continue");
   confirmationActions.append(cancelButton, confirmButton);
   confirmationDialog.append(confirmationTitle, confirmationMessage, confirmationActions);
   document.body.append(confirmationDialog);
@@ -119,9 +142,6 @@
     confirmationDialog.close("cancel");
   });
   function askConfirmation(message) {
-    confirmationTitle.textContent = t("操作の確認");
-    cancelButton.textContent = t("キャンセル");
-    confirmButton.textContent = t("続行する");
     const previousFocus = document.activeElement;
     confirmationMessage.textContent = message;
     confirmationDialog.returnValue = "";
@@ -161,7 +181,7 @@
     pendingConfirmation = link;
     void (async () => {
       try {
-        if (await askConfirmation(t("未保存の本文があります。変更を破棄してページを移動しますか？"))) {
+        if (await askConfirmation(t("discard-navigation"))) {
           saving = true;
           window.location.assign(destination.href);
         }
@@ -182,9 +202,9 @@
     if (!approved) {
       if (pendingConfirmation) { event.preventDefault(); return; }
       const messages = [];
-      if (dirty && form !== editor) messages.push(t("未保存の本文があります。変更を破棄して操作を続けますか？"));
+      if (dirty && form !== editor) messages.push(t("discard-operation"));
       const confirmation = button?.dataset.confirm || form.dataset.confirm;
-      if (confirmation) messages.push(confirmation + (form.dataset.confirmCount ? `\n${t("対象: ")}${form.dataset.confirmCount}` : ""));
+      if (confirmation) messages.push(confirmation + (form.dataset.confirmCount ? `\n${t("eligible")} ${form.dataset.confirmCount}` : ""));
       if (messages.length) {
         event.preventDefault();
         void confirmSubmission(form, button, messages.join("\n\n"));
@@ -223,12 +243,11 @@
   function selectionChanged() {
     const count = checks.filter(input => input.checked).length;
     const label = document.getElementById("selection-count");
-    if (label) label.textContent = t("{count}件選択", { count });
+    if (label) label.textContent = t("selected", { count });
     const submit = document.getElementById("bulk-submit");
     if (submit) submit.disabled = count === 0 || policyPending || policyUncertain;
     if (selectAll) { selectAll.checked = count > 0 && count === checks.length; selectAll.indeterminate = count > 0 && count < checks.length; }
   }
-  document.addEventListener("skilvella:language", selectionChanged);
   checks.forEach(input => input.addEventListener("change", selectionChanged));
   selectAll?.addEventListener("change", () => { checks.forEach(input => { input.checked = selectAll.checked; }); selectionChanged(); });
   const policyForms = [...document.querySelectorAll(".codex-policy-form")];
@@ -269,7 +288,7 @@
         policyForms.forEach(item => { item.querySelector("fieldset").disabled = true; });
         document.getElementById("policy-uncertain-warning").hidden = false;
         selectionChanged();
-        policyStatus(form, "保存状態を確認できません。再読み込みしてください。");
+        policyStatus(form, "policy-unconfirmed");
         return;
       }
       body.set("operation", operation);
@@ -277,7 +296,7 @@
       policyForms.forEach(item => { item.querySelector("fieldset").disabled = true; });
       selectionChanged();
       form.setAttribute("aria-busy", "true");
-      policyStatus(form, "保存中…");
+      policyStatus(form, "policy-saving");
       let uncertain = false;
       let syncFailed = false;
       try {
@@ -300,13 +319,13 @@
             item.querySelector(".codex-policy-status").textContent = "";
           }
         });
-        policyStatus(form, sync.last_error ? "保存しましたが、Codexへの同期に失敗しました。設定画面を確認してください。" : !sync.enabled ? "保存しました。Codex連携は無効です。" : "保存しました。");
+        policyStatus(form, sync.last_error ? "policy-sync-failed" : !sync.enabled ? "policy-disabled" : "policy-saved");
       } catch {
         uncertain = true;
         policyUncertain = true;
         form.dataset.policyUncertain = "true";
         form.querySelectorAll('input[name="mode"]').forEach(input => { input.checked = false; });
-        policyStatus(form, "保存状態を確認できません。再読み込みしてください。");
+        policyStatus(form, "policy-unconfirmed");
         document.getElementById("policy-uncertain-warning").hidden = false;
       } finally {
         const next = policyNavigation;
@@ -320,23 +339,19 @@
       }
     });
   });
-  document.addEventListener("skilvella:language", () => {
-    policyForms.forEach(form => { if (form.dataset.policyStatus) policyStatus(form, form.dataset.policyStatus); });
-  });
   const repositoryForm = document.getElementById("repository-bulk-form");
   function repositorySelectionChanged() {
     if (!repositoryForm) return false;
     const selected = [...repositoryForm.querySelectorAll(".repository-check:checked:not(:disabled)")];
     const count = selected.reduce((sum, input) => sum + Number(input.dataset.count), 0);
     const label = document.getElementById("repository-selection-count");
-    label.textContent = t("{groups}取得元選択 · 対象{count}件", { groups: selected.length, count });
+    label.textContent = t("repositories-selected", { groups: selected.length, count });
     label.hidden = false;
     const valid = selected.length > 0 && [...repositoryForm.querySelectorAll("select")].some(select => select.value !== "");
     document.getElementById("repository-bulk-submit").disabled = !valid || repositoryForm.dataset.submitting === "true";
     return valid;
   }
   repositoryForm?.addEventListener("change", repositorySelectionChanged);
-  document.addEventListener("skilvella:language", repositorySelectionChanged);
   repositorySelectionChanged();
   document.querySelectorAll("button[data-preview]").forEach(button => {
     const form = button.form;
@@ -363,7 +378,7 @@
             if (!response.ok) throw new Error("Preview request failed");
             preview.innerHTML = await response.text();
           } catch {
-            preview.textContent = t("プレビューを表示できませんでした。本文は編集欄に保持されています。");
+            preview.textContent = t("preview-failed");
           }
         } while (queued && button.isConnected);
       } finally {
@@ -387,16 +402,9 @@
     const status = updates.querySelector("[data-update-status]");
     let busy = false;
     let info = null;
-    let statusKey = "更新を確認できます。";
-    let statusValues = {};
-    let diagnostic = "";
     function updateStatus(key, values = {}, detail = "") {
-      statusKey = key;
-      statusValues = values;
-      diagnostic = detail;
       status.textContent = t(key, values) + (detail ? " " + detail : "");
     }
-    document.addEventListener("skilvella:language", () => updateStatus(statusKey, statusValues, diagnostic));
     async function requestUpdate(action) {
       const response = await fetch(`/settings/updates/${action}`, {
         method: "POST",
@@ -417,13 +425,13 @@
       checkButton.disabled = true;
       installButton.hidden = true;
       releaseLink.hidden = true;
-      updateStatus("更新を確認中…");
+      updateStatus("update-checking");
       try {
         const result = await requestUpdate("check");
         if (typeof result.available !== "boolean" || typeof result.supported !== "boolean" || typeof result.latest_version !== "string") throw new Error("Invalid update response");
         info = result;
-        updateStatus(result.available ? "バージョン {version} を利用できます。" : "最新バージョンです。", { version: result.latest_version });
-        if (!result.supported) updateStatus("この環境では自動更新を利用できません。リリースページを確認してください。");
+        updateStatus(result.available ? "update-available" : "update-current", { version: result.latest_version });
+        if (!result.supported) updateStatus("update-unsupported");
         installButton.hidden = !(result.available && result.supported);
         installButton.disabled = false;
         const release = new URL(result.release_url);
@@ -434,7 +442,7 @@
       } catch (error) {
         info = null;
         installButton.hidden = true;
-        updateStatus("更新の確認に失敗しました。接続を確認して再試行してください。", {}, error.message);
+        updateStatus("update-check-failed", {}, error.message);
       } finally {
         busy = false;
         checkButton.disabled = false;
@@ -446,19 +454,19 @@
       pendingConfirmation = installButton;
       void (async () => {
         try {
-          if (!await askConfirmation(t("更新のインストールを開始しますか？ アプリを再起動します。"))) return;
+          if (!await askConfirmation(t("update-confirm"))) return;
           busy = true;
           checkButton.disabled = true;
           installButton.disabled = true;
-          updateStatus("更新をダウンロードして検証中…");
+          updateStatus("update-downloading");
           await requestUpdate("install");
-          updateStatus("更新を開始しました。アプリの再起動をお待ちください。");
+          updateStatus("update-restarting");
         } catch (error) {
           info = null;
           installButton.hidden = true;
           busy = false;
           checkButton.disabled = false;
-          updateStatus("更新をインストールできませんでした。再度更新を確認してください。", {}, error.message);
+          updateStatus("update-install-failed", {}, error.message);
         } finally {
           pendingConfirmation = null;
         }
