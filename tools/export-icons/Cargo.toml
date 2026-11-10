@@ -1,0 +1,11 @@
+[package]
+name = "skilvella-export-icons"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+
+[dependencies]
+anyhow = "1"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+tempfile = "3"

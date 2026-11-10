@@ -1,4 +1,5 @@
 /target/
+/tools/export-icons/target/
 /.work/
 *.db
 *.db-shm

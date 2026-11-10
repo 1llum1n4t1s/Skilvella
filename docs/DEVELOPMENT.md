@@ -65,4 +65,12 @@ GitHub ActionsはWindows / macOS / Linuxでformat・Clippy・テスト・リリ�
 
 ## アイコン素材
 
-`static/icons/skilvella.png` がimagegenで生成した透過マスターです。PNG各サイズとICOはWindowsの `pwsh -File scripts/Export-Icons.ps1` で書き出せます。アセットはコミット対象なので、通常ビルドで画像ツールやPowerShellは不要です。ICNSは同じPNGをMac標準の `iconutil` で包装したものです。生成方式とプロンプトは [アイコンの説明](../static/icons/README.md) にあります。
+`static/icons/skilvella.png` がimagegenで生成した透過マスターです。PNG各サイズとICOを再生成する場合は、リポジトリルートで開発用Rustツールを実行します。
+
+```sh
+cargo run --locked --release --manifest-path tools/export-icons/Cargo.toml
+```
+
+既定の出力先は `static/icons/` です。別のマスターや出力先を使う場合は、コマンド末尾に `-- --source <正方形のPNG> --output-dir <作成済みのフォルダー>` を追加します。指定したフォルダーの同名PNG・ICOは置き換わるため、同じ出力先には一度に1プロセスで実行してください。
+
+ツールは独立したCargoパッケージです。通常のアプリビルドでは、リポジトリに保存したアイコン素材を同梱します。ICNSは同じPNGをMac標準の `iconutil` で包装したものです。生成方式とプロンプトは [アイコンの説明](../static/icons/README.md) にあります。
