@@ -15,6 +15,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const ASSETS: [&str; 2] = [MAC_ASSET, WINDOWS_ASSET];
 const CHECKSUMS: &str = "SHA256SUMS.txt";
 
+#[cfg(feature = "release-update-test")]
+pub mod regression;
+
 pub fn run(args: impl Iterator<Item = OsString>) -> Result<()> {
     let args: Vec<_> = args.collect();
     match args.as_slice() {

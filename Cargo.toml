@@ -11,6 +11,7 @@ default-run = "skilvella"
 [features]
 launcher = []
 release-tools = []
+release-update-test = ["release-tools", "dep:rcgen", "dep:rustls"]
 
 [[bin]]
 name = "skilvella-release"
@@ -27,12 +28,21 @@ name = "launcher"
 path = "tests/launcher.rs"
 required-features = ["launcher"]
 
+[[test]]
+name = "release_update"
+path = "tests/release_update.rs"
+harness = false
+test = false
+required-features = ["release-update-test"]
+
 [dependencies]
 anyhow = "1"
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 axum = { version = "0.8.9", default-features = false, features = ["form", "http1", "json", "query", "tokio"] }
 comrak = { version = "0.59.0", default-features = false }
 notify = "8"
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 flate2 = "1"
 tar = "0.4"
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
