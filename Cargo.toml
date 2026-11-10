@@ -10,6 +10,12 @@ default-run = "skilvella"
 
 [features]
 launcher = []
+release-tools = []
+
+[[bin]]
+name = "skilvella-release"
+path = "src/bin/skilvella-release.rs"
+required-features = ["release-tools"]
 
 [[bin]]
 name = "skilvella-launcher"

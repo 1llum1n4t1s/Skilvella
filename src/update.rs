@@ -14,7 +14,14 @@ use std::{
 
 const REPO: &str = "https://github.com/1llum1n4t1s/Skilvella";
 const MAX_ARCHIVE: u64 = 150 * 1024 * 1024;
+const MAX_CHECKSUMS: u64 = 1024 * 1024;
+const WINDOWS_ASSET: &str = "Skilvella-windows-x86_64.zip";
+const MAC_ASSET: &str = "Skilvella-macos-aarch64.tar.gz";
+const BUILD_INFO: &str = "BUILD-INFO.txt";
 static INSTALLING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "release-tools")]
+pub mod release;
 
 #[derive(Debug, Serialize)]
 pub struct UpdateInfo {
@@ -91,9 +98,9 @@ fn version(value: &str) -> anyhow::Result<[u64; 3]> {
 
 fn asset_name() -> Option<&'static str> {
     if cfg!(all(windows, target_arch = "x86_64")) {
-        Some("Skilvella-windows-x86_64.zip")
+        Some(WINDOWS_ASSET)
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        Some("Skilvella-macos-aarch64.tar.gz")
+        Some(MAC_ASSET)
     } else {
         None
     }
@@ -308,14 +315,8 @@ fn publish_marker(directory: &Path, name: &str) -> anyhow::Result<()> {
 }
 
 fn extract(archive: &[u8], zip: bool, expected_version: &str) -> anyhow::Result<Vec<u8>> {
-    let name = executable_name();
-    let allowed = [
-        name,
-        "LICENSE",
-        "CHANGELOG.md",
-        "README.txt",
-        "BUILD-INFO.txt",
-    ];
+    let name = if zip { "skilvella.exe" } else { "skilvella" };
+    let allowed = [name, "LICENSE", "CHANGELOG.md", "README.txt", BUILD_INFO];
     let mut seen = HashSet::new();
     let mut binary = None;
     let mut build_info = None;
@@ -341,7 +342,7 @@ fn extract(archive: &[u8], zip: bool, expected_version: &str) -> anyhow::Result<
                     "Release executable is too large"
                 );
                 binary = Some(bytes);
-            } else if path == "BUILD-INFO.txt" {
+            } else if path == BUILD_INFO {
                 let mut text = String::new();
                 entry.take(16385).read_to_string(&mut text)?;
                 ensure!(text.len() <= 16384, "Build metadata is too large");
@@ -367,7 +368,7 @@ fn extract(archive: &[u8], zip: bool, expected_version: &str) -> anyhow::Result<
                 let mut bytes = Vec::new();
                 entry.read_to_end(&mut bytes)?;
                 binary = Some(bytes);
-            } else if path == "BUILD-INFO.txt" {
+            } else if path == BUILD_INFO {
                 let mut text = String::new();
                 entry.take(16385).read_to_string(&mut text)?;
                 ensure!(text.len() <= 16384, "Build metadata is too large");
@@ -480,15 +481,13 @@ fn prepare() -> anyhow::Result<PreparedUpdate> {
     let sum = checksum(
         &String::from_utf8(request(
             &format!("{base}/SHA256SUMS.txt"),
-            1024 * 1024,
+            MAX_CHECKSUMS,
             false,
         )?)?,
         asset,
     )?;
     let archive = request(&format!("{base}/{asset}"), MAX_ARCHIVE, false)?;
-    ensure!(digest(&archive) == sum, "Release archive checksum mismatch");
-    let binary = extract(&archive, asset.ends_with(".zip"), &info.latest_version)?;
-    validate_binary(&binary)?;
+    let binary = verify_archive(&archive, &sum, asset, &info.latest_version)?;
     let binary_hash = digest(&binary);
     let launcher = managed(&target, &tag, &sum, &binary_hash)?;
     let directory = target
@@ -525,8 +524,25 @@ fn prepare() -> anyhow::Result<PreparedUpdate> {
     })
 }
 
-fn validate_binary(bytes: &[u8]) -> anyhow::Result<()> {
-    if cfg!(windows) {
+// 配布前と更新時に、最終アーカイブへ同じチェックを適用する。
+fn verify_archive(
+    archive: &[u8],
+    sum: &str,
+    asset: &str,
+    expected_version: &str,
+) -> anyhow::Result<Vec<u8>> {
+    ensure!(
+        archive.len() as u64 <= MAX_ARCHIVE,
+        "Release archive is too large"
+    );
+    ensure!(digest(archive) == sum, "Release archive checksum mismatch");
+    let binary = extract(archive, asset == WINDOWS_ASSET, expected_version)?;
+    validate_binary(&binary, asset == WINDOWS_ASSET)?;
+    Ok(binary)
+}
+
+fn validate_binary(bytes: &[u8], windows: bool) -> anyhow::Result<()> {
+    if windows {
         ensure!(
             bytes.starts_with(b"MZ") && bytes.len() >= 64,
             "Release is not a Windows executable"
@@ -539,7 +555,7 @@ fn validate_binary(bytes: &[u8]) -> anyhow::Result<()> {
             header == b"PE\0\0\x64\x86",
             "Release executable has the wrong architecture"
         );
-    } else if cfg!(target_os = "macos") {
+    } else {
         ensure!(
             bytes.starts_with(b"\xcf\xfa\xed\xfe\x0c\0\0\x01"),
             "Release is not an Apple Silicon executable"
@@ -1063,7 +1079,12 @@ fn install_inner(
         "Installed update changed before relaunch"
     );
     // ヘルパー境界でも実行形式を再検査し、不正な実体を起動せず旧版へ戻す。
-    validate_binary(&fs::read(&target)?)?;
+    {
+        let binary = fs::read(&target)?;
+        if cfg!(any(windows, target_os = "macos")) {
+            validate_binary(&binary, cfg!(windows))?;
+        }
+    }
     let mut child = relaunch(directory, plan, &target)?;
     drop(progress.file_lock.take());
     // 再起動開始後のマーカー書込み失敗で、動作中の新版のキャッシュを戻さない。
@@ -1203,7 +1224,7 @@ mod tests {
             for name in names {
                 zip.start_file(*name, zip::write::SimpleFileOptions::default())
                     .unwrap();
-                zip.write_all(if *name == "BUILD-INFO.txt" {
+                zip.write_all(if *name == BUILD_INFO {
                     b"version=1.0.2\n"
                 } else {
                     b"executable"
@@ -1216,14 +1237,14 @@ mod tests {
             let gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
             let mut tar = tar::Builder::new(gzip);
             for name in names {
-                let kind = if *name == executable_name() {
+                let kind = if *name == "skilvella" {
                     executable_type
                 } else {
                     tar::EntryType::Regular
                 };
                 let bytes: &[u8] = if !kind.is_file() {
                     b""
-                } else if *name == "BUILD-INFO.txt" {
+                } else if *name == BUILD_INFO {
                     b"version=1.0.2\n"
                 } else {
                     b"executable"
@@ -1241,14 +1262,9 @@ mod tests {
             }
             tar.into_inner().unwrap().finish().unwrap()
         }
-        let names = [
-            executable_name(),
-            "LICENSE",
-            "CHANGELOG.md",
-            "README.txt",
-            "BUILD-INFO.txt",
-        ];
         for zip in [true, false] {
+            let name = if zip { "skilvella.exe" } else { "skilvella" };
+            let names = [name, "LICENSE", "CHANGELOG.md", "README.txt", BUILD_INFO];
             let archive = |names: &[&str]| {
                 if zip {
                     zip_archive(names)
@@ -1258,6 +1274,9 @@ mod tests {
             };
             let valid = archive(&names);
             assert_eq!(extract(&valid, zip, "1.0.2").unwrap(), b"executable");
+            let mut mispackaged = names;
+            mispackaged[4] = "BUILD-INFO";
+            assert!(extract(&archive(&mispackaged), zip, "1.0.2").is_err());
             for path in ["../skilvella.exe", "/skilvella", "nested/skilvella"] {
                 let mut unexpected = names.to_vec();
                 unexpected.push(path);
@@ -1277,6 +1296,13 @@ mod tests {
                     .contains("Release tag and build version disagree")
             );
         }
+        let names = [
+            "skilvella",
+            "LICENSE",
+            "CHANGELOG.md",
+            "README.txt",
+            BUILD_INFO,
+        ];
         for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
             let error = extract(&tar_archive(&names, kind), false, "1.0.2").unwrap_err();
             assert!(error.to_string().contains("not a regular file"));

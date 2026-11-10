@@ -63,6 +63,18 @@ Host / Origin・CSRF・プレビュー・`Referrer-Policy` の制約は [重要�
 
 GitHub ActionsはWindows / macOS / Linuxでformat・Clippy・テスト・リリースビルドを確認します。配布・署名・公証・自動更新のワークフローはまだ含めていません。
 
+## 配布物の作成と検証
+
+Windows x64とApple Silicon Macで、同じリリースコミットから本体と配布ツールをビルドします。
+
+```sh
+cargo build --locked --release --features release-tools --bin skilvella --bin skilvella-release
+```
+
+各環境で本体の `--help` に対象の版が表示されることと、従来の署名状態を確認します。配布ツールの `pack <コミットSHA> <本体のパス> <作成済みの出力先>` で、その環境のアーカイブを作成します。ビルド情報のファイル名は `BUILD-INFO.txt` です。
+
+両方のアーカイブを同じ配布ディレクトリに集め、配布ツールの `checksums <配布ディレクトリ>` で `SHA256SUMS.txt` を作成します。**GitHubにアップロードする直前に `verify <配布ディレクトリ>` を実行し、成功した3ファイルをそのままアップロードします。** 検証は自動更新と同じ実装を使い、両アーカイブのSHA-256、ファイル構成、版、実行形式とアーキテクチャを確認します。再梱包した場合はチェックサムの作成と検証をやり直します。
+
 ## アイコン素材
 
 `static/icons/skilvella.png` がimagegenで生成した透過マスターです。PNG各サイズとICOを再生成する場合は、リポジトリルートで開発用Rustツールを実行します。
