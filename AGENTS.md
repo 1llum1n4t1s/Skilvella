@@ -33,5 +33,6 @@ cargo build --release --locked
 - 管理画面はAskamaテンプレートと同梱アセットを使います。通常ビルドにフロントエンドのビルド工程を加えず、実行時のCDN依存も持ち込まないでください。翻訳を変更するときは `src/web/i18n.rs` の `Locale` を使い、日本語の原文と `src/web/locales/` の辞書のキー・プレースホルダーを揃えてください。ブラウザーへ渡す翻訳文言は動的な操作に必要なものに限ります。
 - HTTP境界・CSRF・プレビューの安全設定を維持してください。`Referrer-Policy: same-origin` は通常のフォームPOSTのOriginを保持するために必要です。
 - アプリ更新は `src/update.rs` の検証・ロック・ヘルパー経路を通し、Libraryや利用者スキルを変更しないでください。信頼境界とToolport連携は [更新の設計](DESIGN.md#アプリの更新) を参照してください。
+- GitHub配布物は `release-tools` 機能の `skilvella-release` で梱包し、公開直前に両OSのアーカイブとチェックサムを `verify` で検証してください。梱包とアプリ内更新では `src/update.rs` の `verify_archive` を共用してください。コマンドと手順は [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) を参照してください。
 - アイコンの再生成は通常ビルドから独立した `tools/export-icons/Cargo.toml` の開発用パッケージで行い、生成済みの素材を追跡してください。再生成手順は [アイコン素材](docs/DEVELOPMENT.md#アイコン素材) を参照してください。
 - 利用者向けの説明はREADME、設計はDESIGN、作業規約は本書に置き、開発環境・素材生成の詳細は `docs/DEVELOPMENT.md` へ集約してください。

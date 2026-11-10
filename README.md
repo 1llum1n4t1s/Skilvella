@@ -9,11 +9,13 @@
 
 ## 起動
 
-[GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest)から、お使いのOS向けの配布物を取得して展開してください。
+[GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest)から、Windows x64またはApple Silicon搭載Mac向けの配布物を取得して展開してください。
 
 - Windows x64: `Skilvella-windows-x86_64.zip` 内の `skilvella.exe` を起動します。
 - Mac Apple Silicon: `Skilvella-macos-aarch64.tar.gz` を展開し、ターミナルで `./skilvella` を起動します。
 - 展開前に、配布物のSHA-256を `SHA256SUMS.txt` と照合できます。
+
+Linuxで利用する場合やソースからビルドする場合は[開発手順](docs/DEVELOPMENT.md)を参照してください。
 
 Windowsではタスクトレイ、MacではメニューバーにSkilvellaのアイコンを表示します。左クリックすると、既定のブラウザーで管理画面が開きます。右クリック（MacではControl＋クリックも可）で「管理画面を開く」「更新を確認」「サービスを再起動」「終了」を選べます。Windowsでアイコンが見えない場合は、トレイの「隠れているインジケーター」も確認してください。
 
@@ -21,7 +23,7 @@ Windowsではタスクトレイ、MacではメニューバーにSkilvellaのア�
 
 管理画面は直接 [http://127.0.0.1:7465/](http://127.0.0.1:7465/) でも開けます。MCPの接続URLは `http://127.0.0.1:7465/mcp` です。画面のない環境では `--no-tray` を指定してください。Linuxではアイコンを表示せず、HTTP/MCPサーバーとして動作します。
 
-Linux向けなど、ソースからビルドする場合は[開発手順](docs/DEVELOPMENT.md)を参照してください。実行時のRust・Node.js・Python・外部DBサーバーは不要です。起動したターミナルの `Ctrl+C` でも終了できます。
+実行時のRust・Node.js・Python・外部DBサーバーは不要です。起動したターミナルの `Ctrl+C` でも終了できます。
 
 ## ライブラリの管理
 
