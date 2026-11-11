@@ -391,6 +391,23 @@ fn extract(archive: &[u8], zip: bool, expected_version: &str) -> anyhow::Result<
     Ok(bytes)
 }
 
+fn toolport_launcher_layout(target: &Path) -> Option<(&Path, &Path)> {
+    let versions = target.parent()?.parent()?;
+    if versions.file_name()? != "versions" {
+        return None;
+    }
+    let root = versions.parent()?;
+    // versions という一般的な名前だけではランチャー所有と判定しない。
+    root.join("Skilvella-Latest.ps1")
+        .is_file()
+        .then_some((root, versions))
+}
+
+#[cfg(windows)]
+pub fn is_toolport_cache_executable(target: &Path) -> bool {
+    toolport_launcher_layout(target).is_some()
+}
+
 fn managed(
     target: &Path,
     tag: &str,
@@ -398,18 +415,10 @@ fn managed(
     binary_hash: &str,
 ) -> anyhow::Result<Option<Managed>> {
     let directory = target.parent().context("Executable directory missing")?;
-    let Some(versions) = directory
-        .parent()
-        .filter(|p| p.file_name().is_some_and(|n| n == "versions"))
-    else {
+    let Some((root, versions)) = toolport_launcher_layout(target) else {
         return Ok(None);
     };
-    let root = versions.parent().context("Launcher root missing")?;
     let pointer = root.join("cache.json");
-    // versions という一般的な名前だけではランチャー所有と判定しない。
-    if !root.join("Skilvella-Latest.ps1").is_file() {
-        return Ok(None);
-    }
     #[cfg(windows)]
     let _ = launcher_mutex_name(root)?;
     plain_path(&pointer)?;

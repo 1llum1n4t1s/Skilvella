@@ -1,15 +1,21 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use anyhow::{Context, bail};
 use skilvella::{AppState, library::Library};
 use std::{env, net::Ipv4Addr, path::PathBuf};
 
 mod desktop;
 mod service;
+#[cfg(windows)]
+mod windows_startup;
 
 struct Options {
     data_dir: PathBuf,
     port: u16,
     watch: bool,
     tray: bool,
+    #[cfg(windows)]
+    register_at_logon: bool,
 }
 fn options() -> anyhow::Result<Option<Options>> {
     let mut options = Options {
@@ -17,6 +23,8 @@ fn options() -> anyhow::Result<Option<Options>> {
         port: 7465,
         watch: true,
         tray: cfg!(any(windows, target_os = "macos")),
+        #[cfg(windows)]
+        register_at_logon: env::args_os().len() == 1,
     };
     let mut data_dir = None;
     let mut args = env::args_os().skip(1);
@@ -37,10 +45,17 @@ fn options() -> anyhow::Result<Option<Options>> {
             }
             Some("--no-watch") => options.watch = false,
             Some("--no-tray") => options.tray = false,
+            #[cfg(windows)]
+            Some(windows_startup::NO_AUTOSTART) => {}
             Some("--help" | "-h") => {
                 println!(
-                    "Skilvella {}\n\nUsage: skilvella [--data-dir PATH] [--port PORT] [--no-watch] [--no-tray]\n\nBrowser: http://127.0.0.1:7465/\nMCP:     http://127.0.0.1:7465/mcp\n\nWindows/macOS: left-click the tray/menu bar icon to open the browser.\nRight-click for Open manager, Check for updates, Restart service, and Quit.\nUse --no-tray for headless operation.\nThe server always binds to IPv4 loopback. Default data directory: {}",
+                    "Skilvella {}\n\nUsage: skilvella [--data-dir PATH] [--port PORT] [--no-watch] [--no-tray]{}\n\nBrowser: http://127.0.0.1:7465/\nMCP:     http://127.0.0.1:7465/mcp\n\nWindows/macOS: left-click the tray/menu bar icon to open the browser.\nRight-click for Open manager, Check for updates, Restart service, and Quit.\nUse --no-tray for headless operation.\nThe server always binds to IPv4 loopback. Default data directory: {}",
                     env!("CARGO_PKG_VERSION"),
+                    if cfg!(windows) {
+                        " [--no-autostart]"
+                    } else {
+                        ""
+                    },
                     data_dir
                         .or_else(|| default_data_dir().ok())
                         .map(|path| path.display().to_string())
@@ -84,6 +99,8 @@ fn default_data_dir() -> anyhow::Result<PathBuf> {
 }
 #[tokio::main(worker_threads = 2)]
 async fn main() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    windows_startup::attach_parent_console();
     if skilvella::update::run_installer_if_requested()? {
         return Ok(());
     }
@@ -105,6 +122,12 @@ async fn main() -> anyhow::Result<()> {
         .run_mut(move |lib| lib.initialize_directory(&home, codex_home.as_deref()))
         .await
         .context("Could not initialize the skill directory")?;
+    #[cfg(windows)]
+    if options.register_at_logon
+        && let Err(error) = windows_startup::register_at_logon()
+    {
+        eprintln!("Could not register Skilvella for Windows sign-in: {error:#}");
+    }
     let port = listener.local_addr()?.port();
     println!(
         "Skilvella {}\nBrowser: http://127.0.0.1:{port}/\nMCP:     http://127.0.0.1:{port}/mcp\nData:    {}\nStop: Ctrl+C",

@@ -11,7 +11,7 @@
 
 [GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest)から、Windows x64またはApple Silicon搭載Mac向けの配布物を取得して展開してください。
 
-- Windows x64: `Skilvella-windows-x86_64.zip` 内の `skilvella.exe` を起動します。
+- Windows x64: `Skilvella-windows-x86_64.zip` を使い続けるフォルダーに展開し、`skilvella.exe` を起動します。ターミナルを開かずタスクトレイに常駐します。
 - Mac Apple Silicon: `Skilvella-macos-aarch64.tar.gz` を展開し、ターミナルで `./skilvella` を起動します。
 - 展開前に、配布物のSHA-256を `SHA256SUMS.txt` と照合できます。
 
@@ -23,7 +23,9 @@ Windowsではタスクトレイ、MacではメニューバーにSkilvellaのア�
 
 管理画面は直接 [http://127.0.0.1:7465/](http://127.0.0.1:7465/) でも開けます。MCPの接続URLは `http://127.0.0.1:7465/mcp` です。画面のない環境では `--no-tray` を指定してください。Linuxではアイコンを表示せず、HTTP/MCPサーバーとして動作します。
 
-実行時のRust・Node.js・Python・外部DBサーバーは不要です。起動したターミナルの `Ctrl+C` でも終了できます。
+Windowsの単体配置では、引数なしで初回起動すると、次回から現在のユーザーのサインイン時に自動で起動します。自動起動はWindowsの「設定」→「アプリ」→「スタートアップ」で切り替えられます。今回の起動で登録を省く場合は `--no-autostart` を指定します。Toolport管理下の起動方法はToolport側で設定してください。
+
+実行時のRust・Node.js・Python・外部DBサーバーは不要です。ターミナルから起動した場合は、接続したコンソールの `Ctrl+C` でも終了できます。
 
 ## ライブラリの管理
 

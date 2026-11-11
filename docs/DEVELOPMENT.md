@@ -27,7 +27,7 @@ cargo build --release --locked
 
 ### 任意の起動補助
 
-WindowsでコンソールやPowerShellを介さず起動する場合は、標準ライブラリーだけを使う任意の起動補助をビルドできます。通常のビルドは従来どおり `skilvella` だけを生成し、`cargo run` も本体を選びます。
+Windowsの本体はGUI subsystemで起動します。CLIの確認では `cargo run -- --help` など、呼び出し元が終了を待機する方法を使ってください。起動補助を使った運用では、標準ライブラリーだけを使う補助を次のコマンドでビルドできます。通常のビルドと `cargo run` は本体を選びます。
 
 ```sh
 cargo build --release --locked --features launcher --bin skilvella-launcher
