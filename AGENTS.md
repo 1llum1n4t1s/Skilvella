@@ -21,6 +21,7 @@ cargo build --release --locked
 - `tests/update.rs` は隔離した実行ファイルで更新ヘルパーの置換・再起動・復元・中止、再起動先のプロセス回収、Windowsのログハンドル継承防止を検証します。サービス再起動と監視・管理情報の保持は `src/service.rs` 内のテストで検証します。
 - `tests/library.rs` は保存・検索・パス境界、`tests/directory.rs` は管理フォルダーの選択と親子スキルの境界、`tests/http_mcp.rs` は管理フォームとMCPの連携・分割取得・継続時の競合検出、`tests/watch.rs` は外部変更の反映、`tests/startup.rs` はヘッドレス起動とポート競合時の非変更、`tests/migration.rs` は旧版の中断移行の起動時復旧・同一性検査・操作ロックを検証します。変更した契約に対応する検証を維持してください。
 - `tests/repositories.rs` は取得元の分類・件数・ページ分割・切断時の保持、不在登録削除のHTTP/CSRF境界と全件検証、読み取りエラーの修正経路、`tests/codex_index.rs` はCodex入口の公開判定・所有権・競合・中断復旧、`tests/codex_http.rs` は連携フォームのHTTP/CSRF境界と一括変更を検証します。
+- `src/windows_startup.rs` 内のテストは、空白・非ASCIIを含む起動コマンドと既存登録の保持を検証します。レジストリの書込みは `SKILVELLA_MIGRATION_TEST_ROOT` 配下の隔離ハイブで検証し、実ユーザーのスタートアップ設定を使わないでください。
 - `tests/launcher.rs` は任意の起動補助の引数転送・作業ディレクトリ・起動失敗を検証します。通常の `cargo test --locked` では対象外のため、上記の `launcher` 機能付き検証も実行してください。
 - ローカル検証では `SKILVELLA_MIGRATION_TEST_ROOT` と子プロセスの `TEMP` / `TMP` をGit作業ツリー外の作業専用フォルダーへ設定してください。ディレクトリ初期化・Codex入口生成にはテスト用ホームを明示し、利用者のフォルダーとクライアント設定を保護してください。対象テストと保存先は [開発手順の一覧](docs/DEVELOPMENT.md#開発) を参照してください。
 
