@@ -1356,6 +1356,7 @@ use std::{
 
 const CONTENT_LIMIT: u64 = 2 * 1024 * 1024;
 const FILE_LIMIT: u64 = 1024 * 1024;
+const SOURCE_DISPLAY_NAME_PREFIX: &str = "source_display_name:";
 
 struct WriteGuard<'a> {
     _file: fs::File,
@@ -1757,12 +1758,24 @@ impl Library {
         Self::sources_on(&c)
     }
     fn sources_on(c: &Connection) -> Result<Vec<Source>> {
-        let mut statement = c.prepare("SELECT s.alias,s.path,coalesce(k.skill_count,0),coalesce(k.error_count,0) FROM sources s LEFT JOIN (SELECT source,sum(CASE WHEN missing=0 THEN 1 ELSE 0 END) AS skill_count,sum(CASE WHEN error IS NOT NULL OR missing=1 THEN 1 ELSE 0 END) AS error_count FROM skills GROUP BY source) k ON k.source=s.alias WHERE s.active=1 ORDER BY s.alias")?;
+        // 表示名も同じ一覧クエリで取り、取得元ごとにsettingsを読み直さない。
+        let mut statement = c.prepare(
+            "SELECT s.alias,s.path,coalesce(k.skill_count,0),coalesce(k.error_count,0),
+                    coalesce(d.value,s.alias)
+             FROM sources s
+             LEFT JOIN (
+                 SELECT source,sum(CASE WHEN missing=0 THEN 1 ELSE 0 END) AS skill_count,
+                        sum(CASE WHEN error IS NOT NULL OR missing=1 THEN 1 ELSE 0 END) AS error_count
+                 FROM skills GROUP BY source
+             ) k ON k.source=s.alias
+             LEFT JOIN settings d ON d.key=(?1 || s.alias)
+             WHERE s.active=1 ORDER BY s.alias",
+        )?;
         let mut sources = statement
-            .query_map([], |r| {
+            .query_map([SOURCE_DISPLAY_NAME_PREFIX], |r| {
                 Ok(Source {
                     alias: r.get(0)?,
-                    display_name: String::new(),
+                    display_name: r.get(4)?,
                     path: r.get(1)?,
                     skill_count: r.get::<_, i64>(2)? as usize,
                     error_count: r.get::<_, i64>(3)? as usize,
@@ -1772,7 +1785,6 @@ impl Library {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for source in &mut sources {
-            source.display_name = Self::source_display_name_on(c, &source.alias)?;
             match Self::is_native_root(c, Path::new(&source.path)) {
                 Ok(native) => source.native_discovery = native,
                 Err(_) => {
@@ -1787,7 +1799,7 @@ impl Library {
     fn source_display_name_on(c: &Connection, alias: &str) -> Result<String> {
         Ok(c.query_row(
             "SELECT value FROM settings WHERE key=?1",
-            [format!("source_display_name:{alias}")],
+            [format!("{SOURCE_DISPLAY_NAME_PREFIX}{alias}")],
             |r| r.get(0),
         )
         .optional()?
@@ -1818,7 +1830,7 @@ impl Library {
             )?,
             "Source not found"
         );
-        let key = format!("source_display_name:{alias}");
+        let key = format!("{SOURCE_DISPLAY_NAME_PREFIX}{alias}");
         if name.is_empty() || name == alias {
             tx.execute("DELETE FROM settings WHERE key=?1", [key])?;
         } else {

@@ -182,14 +182,34 @@ struct CodexPolicyForm {
     #[serde(default)]
     operation: String,
 }
-fn codex_mode(mode: &str) -> Option<crate::model::CodexSkillPolicy> {
-    let (automatic, command) = match mode {
-        "search" => (false, false),
-        "command" => (false, true),
-        "automatic" => (true, true),
-        _ => return None,
-    };
-    Some(crate::model::CodexSkillPolicy { automatic, command })
+// フォームで受理する値と、一覧で選択済みとして表示する値の対応を共有する。
+const CODEX_MODES: [(&str, CodexSkillPolicy); 3] = [
+    (
+        "search",
+        CodexSkillPolicy {
+            automatic: false,
+            command: false,
+        },
+    ),
+    (
+        "command",
+        CodexSkillPolicy {
+            automatic: false,
+            command: true,
+        },
+    ),
+    (
+        "automatic",
+        CodexSkillPolicy {
+            automatic: true,
+            command: true,
+        },
+    ),
+];
+fn codex_mode(mode: &str) -> Option<CodexSkillPolicy> {
+    CODEX_MODES
+        .iter()
+        .find_map(|(name, policy)| (*name == mode).then(|| policy.clone()))
 }
 async fn set_codex_policy(
     Extension(locale): Extension<Locale>,
@@ -489,21 +509,13 @@ struct IndexPage {
 }
 impl IndexPage {
     fn policy_mode(&self, id: &str) -> &'static str {
-        match self.policies.get(id) {
-            Some(Some(CodexSkillPolicy {
-                automatic: false,
-                command: false,
-            })) => "search",
-            Some(Some(CodexSkillPolicy {
-                automatic: false,
-                command: true,
-            })) => "command",
-            Some(Some(CodexSkillPolicy {
-                automatic: true,
-                command: true,
-            })) => "automatic",
-            _ => "",
-        }
+        let Some(Some(policy)) = self.policies.get(id) else {
+            return "";
+        };
+        CODEX_MODES
+            .iter()
+            .find_map(|(name, value)| (policy == value).then_some(*name))
+            .unwrap_or_default()
     }
     fn group_value(&self, group: &RepositoryGroup) -> String {
         serde_json::json!({"repository_source": group.source, "repository": group.repository})
