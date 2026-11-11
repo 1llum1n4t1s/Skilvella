@@ -19,7 +19,7 @@ cargo build --release --locked
 | `.work/test-startup` | `tests/startup.rs`、`src/service.rs` 内のテスト |
 | `.work/test-codex-index` | `tests/codex_index.rs` |
 | `.work/test-launcher` | `tests/launcher.rs`（`launcher` 機能を指定した場合） |
-| `SKILVELLA_MIGRATION_TEST_ROOT` 配下（未指定時はOSの一時ディレクトリ配下） | `tests/migration.rs`、`tests/repositories.rs`、`tests/update.rs`、`tests/codex_http.rs` の切断中保存検証、`src/update.rs` 内の一部テスト |
+| `SKILVELLA_MIGRATION_TEST_ROOT` 配下（未指定時はOSの一時ディレクトリ配下） | `tests/migration.rs`、`tests/repositories.rs`、`tests/update.rs`、`tests/codex_http.rs` の切断中保存検証、`src/update.rs` 内の一部テスト、`src/windows_startup.rs` 内のテスト（Windowsのみ。Run登録は隔離したレジストリハイブ、スタートメニューショートカットはテスト用フォルダーに作成） |
 
 ローカル検証では、`SKILVELLA_MIGRATION_TEST_ROOT` と子プロセスの `TEMP` / `TMP` をGit作業ツリー外の作業専用フォルダーへ設定してください。CIは `SKILVELLA_MIGRATION_TEST_ROOT` に `runner.temp` を指定します。調査用に残るデータは、不要になった時点で今回のテストが作成したフォルダーだけを清掃してください。
 
@@ -34,7 +34,7 @@ cargo build --release --locked --features launcher --bin skilvella-launcher
 cargo test --locked --features launcher --test launcher
 ```
 
-`skilvella-launcher.exe` と `skilvella.exe` を同じフォルダーへ配置します。補助はそのフォルダーを作業ディレクトリにして本体へ引数を渡し、起動後に終了します。WindowsではGUI subsystemと `CREATE_NO_WINDOW` を使い、本体の起動に失敗した場合は終了コード1を返します。起動後の本体の成否は待機しません。追加依存や起動用スクリプトは不要です。起動補助自体はRust 1.97.1でもビルドでき、Windows以外では同じフォルダーの `skilvella` を起動します。
+`skilvella-launcher.exe` と `skilvella.exe` を同じフォルダーへ配置します。起動時の挙動（作業ディレクトリ・ウィンドウ・終了コード）は [主要コンポーネントと境界](../DESIGN.md#主要コンポーネントと境界) を参照してください。追加依存や起動用スクリプトは不要です。起動補助自体はRust 1.97.1でもビルドでき、Windows以外では同じフォルダーの `skilvella` を起動します。
 
 統合テストは空白を含む隔離フォルダーへ補助と確認用テスト実行ファイルを配置し、実アプリを起動せずに引数・作業ディレクトリ・対象不在時の失敗を検証します。
 
@@ -84,6 +84,22 @@ cargo test --locked --features release-update-test --test release_update -- <前
 テストは GitHub から前の公開版を取得してチェックサムを照合し、専用のホーム、データ、実行ファイルで起動します。候補版の配布応答は子プロセスだけが使うループバックの HTTPS フィクスチャが返すため、候補の事前公開や OS の証明書ストアの変更は不要です。設定画面が使う確認・適用の HTTP 操作を実行し、旧プロセスの正常終了、候補実行ファイルへの置き換え、別プロセスへの再起動、同じ URL の管理画面と設定画面が開き、新しい版が表示されることを確認します。
 
 両方の環境で `PASS:` と終了コード 0 を確認し、検証した3ファイルをそのままアップロードします。失敗時は、出力された作業場所にある `startup.log` と `bin/.skilvella-update-*/update.log` を確認します。テストは隔離プロセスを停止します。ログや試験用の実行ファイルは作業場所に残るため、確認後に今回分を清掃してください。再梱包した場合はチェックサムを作り直し、`verify` と両 OS の更新回帰テストを再実行します。
+
+### Windowsインストーラーの追加配布
+
+Windows x64で、Taskmetryと同じ固定版のVelopack CLI 1.2.161とRustのビルド環境を使います。Windowsのチャネルは `win`、パッケージの発行元は `Kagayoi` です。空の作業用ディレクトリをGit作業ツリー外に用意し、リポジトリルートで次を実行します。
+
+```powershell
+pwsh -NoProfile -File ./tools/pack-windows-installer.ps1 -WorkDirectory D:\work\skilvella-installer
+```
+
+このコマンドは動作確認用の未署名Setupを生成します。公開用はSimplySign Desktopにログインして `-Sign` を追加します。Taskmetryと同じコード署名証明書とCertumのタイムスタンプを使い、SHA-256で署名します。スクリプトはSetupのAuthenticode署名と署名者を検証してからSHA-256を表示します。
+
+`packages/SkilvellaApp-win-Setup.exe` を追加の配布物として扱い、ZIP版とmacOS版の3ファイルには既存の `checksums`、`verify`、自動更新回帰テストを引き続き使います。Setupは別にSHA-256を確認します。`windows-installer` 機能はSetup向けです。通常のZIP版はこの機能を指定せずビルドしてください。
+
+Setupはユーザー単位で `%LOCALAPPDATA%\SkilvellaApp` に本体を配置し、通常のスタートメニューにだけショートカットを登録します。ZIP版と同じ `%LOCALAPPDATA%\Skilvella` のライブラリーを使用するため、コピーや移動は不要です。既存の `--data-dir` 指定がある環境では、インストーラー版も同じ引数で起動してください。Setupの配置先を利用者データフォルダーに指定しないでください。ZIP版とToolportの自動更新は従来どおりで、インストーラー版の更新には新しいSetupを使います。
+
+Setupの公開前には隔離したWindowsユーザーで、既定の本体配置先が `%LOCALAPPDATA%\SkilvellaApp` であることと、発行元名の `Kagayoi` フォルダーが作成されないことを確認します。旧版が使ったライブラリーの読み込み、スタートメニュー直下への登録、アンインストール時の本体とショートカットの除去、ライブラリーの保持も確認します。
 
 ## アイコン素材
 
