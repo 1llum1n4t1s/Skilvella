@@ -1,5 +1,11 @@
 use anyhow::{Context, Result, ensure};
-use std::{env, io, mem::size_of_val, os::windows::ffi::OsStrExt, path::Path, ptr::null_mut};
+use std::{
+    env, io,
+    mem::size_of_val,
+    os::windows::ffi::{OsStrExt, OsStringExt},
+    path::{Path, PathBuf},
+    ptr::null_mut,
+};
 use windows_sys::Win32::{
     Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_SUCCESS, INVALID_HANDLE_VALUE},
     System::{
@@ -39,6 +45,68 @@ pub fn register_at_logon() -> Result<()> {
         return Ok(());
     }
     ensure_run_value(HKEY_CURRENT_USER, &executable)
+}
+
+pub fn register_start_menu() -> Result<()> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{FOLDERID_Programs, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+
+    let executable = env::current_exe()?;
+    // 自動更新で実体が切り替わるToolportの版別キャッシュは固定の起動先にしない。
+    if skilvella::update::is_toolport_cache_executable(&executable) {
+        return Ok(());
+    }
+    let programs = unsafe { SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None) }?;
+    let directory = unsafe {
+        let directory = PathBuf::from(std::ffi::OsString::from_wide(programs.as_wide()));
+        CoTaskMemFree(Some(programs.0.cast()));
+        directory
+    };
+    create_program_shortcut(&directory.join("Skilvella.lnk"), &executable)
+}
+
+fn create_program_shortcut(shortcut: &Path, executable: &Path) -> Result<()> {
+    use windows::{
+        Win32::{
+            System::Com::{
+                CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+                CoUninitialize, IPersistFile,
+            },
+            UI::Shell::{IShellLinkW, ShellLink},
+        },
+        core::{Interface, PCWSTR},
+    };
+    // 既存のショートカットや同名の項目は利用者の設定として扱う。
+    match std::fs::symlink_metadata(shortcut) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    struct Apartment;
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            unsafe { CoUninitialize() };
+        }
+    }
+    let parent = executable
+        .parent()
+        .context("Executable directory missing")?;
+    let wide_path =
+        |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain([0]).collect() };
+    let target = wide_path(executable);
+    let working_dir = wide_path(parent);
+    let filename = wide_path(shortcut);
+    // COMの参照を解放してから、同じスレッドでCOMを終了する。
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        let _apartment = Apartment;
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+        link.SetPath(PCWSTR(target.as_ptr()))?;
+        link.SetWorkingDirectory(PCWSTR(working_dir.as_ptr()))?;
+        link.cast::<IPersistFile>()?
+            .Save(PCWSTR(filename.as_ptr()), true)?;
+    }
+    Ok(())
 }
 
 fn ensure_run_value(root: HKEY, executable: &Path) -> Result<()> {
@@ -134,6 +202,23 @@ fn wide(value: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_menu_shortcut_preserves_an_existing_entry() -> Result<()> {
+        let directory = env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir)
+            .join(format!("start-menu-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory)?;
+        let shortcut = directory.join("Skilvella.lnk");
+        create_program_shortcut(&shortcut, &env::current_exe()?)?;
+        let original = std::fs::read(&shortcut)?;
+        // Shell Link Headerのサイズは0x4c。COMがリンクを保存したことを確認する。
+        assert!(original.starts_with(&[0x4c, 0, 0, 0]));
+        create_program_shortcut(&shortcut, Path::new(r"D:\別の配置\skilvella.exe"))?;
+        assert_eq!(std::fs::read(shortcut)?, original);
+        Ok(())
+    }
     use windows_sys::Win32::System::Registry::{
         KEY_ALL_ACCESS, REG_PROCESS_APPKEY, RegLoadAppKeyW,
     };

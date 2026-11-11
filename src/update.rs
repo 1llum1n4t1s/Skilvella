@@ -106,6 +106,15 @@ fn asset_name() -> Option<&'static str> {
     }
 }
 
+fn in_app_asset() -> Option<&'static str> {
+    // インストーラー版の配置はSetupが管理する。ZIP版のヘルパーで実体を置き換えない。
+    if cfg!(all(windows, feature = "windows-installer")) {
+        None
+    } else {
+        asset_name()
+    }
+}
+
 fn executable_name() -> &'static str {
     if cfg!(windows) {
         "skilvella.exe"
@@ -182,9 +191,12 @@ fn request(url: &str, limit: u64, head: bool) -> anyhow::Result<Vec<u8>> {
         let _ = child.wait();
         bail!("Release response exceeds the permitted size or could not be read");
     }
+    // curl の標準エラーは捨てているため、失敗理由の手掛かりとして終了状態だけを含める。
+    // （例: 接続失敗・HTTPエラー・サイズ超過は curl の終了コードで区別できる）
+    let status = child.wait()?;
     ensure!(
-        child.wait()?.success(),
-        "Could not retrieve the stable release over HTTPS"
+        status.success(),
+        "Could not retrieve the stable release over HTTPS ({status})"
     );
     Ok(bytes)
 }
@@ -202,7 +214,7 @@ pub fn check() -> anyhow::Result<UpdateInfo> {
         current_version: env!("CARGO_PKG_VERSION").to_owned(),
         latest_version: tag.trim_start_matches('v').to_owned(),
         available: latest > version(env!("CARGO_PKG_VERSION"))?,
-        supported: asset_name().is_some(),
+        supported: in_app_asset().is_some(),
         release_url: resolved,
     })
 }
@@ -238,15 +250,8 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 fn hash_hex(hash: &[u8]) -> String {
-    hash.iter()
-        .flat_map(|byte| {
-            let hex = b"0123456789abcdef";
-            [
-                hex[(byte >> 4) as usize] as char,
-                hex[(byte & 15) as usize] as char,
-            ]
-        })
-        .collect()
+    // チェックサム照合と同じ小文字16進表現を、ライブラリ共通の変換関数で作る。
+    crate::sha256_hex(hash)
 }
 
 fn file_hash(path: &Path) -> anyhow::Result<String> {
@@ -479,7 +484,7 @@ pub fn prepare_install() -> anyhow::Result<PreparedUpdate> {
 }
 
 fn prepare() -> anyhow::Result<PreparedUpdate> {
-    let asset = asset_name().context("In-app updates are unavailable on this platform")?;
+    let asset = in_app_asset().context("In-app updates are unavailable on this platform")?;
     let target = std::env::current_exe()?;
     plain_path(&target)?;
     let lock = installation_lock(&target)?;
@@ -1083,18 +1088,22 @@ fn install_inner(
             directory,
         )?;
     }
-    ensure!(
-        file_hash(&target)? == plan.binary_hash,
-        "Installed update changed before relaunch"
-    );
     // ヘルパー境界でも実行形式を再検査し、不正な実体を起動せず旧版へ戻す。
+    // 置換後の実体を1回だけ読み、同じバイト列でハッシュ照合と形式検査を行う。
+    // 2回読むと、照合と形式検査の間に差し替えられた内容を見逃す余地も生じる。
     {
+        // file_hash と同じく、リンク等を経由しない通常パスであることを先に確認する。
+        plain_path(&target)?;
         let binary = fs::read(&target)?;
+        ensure!(
+            digest(&binary) == plan.binary_hash,
+            "Installed update changed before relaunch"
+        );
         if cfg!(any(windows, target_os = "macos")) {
             validate_binary(&binary, cfg!(windows))?;
         }
     }
-    let mut child = relaunch(directory, plan, &target)?;
+    let mut child = relaunch(plan, &target)?;
     drop(progress.file_lock.take());
     // 再起動開始後のマーカー書込み失敗で、動作中の新版のキャッシュを戻さない。
     let _ = write_new(&directory.join("complete"), b"complete");
@@ -1107,7 +1116,13 @@ fn install_inner(
     Ok(())
 }
 
-fn relaunch(directory: &Path, plan: &Plan, target: &Path) -> anyhow::Result<Child> {
+/// 更新前と同じ引数・作業ディレクトリでアプリを起動する。
+///
+/// 新版の再起動と失敗時の旧版の再起動で共用する。標準入出力はすべてnullにし、
+/// ヘルパーのログ（標準エラー）を子へ渡さない。起動に成功した場合だけ
+/// `Restarted PID: <pid>` をログへ1回出力する（tests/update.rs がこの形式を解析する）。
+/// エラー文は呼び出し側の文脈で付ける。
+fn start_app(target: &Path, plan: &Plan) -> std::io::Result<Child> {
     let mut command = Command::new(target);
     command
         .args(&plan.args)
@@ -1116,10 +1131,13 @@ fn relaunch(directory: &Path, plan: &Plan, target: &Path) -> anyhow::Result<Chil
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     hidden(&mut command);
-    let _ = directory;
-    let child = command.spawn().context("Could not relaunch the update")?;
+    let child = command.spawn()?;
     eprintln!("Restarted PID: {}", child.id());
     Ok(child)
+}
+
+fn relaunch(plan: &Plan, target: &Path) -> anyhow::Result<Child> {
+    start_app(target, plan).context("Could not relaunch the update")
 }
 
 fn recover_previous(directory: &Path, plan: &Plan) -> anyhow::Result<Child> {
@@ -1146,19 +1164,8 @@ fn recover_previous(directory: &Path, plan: &Plan) -> anyhow::Result<Child> {
         );
         replace(&backup, &plan.target)?;
     }
-    let mut recovery = Command::new(&plan.target);
-    recovery
-        .args(&plan.args)
-        .current_dir(&plan.cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    hidden(&mut recovery);
-    let child = recovery
-        .spawn()
-        .context("The old executable was preserved, but could not be restarted")?;
-    eprintln!("Restarted PID: {}", child.id());
-    Ok(child)
+    start_app(&plan.target, plan)
+        .context("The old executable was preserved, but could not be restarted")
 }
 
 fn apply_binary(
@@ -1198,6 +1205,21 @@ mod tests {
             });
         plain_path(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn failed_download_reports_the_downloader_status() {
+        // ポート1のループバックは待受がなく、外部通信なしで curl の接続失敗を再現できる。
+        let error = request("https://127.0.0.1:1/", 4096, false)
+            .unwrap_err()
+            .to_string();
+        // 終了状態の表記はOSで異なる（Windows: exit code、unix: exit status）ため、
+        // 括弧で状態が付くことだけを確認し、終了コードの値には依存しない。
+        assert!(
+            error.starts_with("Could not retrieve the stable release over HTTPS (")
+                && error.ends_with(')'),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1452,7 +1474,7 @@ mod tests {
             &directory,
         )
         .unwrap();
-        assert!(relaunch(&directory, &plan, &target).is_err());
+        assert!(relaunch(&plan, &target).is_err());
         assert!(recover_previous(&directory, &plan).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"old-invalid-executable");
     }

@@ -10,6 +10,7 @@ default-run = "skilvella"
 
 [features]
 launcher = []
+windows-installer = ["dep:velopack"]
 release-tools = []
 release-update-test = ["release-tools", "dep:rcgen", "dep:rustls"]
 
@@ -43,8 +44,8 @@ comrak = { version = "0.59.0", default-features = false }
 notify = "8"
 rcgen = { version = "0.14", default-features = false, features = ["pem", "ring"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
-flate2 = "1"
-tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+tar = { version = "0.4", default-features = false }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 rmcp = { version = "3.9.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 rusqlite = { version = "0.42.0", features = ["bundled"] }
@@ -56,7 +57,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse"] }
+velopack = { version = "=1.2.161", default-features = false, optional = true }
+windows = { version = "0.62.2", features = ["Win32_System_Com", "Win32_UI_Shell"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

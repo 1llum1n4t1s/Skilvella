@@ -16,18 +16,42 @@ struct Options {
     tray: bool,
     #[cfg(windows)]
     register_at_logon: bool,
+    #[cfg(windows)]
+    register_start_menu: bool,
 }
+/// Windowsの自動登録を行うかを、プログラム名を除いた起動引数だけから決める。
+///
+/// 戻り値は `(サインイン登録, スタートメニュー登録)`。
+/// - 引数なしの通常起動では両方を登録する。
+/// - `--no-autostart` だけの起動はサインイン登録から起動された場合なので、
+///   Run値は登録し直さず、スタートメニューのショートカットだけを補う。
+/// - それ以外の引数を伴う起動（開発・ヘッドレス運用など）ではどちらも登録しない。
+///
+/// 引数の解析とは独立した純関数にして、登録条件だけを単体テストで固定する。
+#[cfg(windows)]
+fn registration(args: &[std::ffi::OsString]) -> (bool, bool) {
+    let has_no_args = args.is_empty();
+    let only_no_autostart = matches!(args, [arg] if arg == windows_startup::NO_AUTOSTART);
+    (has_no_args, has_no_args || only_no_autostart)
+}
+
 fn options() -> anyhow::Result<Option<Options>> {
+    // 登録判定に引数全体が必要なため、いったん集めてから解析する。
+    let args: Vec<_> = env::args_os().skip(1).collect();
+    #[cfg(windows)]
+    let (register_at_logon, register_start_menu) = registration(&args);
+    let mut args = args.into_iter();
     let mut options = Options {
         data_dir: PathBuf::new(),
         port: 7465,
         watch: true,
         tray: cfg!(any(windows, target_os = "macos")),
         #[cfg(windows)]
-        register_at_logon: env::args_os().len() == 1,
+        register_at_logon,
+        #[cfg(windows)]
+        register_start_menu,
     };
     let mut data_dir = None;
-    let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--data-dir") => {
@@ -97,16 +121,27 @@ fn default_data_dir() -> anyhow::Result<PathBuf> {
         Ok(root.join("skilvella"))
     }
 }
-#[tokio::main(worker_threads = 2)]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     windows_startup::attach_parent_console();
-    if skilvella::update::run_installer_if_requested()? {
+    #[cfg(all(windows, feature = "windows-installer"))]
+    velopack::VelopackApp::build().run();
+    // 更新ヘルパーは同期処理だけで置換・再起動を行うため、Tokioランタイムを作る前に分岐する。
+    // ヘルパーとして起動された場合に不要なワーカースレッドを生成しない。
+    // インストーラー版は配置をセットアップ側が管理するため、ヘルパー分岐を持たない。
+    if !cfg!(all(windows, feature = "windows-installer"))
+        && skilvella::update::run_installer_if_requested()?
+    {
         return Ok(());
     }
     let Some(options) = options()? else {
         return Ok(());
     };
+    run(options)
+}
+
+#[tokio::main(worker_threads = 2)]
+async fn run(options: Options) -> anyhow::Result<()> {
     // 稼働中インスタンスと競合する場合は、保存済みの設定に触れる前に終了する。
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, options.port))
         .await
@@ -123,10 +158,18 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Could not initialize the skill directory")?;
     #[cfg(windows)]
-    if options.register_at_logon
+    if !cfg!(feature = "windows-installer")
+        && options.register_at_logon
         && let Err(error) = windows_startup::register_at_logon()
     {
         eprintln!("Could not register Skilvella for Windows sign-in: {error:#}");
+    }
+    #[cfg(windows)]
+    if !cfg!(feature = "windows-installer")
+        && options.register_start_menu
+        && let Err(error) = windows_startup::register_start_menu()
+    {
+        eprintln!("Could not add Skilvella to the Start menu: {error:#}");
     }
     let port = listener.local_addr()?.port();
     println!(
@@ -164,4 +207,32 @@ fn user_home() -> anyhow::Result<PathBuf> {
         bail!("User home directory must be absolute");
     }
     Ok(home)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::registration;
+    use std::ffi::OsString;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn registration_follows_the_startup_arguments() {
+        // 通常起動ではサインイン登録とスタートメニュー登録の両方を行う。
+        assert_eq!(registration(&args(&[])), (true, true));
+        // サインイン登録からの起動ではRun値を書き直さず、ショートカットだけを補う。
+        assert_eq!(registration(&args(&["--no-autostart"])), (false, true));
+        // `--no-autostart` に他の引数が続く場合は、利用者の明示的な起動として登録しない。
+        assert_eq!(
+            registration(&args(&["--no-autostart", "--no-tray"])),
+            (false, false)
+        );
+        // 開発・ヘッドレス運用の引数ではどちらも登録しない。
+        assert_eq!(
+            registration(&args(&["--no-tray", "--port", "0"])),
+            (false, false)
+        );
+    }
 }
