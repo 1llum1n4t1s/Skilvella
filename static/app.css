@@ -167,8 +167,6 @@ input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible
   box-shadow: inset 0 -5px 14px var(--glow);
 }
 .topbar nav>a.button[aria-current="page"] { outline: 2px solid var(--violet); outline-offset: 4px; }
-.theme-control { flex-direction: row; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
-.theme-control select { width: 86px; min-height: 35px; padding: 6px 8px; font-size: 12px; }
 main { max-width: 1320px; margin: 0 auto; padding: 32px 28px 60px; min-height: calc(100vh - 145px); }
 footer { max-width: 1264px; margin: auto; padding: 20px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 [id] { scroll-margin-top: 104px; }
@@ -229,6 +227,8 @@ table { border-collapse: collapse; width: 100%; text-align: left; }
 .codex-mode-options { display: grid; gap: 7px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .codex-mode-options label { flex-direction: row; align-items: flex-start; gap: 7px; font-size: 12px; font-weight: 500; line-height: 1.35; }
 .codex-mode-options input { flex: 0 0 auto; margin: 0; }
+.client-targets { min-width: 0; margin: 0; padding: 0; border: 0; }
+.client-targets legend { padding: 0; font-weight: 600; }
 .codex-policy-status:not(:empty) { display: block; margin-top: 8px; }
 th { background: var(--input); color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .05em; white-space: nowrap; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 td { padding: 18px; vertical-align: top; border-bottom: 1px solid var(--line); font-size: 12px; }
@@ -321,7 +321,6 @@ tbody tr:hover { background: var(--violet-soft); }
   .topbar { display: grid; grid-template-columns: minmax(0,1fr) auto; padding-block: 16px; gap: 16px; }
   .brand { grid-column: 1; grid-row: 1; font-size: 22px; }
   .header-tools { display: contents; }
-  .theme-control { grid-column: 2; grid-row: 1; }
   .topbar nav { grid-column: 1/-1; grid-row: 2; justify-content: space-between; gap: 8px; }
   .topbar nav>a { font-size: 12px; }
   .topbar nav>a:not(.button) { padding-inline: 8px; }

@@ -5,33 +5,6 @@ use std::{fs, path::PathBuf};
 
 mod common;
 
-fn encode(s: &str) -> String {
-    s.bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
-                (b as char).to_string()
-            } else {
-                format!("%{b:02X}")
-            }
-        })
-        .collect()
-}
-fn form(fields: &[(&str, &str)]) -> String {
-    fields
-        .iter()
-        .map(|(k, v)| format!("{}={}", encode(k), encode(v)))
-        .collect::<Vec<_>>()
-        .join("&")
-}
-async fn post(client: &Client, url: &str, fields: &[(&str, &str)]) -> reqwest::Response {
-    client
-        .post(url)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(form(fields))
-        .send()
-        .await
-        .unwrap()
-}
 async fn rpc(client: &Client, base: &str, id: u64, method: &str, params: Value) -> Value {
     let response = client
         .post(format!("{base}/mcp"))
@@ -74,10 +47,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     let token = state.csrf.to_string();
     let server = common::HttpServer::start(state.clone()).await;
     let base_url = server.base.clone();
-    let client = Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
+    let client = common::no_redirect_client();
     let page = client.get(&base_url).send().await.unwrap();
     assert_eq!(page.status(), StatusCode::OK);
     assert!(page.headers().contains_key("content-security-policy"));
@@ -102,12 +72,12 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        post(&client, &format!("{base_url}/scan"), &[("csrf", "wrong")])
+        common::post_form(&client, &format!("{base_url}/scan"), &[("csrf", "wrong")])
             .await
             .status(),
         StatusCode::FORBIDDEN
     );
-    let added = post(
+    let added = common::post_form(
         &client,
         &format!("{base_url}/sources/add"),
         &[
@@ -125,7 +95,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     );
     for token in ["wrong", ""] {
         assert_eq!(
-            post(
+            common::post_form(
                 &client,
                 &name_url,
                 &[
@@ -141,7 +111,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     }
     let display_name = "仕事 <script>alert(1)</script> & \"🌸\"";
     assert_eq!(
-        post(
+        common::post_form(
             &client,
             &name_url,
             &[
@@ -185,7 +155,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         }
     }
     assert_eq!(
-        post(
+        common::post_form(
             &client,
             &name_url,
             &[
@@ -199,7 +169,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        post(
+        common::post_form(
             &client,
             &name_url,
             &[("csrf", &token), ("alias", "test"), ("display_name", "")]
@@ -251,7 +221,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         .skills[0]
         .id
         .clone();
-    let published = post(
+    let published = common::post_form(
         &client,
         &format!("{base_url}/skills/{id}/metadata"),
         &[
@@ -510,7 +480,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     assert_eq!(escaped["isError"], true);
     let detail = state.library.detail(&id, false).unwrap();
     let edited = original.replace("# Example", "# Edited");
-    let saved = post(
+    let saved = common::post_form(
         &client,
         &format!("{base_url}/skills/{id}/content"),
         &[
@@ -521,7 +491,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     )
     .await;
     assert_eq!(saved.status(), StatusCode::SEE_OTHER);
-    let stale = post(
+    let stale = common::post_form(
         &client,
         &format!("{base_url}/skills/{id}/content"),
         &[
@@ -537,7 +507,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         edited
     );
     let current = state.library.detail(&id, false).unwrap();
-    let restored = post(
+    let restored = common::post_form(
         &client,
         &format!("{base_url}/skills/{id}/restore"),
         &[
@@ -554,7 +524,7 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     );
     let large = "日本語".repeat(140_000);
     assert_eq!(
-        post(
+        common::post_form(
             &client,
             &format!("{base_url}/preview"),
             &[("csrf", &token), ("content", &large)]
@@ -627,10 +597,7 @@ async fn directory_settings_forms_and_icons_work_over_http() {
     let token = state.csrf.to_string();
     let server = common::HttpServer::start(state.clone()).await;
     let url = server.base.clone();
-    let client = Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
+    let client = common::no_redirect_client();
     let page = client
         .get(format!("{url}/sources"))
         .send()
@@ -643,7 +610,7 @@ async fn directory_settings_forms_and_icons_work_over_http() {
     assert!(!page.contains("<select name=\"mode\""));
     assert!(!page.contains("/sources/migrate") && !page.contains("name=\"destination\""));
     assert_eq!(
-        post(
+        common::post_form(
             &client,
             &format!("{url}/sources/migrate"),
             &[("csrf", &token)]
@@ -653,7 +620,7 @@ async fn directory_settings_forms_and_icons_work_over_http() {
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        post(
+        common::post_form(
             &client,
             &format!("{url}/sources/add"),
             &[
@@ -688,7 +655,7 @@ async fn directory_settings_forms_and_icons_work_over_http() {
     let bytes = png.bytes().await.unwrap();
     assert_eq!(&bytes[16..24], &[0, 0, 0, 32, 0, 0, 0, 32]);
     assert_eq!(
-        post(
+        common::post_form(
             &client,
             &format!("{url}/sources/directory"),
             &[("csrf", "wrong"), ("mode", "disabled")]
@@ -697,7 +664,7 @@ async fn directory_settings_forms_and_icons_work_over_http() {
         .status(),
         StatusCode::FORBIDDEN
     );
-    let response = post(
+    let response = common::post_form(
         &client,
         &format!("{url}/sources/directory"),
         &[
@@ -713,7 +680,7 @@ async fn directory_settings_forms_and_icons_work_over_http() {
     assert_eq!(switched.total, 1);
     assert_ne!(switched.skills[0].id, original);
     assert!(!switched.skills[0].published && switched.skills[0].tags.is_empty());
-    let failed = post(
+    let failed = common::post_form(
         &client,
         &format!("{url}/sources/directory"),
         &[
@@ -735,7 +702,7 @@ async fn directory_settings_forms_and_icons_work_over_http() {
         1
     );
     assert_eq!(
-        post(
+        common::post_form(
             &client,
             &format!("{url}/sources/directory"),
             &[("csrf", &token), ("mode", "auto")]
@@ -748,7 +715,7 @@ async fn directory_settings_forms_and_icons_work_over_http() {
     assert_eq!(restored.summary.tags, vec!["keep-tag"]);
     assert!(native.join("example/SKILL.md").exists() && custom.join("example/SKILL.md").exists());
     assert_eq!(
-        post(
+        common::post_form(
             &client,
             &format!("{url}/sources/directory"),
             &[("csrf", &token), ("mode", "disabled")]

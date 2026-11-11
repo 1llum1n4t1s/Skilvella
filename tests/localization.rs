@@ -1,4 +1,4 @@
-use reqwest::{Client, StatusCode, header, redirect::Policy};
+use reqwest::{Client, StatusCode, header};
 use skilvella::{AppState, library::Library};
 
 mod common;
@@ -30,9 +30,7 @@ async fn settings_are_read_only_and_update_actions_require_csrf() {
             client.get(&url).send().await.unwrap().status(),
             StatusCode::METHOD_NOT_ALLOWED
         );
-        let response = client
-            .post(&url)
-            .header("content-type", "application/x-www-form-urlencoded")
+        let response = common::form_post(&client, &url)
             .body("csrf=wrong")
             .send()
             .await
@@ -114,16 +112,14 @@ async fn initial_html_is_localized_without_javascript() {
     assert!(body.contains("unique-path/SKILL.md"));
 
     // 件数は通知IDと値で引き渡し、遷移先のリクエストで翻訳する。
-    let response = Client::builder()
-        .redirect(Policy::none())
-        .build()
-        .unwrap()
-        .post(format!("{}/scan", server.base))
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(format!("csrf={}", state.csrf))
-        .send()
-        .await
-        .unwrap();
+    let response = common::form_post(
+        &common::no_redirect_client(),
+        format!("{}/scan", server.base),
+    )
+    .body(format!("csrf={}", state.csrf))
+    .send()
+    .await
+    .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let location = response.headers()[header::LOCATION].to_str().unwrap();
     assert!(location.starts_with("/?message=scan&indexed=1&"));
@@ -150,7 +146,7 @@ async fn language_cookie_requires_csrf_and_is_scoped_to_the_port() {
     let state = AppState::new(Library::open(&root).unwrap());
     let server = common::HttpServer::start(state.clone()).await;
     let other = common::HttpServer::start(state.clone()).await;
-    let client = Client::builder().redirect(Policy::none()).build().unwrap();
+    let client = common::no_redirect_client();
     let url = format!("{}/settings/language", server.base);
     for (origin, csrf, language, status) in [
         (server.base.as_str(), "wrong", "de", StatusCode::FORBIDDEN),
@@ -167,10 +163,8 @@ async fn language_cookie_requires_csrf_and_is_scoped_to_the_port() {
             StatusCode::BAD_REQUEST,
         ),
     ] {
-        let response = client
-            .post(&url)
+        let response = common::form_post(&client, &url)
             .header(header::ORIGIN, origin)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(format!("csrf={csrf}&language={language}"))
             .send()
             .await
@@ -191,10 +185,8 @@ async fn language_cookie_requires_csrf_and_is_scoped_to_the_port() {
         "data-language-cookie=\"skilvella-language-{port}\""
     )));
     for (choice, lang) in [("de", "de"), ("auto", "fr")] {
-        let response = client
-            .post(&url)
+        let response = common::form_post(&client, &url)
             .header(header::ORIGIN, &server.base)
-            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(format!("csrf={}&language={choice}", state.csrf))
             .send()
             .await

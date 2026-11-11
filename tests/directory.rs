@@ -7,6 +7,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+// リンク作成は codex_index.rs と共有するフィクスチャを使う（本体の実装とは独立）。
+#[path = "support/link.rs"]
+mod link;
+use link::link_directory;
+
 fn base() -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join(".work/test-directory")
@@ -35,35 +40,6 @@ fn publish(l: &Library, id: &str) {
         },
     )
     .unwrap();
-}
-fn link_directory(target: &Path, link: &Path) {
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target, link).unwrap();
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let status = std::process::Command::new("cmd.exe")
-            .args(["/C", "mklink", "/J"])
-            .arg(
-                link.to_string_lossy()
-                    .trim_start_matches(r"\\?\")
-                    .replace('/', "\\"),
-            )
-            .arg(
-                target
-                    .to_string_lossy()
-                    .trim_start_matches(r"\\?\")
-                    .replace('/', "\\"),
-            )
-            .creation_flags(0x08000000)
-            .output()
-            .unwrap();
-        assert!(
-            status.status.success(),
-            "{}",
-            String::from_utf8_lossy(&status.stderr)
-        );
-    }
 }
 
 #[test]
@@ -969,4 +945,37 @@ fn startup_auto_selection_conflict_keeps_previous_settings_and_scans_manual_sour
         "The retained automatic source must retain its ownership"
     );
     assert_eq!(reopened.sources().unwrap()[0].alias, "manual");
+}
+
+/// Claude Code・Grokの生成物も、Codexと同じく管理フォルダー内で原本として取り込まない。
+#[test]
+fn client_entries_are_never_ingested_as_original_skills() {
+    use skilvella::model::SkillClient;
+    let b = base();
+    let home = b.join("home");
+    let source = b.join("source");
+    skill(&source.join("one"), "original");
+    let l = Library::open_for_user(&b.join("data"), &home, None).unwrap();
+    l.add_source("source", &source).unwrap();
+    let id = all(&l)[0].id.clone();
+    publish(&l, &id);
+    l.set_codex_policy(&id, false, true).unwrap();
+    l.set_clients_enabled(&[(SkillClient::Claude, true), (SkillClient::Grok, true)])
+        .unwrap();
+    assert!(l.sync_summary().unwrap().last_error.is_empty());
+    for (alias, folder) in [
+        ("grok", home.join(".grok/skills")),
+        ("claude-store", home.join(".claude/skilvella")),
+        ("claude-links", home.join(".claude/skills")),
+    ] {
+        l.add_source(alias, &folder).unwrap();
+        l.scan().unwrap();
+        let names: Vec<_> = all(&l)
+            .into_iter()
+            .filter(|skill| !skill.missing)
+            .map(|skill| skill.name)
+            .collect();
+        assert_eq!(names, ["original"], "{alias}");
+        l.remove_source(alias).unwrap();
+    }
 }

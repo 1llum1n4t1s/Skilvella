@@ -18,13 +18,8 @@ fn hash<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
         digest.update((part.len() as u64).to_be_bytes());
         digest.update(part.as_bytes());
     }
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut revision = String::with_capacity(64);
-    for byte in digest.finalize() {
-        revision.push(HEX[(byte >> 4) as usize] as char);
-        revision.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    revision
+    // 16進化は共通関数へ集約する（固定ベクトルのテストで出力の同一性を確認している）。
+    crate::sha256_hex(&digest.finalize())
 }
 
 fn page(text: &str, offset: usize) -> anyhow::Result<(&str, usize)> {

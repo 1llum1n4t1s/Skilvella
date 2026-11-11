@@ -22,6 +22,18 @@ static POLICY_OPERATIONS: OnceLock<PolicyOperations> = OnceLock::new();
 fn policy_operations() -> &'static PolicyOperations {
     POLICY_OPERATIONS.get_or_init(Mutex::default)
 }
+/// 完了済みの操作記録を保持する時間。画面側がこの間に結果を問い合わせる。
+const POLICY_OPERATION_TTL: Duration = Duration::from_secs(600);
+/// 操作記録の上限件数。実行中の記録は破棄しないため、上限到達時は呼び出し側が拒否する。
+const POLICY_OPERATION_LIMIT: usize = 256;
+/// 期限切れの完了記録を破棄する。実行中（pending）の記録は結果を書き戻すまで残す。
+///
+/// 上限到達時の応答（未登録の取消は503、保存開始は409）は呼び出し側ごとに異なるため、
+/// ここでは破棄だけを行い、上限判定は `POLICY_OPERATION_LIMIT` を使って呼び出し側で行う。
+fn prune_policy_operations(operations: &mut BTreeMap<uuid::Uuid, (&'static str, Instant)>) {
+    operations
+        .retain(|_, (state, time)| *state == "pending" || time.elapsed() < POLICY_OPERATION_TTL);
+}
 async fn policy_operation_status(Path(id): Path<String>) -> Response {
     let Ok(id) = uuid::Uuid::parse_str(&id) else {
         return StatusCode::BAD_REQUEST.into_response();
@@ -48,11 +60,9 @@ async fn policy_operation(
     };
     match policy_operations().lock() {
         Ok(mut operations) => {
-            operations.retain(|_, (state, time)| {
-                *state == "pending" || time.elapsed() < Duration::from_secs(600)
-            });
+            prune_policy_operations(&mut operations);
             if !operations.contains_key(&id) {
-                if operations.len() >= 256 {
+                if operations.len() >= POLICY_OPERATION_LIMIT {
                     return StatusCode::SERVICE_UNAVAILABLE.into_response();
                 }
                 // 未受付なら取消を先に確定し、遅れて到着するPOSTを拒否する。
@@ -107,22 +117,43 @@ struct SettingsPage {
     locale: Locale,
     csrf: String,
     version: &'static str,
-    codex: CodexSyncSettings,
+    /// 同期先クライアントごとの状態（Codex・Claude Code・Grokの順）。
+    clients: Vec<ClientSyncView>,
 }
-impl SettingsPage {
-    fn display_codex_path(&self) -> String {
-        display_path(&self.codex.path)
-    }
+/// 設定画面の同期先1件分。パスは表示用に整形済み。
+struct ClientSyncView {
+    key: &'static str,
+    label: &'static str,
+    settings: CodexSyncSettings,
+    path: String,
+    link_path: String,
 }
 async fn settings(Extension(locale): Extension<Locale>, State(state): State<AppState>) -> Response {
-    match state.run(|lib| lib.codex_settings()).await {
-        Ok(codex) => render(
+    let result = state
+        .run(|lib| {
+            SkillClient::ALL
+                .into_iter()
+                .map(|client| {
+                    let settings = lib.client_settings(client)?;
+                    Ok(ClientSyncView {
+                        key: client.key(),
+                        label: client.label(),
+                        path: display_path(&settings.path),
+                        link_path: display_path(&settings.link_path),
+                        settings,
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()
+        })
+        .await;
+    match result {
+        Ok(clients) => render(
             locale,
             SettingsPage {
                 locale,
                 csrf: state.csrf.to_string(),
                 version: env!("CARGO_PKG_VERSION"),
-                codex,
+                clients,
             },
         ),
         Err(e) => failure(locale, e),
@@ -154,10 +185,24 @@ async fn set_language(
     )
         .into_response()
 }
+/// 同期先の設定フォーム。
+///
+/// - 新しい画面: `targets=1` と、選んだクライアントのチェックボックス（`codex` / `claude` /
+///   `grok` = `true`）を送る。未選択のチェックボックスは送られないため、`targets` で
+///   「全て未選択」と旧形式を区別する。
+/// - 旧形式: `enabled` だけを送り、Codexだけを切り替える（他クライアントは変えない）。
 #[derive(Deserialize)]
 struct CodexSettingsForm {
     csrf: String,
-    enabled: bool,
+    enabled: Option<bool>,
+    #[serde(default)]
+    targets: bool,
+    #[serde(default)]
+    codex: bool,
+    #[serde(default)]
+    claude: bool,
+    #[serde(default)]
+    grok: bool,
 }
 async fn set_codex_enabled(
     Extension(locale): Extension<Locale>,
@@ -167,8 +212,23 @@ async fn set_codex_enabled(
     if let Some(response) = csrf_error(locale, &state, &form.csrf) {
         return response;
     }
+    let changes = match (form.enabled, form.targets) {
+        (Some(enabled), false) => vec![(SkillClient::Codex, enabled)],
+        (None, true) => vec![
+            (SkillClient::Codex, form.codex),
+            (SkillClient::Claude, form.claude),
+            (SkillClient::Grok, form.grok),
+        ],
+        _ => {
+            return error(
+                locale,
+                StatusCode::BAD_REQUEST,
+                "同期先を選択してください。",
+            );
+        }
+    };
     match state
-        .run_mut(move |lib| lib.set_codex_enabled(form.enabled))
+        .run_mut(move |lib| lib.set_clients_enabled(&changes))
         .await
     {
         Ok(_) => Redirect::to("/settings#codex").into_response(),
@@ -227,7 +287,7 @@ async fn set_codex_policy(
         return error(
             locale,
             StatusCode::BAD_REQUEST,
-            "Codexでの使い方を選択してください。",
+            "使い方を選択してください。",
         );
     };
     let key = id.clone();
@@ -248,10 +308,8 @@ async fn set_codex_policy(
                 "保存状態を確認できません。再読み込みしてください。",
             );
         };
-        operations.retain(|_, (state, time)| {
-            *state == "pending" || time.elapsed() < Duration::from_secs(600)
-        });
-        if operations.contains_key(&id) || operations.len() >= 256 {
+        prune_policy_operations(&mut operations);
+        if operations.contains_key(&id) || operations.len() >= POLICY_OPERATION_LIMIT {
             return error(
                 locale,
                 StatusCode::CONFLICT,
@@ -263,29 +321,33 @@ async fn set_codex_policy(
     };
     let owner = state.clone();
     // HTTPが切断されても保存・同期・完了記録まで実行する。
+    // 保存結果と、完了判定に使った同期状態を一緒に返す。同期状態はJSON応答で再利用し、
+    // 保存失敗時は読まないため `None` とする。
     let result = tokio::spawn(async move {
         let result = owner
             .run_mut(move |lib| lib.set_codex_policy(&key, policy.automatic, policy.command))
             .await;
-        let completion = if result.is_err() {
-            "failed"
+        let sync = if result.is_err() {
+            None
         } else {
-            match owner.run(|lib| lib.codex_settings()).await {
-                Ok(sync) if sync.last_error.is_empty() => "complete",
-                Ok(_) => "sync_failed",
-                Err(_) => "failed",
-            }
+            Some(owner.run(|lib| lib.sync_summary()).await)
+        };
+        let completion = match &sync {
+            None => "failed",
+            Some(Ok(sync)) if sync.last_error.is_empty() => "complete",
+            Some(Ok(_)) => "sync_failed",
+            Some(Err(_)) => "failed",
         };
         if let Some(id) = operation
             && let Ok(mut operations) = policy_operations().lock()
         {
             operations.insert(id, (completion, Instant::now()));
         }
-        result
+        result.map(|saved| (saved, sync))
     })
     .await;
     match result.unwrap_or_else(|e| Err(e.into())) {
-        Ok(_)
+        Ok((_, sync))
             if headers
                 .get(header::ACCEPT)
                 .and_then(|h| h.to_str().ok())
@@ -294,7 +356,13 @@ async fn set_codex_policy(
                         .any(|v| v.trim().starts_with("application/json"))
                 }) =>
         {
-            match state.run(|lib| lib.codex_settings()).await {
+            // 完了判定で読めた同期状態をそのまま返す。読めなかった場合だけ従来どおり
+            // 読み直し、2回目に成功すればJSONを返す挙動を保つ。
+            let sync = match sync {
+                Some(Ok(sync)) => Ok(sync),
+                _ => state.run(|lib| lib.sync_summary()).await,
+            };
+            match sync {
                 Ok(sync) => axum::Json(
                     serde_json::json!({"enabled": sync.enabled, "last_error": sync.last_error}),
                 )
@@ -444,7 +512,7 @@ struct Notice {
 impl Notice {
     fn text(&self, locale: Locale) -> String {
         let key = match self.message.as_str() {
-            "codex-saved" => "Codex設定を保存しました。同期状態を確認してください。",
+            "codex-saved" => "使い方を保存しました。同期状態を確認してください。",
             "source-renamed" => "表示名を保存しました。",
             "source-removed" => "登録を解除しました。元のフォルダーとファイルは保持されています。",
             "missing-forgotten" => {
@@ -525,11 +593,7 @@ impl IndexPage {
         if group.unknown {
             return "/sources".into();
         }
-        format!(
-            "/?repository_source={}&repository={}",
-            encoded(&group.source),
-            encoded(&group.repository)
-        )
+        repository_url(&group.source, &group.repository)
     }
     fn source_label(&self, alias: &str) -> String {
         self.sources
@@ -538,6 +602,19 @@ impl IndexPage {
             .map(Source::label)
             .unwrap_or_else(|| alias.to_owned())
     }
+}
+/// 取得元一覧の1リポジトリを開く基本URLを組み立てる。
+///
+/// 取得元とリポジトリ名はどちらも `encoded` で同じ規則に従ってエンコードする。
+/// メッセージや状態などの追加パラメーターは、呼び出し側で `&...` として後ろへ足す。
+/// 検索条件を引き継ぐ `repository_page_url` は `source` を重ねて持つ別形式のため、
+/// この関数へは統合しない。
+fn repository_url(source: &str, repository: &str) -> String {
+    format!(
+        "/?repository_source={}&repository={}",
+        encoded(source),
+        encoded(repository)
+    )
 }
 fn repository_page_url(selection: &RepositorySelection, query: &SearchQuery) -> String {
     format!(
@@ -594,18 +671,14 @@ async fn index(
                 groups,
                 policies,
                 lib.sources()?,
-                lib.codex_settings()?,
+                lib.sync_summary()?,
                 error_count,
             ))
         })
         .await
     {
         Ok((results, groups, policies, sources, codex, error_count)) => {
-            let reset = format!(
-                "/?repository_source={}&repository={}",
-                encoded(&selection.repository_source),
-                encoded(&selection.repository)
-            );
+            let reset = repository_url(&selection.repository_source, &selection.repository);
             let page_url = |offset| {
                 let mut page = query.clone();
                 page.offset = offset;
@@ -889,10 +962,10 @@ fn repository_redirect(selection: &RepositorySelection, message: &str) -> Respon
     if selection.repository_source.is_empty() {
         redirect("/", message)
     } else {
+        // メッセージは既存どおりエンコードせずに付け足す（呼び出し側が固定文字列を渡す）。
         Redirect::to(&format!(
-            "/?repository_source={}&repository={}&message={message}",
-            encoded(&selection.repository_source),
-            encoded(&selection.repository)
+            "{}&message={message}",
+            repository_url(&selection.repository_source, &selection.repository)
         ))
         .into_response()
     }
@@ -961,9 +1034,8 @@ async fn forget_missing(
     {
         Ok(_) => {
             let target = format!(
-                "/?repository_source={}&repository={}&status=missing",
-                encoded(&f.selection.repository_source),
-                encoded(&f.selection.repository)
+                "{}&status=missing",
+                repository_url(&f.selection.repository_source, &f.selection.repository)
             );
             Redirect::to(&format!("{target}&message=missing-forgotten")).into_response()
         }
@@ -983,7 +1055,7 @@ fn bulk_settings(
     let codex = if mode.is_empty() {
         None
     } else {
-        Some(codex_mode(mode).ok_or("Codexでの使い方を選択してください。")?)
+        Some(codex_mode(mode).ok_or("使い方を選択してください。")?)
     };
     Ok((published, codex))
 }
@@ -1018,7 +1090,7 @@ async fn bulk(
         return error(
             locale,
             StatusCode::BAD_REQUEST,
-            "変更する公開状態・追加タグ・Codexでの使い方のいずれかを指定してください。",
+            "変更する公開状態・追加タグ・使い方のいずれかを指定してください。",
         );
     }
     match state
@@ -1104,7 +1176,7 @@ async fn repository_bulk(
         return error(
             locale,
             StatusCode::BAD_REQUEST,
-            "変更する公開状態・Codexでの使い方を指定してください。",
+            "変更する公開状態・使い方を指定してください。",
         );
     }
     match state
@@ -1163,14 +1235,12 @@ async fn detail_page(
             let detail = lib.detail(&key, false)?;
             let source_label = lib.source_label(&detail.summary.source)?;
             let library_url = match lib.repository_selection(&detail.summary) {
-                Ok(selection) => format!(
-                    "/?repository_source={}&repository={}",
-                    encoded(&selection.repository_source),
-                    encoded(&selection.repository)
-                ),
+                Ok(selection) => {
+                    repository_url(&selection.repository_source, &selection.repository)
+                }
                 Err(_) => "/sources".into(),
             };
-            let codex = lib.codex_settings()?;
+            let codex = lib.sync_summary()?;
             Ok((detail, source_label, codex, library_url))
         })
         .await
@@ -1493,6 +1563,42 @@ mod tests {
         assert_eq!(
             super::encoded(" /?&=+%日本語"),
             "%20%2F%3F%26%3D%2B%25%E6%97%A5%E6%9C%AC%E8%AA%9E"
+        );
+    }
+
+    /// 集約前の `format!` と同じURLをバイト単位で生成することを確認する。
+    #[test]
+    fn repository_url_matches_previous_format() {
+        let cases = [
+            ("", ""),
+            ("local", "repo"),
+            ("git hub", "owner/名前&x=1"),
+            ("a+b%", "?#~._-"),
+        ];
+        for (source, repository) in cases {
+            let previous = format!(
+                "/?repository_source={}&repository={}",
+                super::encoded(source),
+                super::encoded(repository)
+            );
+            assert_eq!(super::repository_url(source, repository), previous);
+            // 呼び出し側で付け足す形式も旧実装と一致する。
+            let message = "scan-done";
+            assert_eq!(
+                format!(
+                    "{}&message={message}",
+                    super::repository_url(source, repository)
+                ),
+                format!(
+                    "/?repository_source={}&repository={}&message={message}",
+                    super::encoded(source),
+                    super::encoded(repository)
+                )
+            );
+        }
+        assert_eq!(
+            super::repository_url("git hub", "a/b"),
+            "/?repository_source=git%20hub&repository=a%2Fb"
         );
     }
 }

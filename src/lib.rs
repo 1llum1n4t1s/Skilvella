@@ -9,6 +9,23 @@ pub mod web;
 use library::Library;
 use std::sync::Arc;
 
+/// SHA-256のダイジェスト（バイト列）を小文字16進文字列へ変換する共通関数。
+///
+/// - スキルID・リビジョン（SQLiteに保存済み）、MCPの継続用リビジョン、更新物の
+///   チェックサム照合がすべてこの表現に依存するため、出力は「1バイト=小文字2桁、
+///   上位4ビットが先」の形式から絶対に変えないこと（値が変わると既存IDが失効する）。
+/// - ハッシュ計算そのもの（長さ接頭辞の付け方・ストリーミング読込み）は用途ごとに
+///   異なるので各呼び出し元に残し、ここではバイト列の16進化だけを共通化する。
+pub(crate) fn sha256_hex(digest: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        text.push(HEX[(byte >> 4) as usize] as char);
+        text.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    text
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub library: Library,
@@ -48,11 +65,12 @@ impl AppState {
             if let Err(error) = library.sync_codex_entries()
                 && result.is_ok()
                 && library
-                    .codex_settings()
+                    .sync_summary()
                     .map_or(true, |settings| settings.last_error.is_empty())
             {
-                return Err(error
-                    .context("変更を保存しましたが、Codex同期とエラー状態の保存に失敗しました"));
+                return Err(error.context(
+                    "変更を保存しましたが、呼び出し入口の同期とエラー状態の保存に失敗しました",
+                ));
             }
             result
         })

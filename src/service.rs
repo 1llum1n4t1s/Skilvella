@@ -179,7 +179,7 @@ fn start_codex_index(library: Library) -> (oneshot::Sender<()>, tokio::task::Joi
                 Err(error) => error.to_string(),
             };
             if !error.is_empty() && error != previous_error {
-                eprintln!("Codex index synchronization failed: {error}");
+                eprintln!("Skill entry synchronization failed: {error}");
             }
             previous_error = error;
             tokio::select! {

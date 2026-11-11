@@ -6,12 +6,55 @@ pub struct CodexSkillPolicy {
     pub command: bool,
 }
 
+/// 呼び出し入口の同期状態。設定はクライアントごとに別キーへ保存する。
+/// 名前は互換のためCodex時代のまま残し、Claude Code・Grokでも同じ形を使う。
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CodexSyncSettings {
     pub enabled: bool,
+    /// 生成物（SKILL.md群）を置く所有フォルダー。表示用で保存値は読み出し時に再計算する。
     pub path: String,
+    /// 探索先へリンクを張るクライアント（Claude Code）のリンク置き場。表示用。
+    #[serde(default)]
+    pub link_path: String,
     pub last_error: String,
     pub exported: usize,
+}
+
+/// スキル呼び出し入口の同期先クライアント。
+///
+/// - Codex: `~/.agents/skills/skilvella/` へ実ファイル（入れ子を探索するため一括配置できる）
+/// - Claude Code: `~/.claude/skills/` 直下1階層しか探索しないため、生成物を
+///   `~/.claude/skilvella/skills/` に置き、`~/.claude/skills/<name>` へリンクを張る
+/// - Grok: `~/.grok/skills/skilvella/` へ実ファイル（入れ子を探索する）
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillClient {
+    Codex,
+    Claude,
+    Grok,
+}
+
+impl SkillClient {
+    /// 同期・表示の順序。Codexを先頭に置き、既存の表示順を保つ。
+    pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::Grok];
+
+    /// フォーム・JSONで使う識別子。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Grok => "grok",
+        }
+    }
+
+    /// 画面表示名（製品名のため翻訳しない）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::Claude => "Claude Code",
+            Self::Grok => "Grok",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

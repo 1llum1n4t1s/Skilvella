@@ -30,12 +30,12 @@
       <p class="folder-location"><span class="muted">{{ locale.text("現在の場所") }}</span><code>{{ self.display_path(s.path) }}</code></p>
       <p class="note">{{ locale.text("スキル") }} {{ s.skill_count }}{{ locale.text("件") }}{% if s.error_count > 0 %} · <span class="error-text">{{ locale.text("読み取りエラー") }} {{ s.error_count }}{{ locale.text("件") }}</span>{% endif %}</p>
       {% if s.native_discovery_unknown %}
-      <p class="notice warning">{{ locale.text("Codexの探索先かどうか確認できません。フォルダーやドライブへの接続・読み取り権限を確認してください。") }}</p>
+      <p class="notice warning">{{ locale.text("エージェントの標準探索先かどうか確認できません。フォルダーやドライブへの接続・読み取り権限を確認してください。") }}</p>
       {% else %}
       {% if s.native_discovery %}
-      <p class="notice warning">{{ locale.text("Codexもこのフォルダーを直接読み込みます。二重読み込みを避けるには、Codexの標準探索先以外にスキルを配置して、そのフォルダーを登録してください。") }}</p>
+      <p class="notice warning">{{ locale.text("エージェントもこのフォルダーを直接読み込みます。二重読み込みを避けるには、標準探索先以外にスキルを配置して、そのフォルダーを登録してください。") }}</p>
       {% else %}
-      <p class="note">{{ locale.text("Codexの標準探索先の外です。独自の探索設定がある場合は、そちらも確認してください。") }}</p>
+      <p class="note">{{ locale.text("エージェントの標準探索先の外です。独自の探索設定がある場合は、そちらも確認してください。") }}</p>
       {% endif %}
       {% endif %}
       <div class="folder-card-secondary">

@@ -19,15 +19,21 @@
 <p class="note">{{ locale.text("表示設定はこのブラウザーに保存されます。") }}</p>
 <noscript><p>{{ locale.text("テーマの切り替えと更新の確認にはJavaScriptが必要です。") }}</p></noscript>
 </section>
-<section class="panel stack" id="codex"><h2>{{ locale.text("Codex連携") }}</h2>
-<form method="post" action="/settings/codex" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}">
-<label>{{ locale.text("Codex連携") }}<select name="enabled"><option value="false" {% if !codex.enabled %}selected{% endif %}>{{ locale.text("無効") }}</option><option value="true" {% if codex.enabled %}selected{% endif %}>{{ locale.text("有効") }}</option></select></label>
-<p class="note">{{ locale.text("有効にすると検索用スキル skilvella-search が常に候補に表示されます。各スキルの使い方は一覧または詳細画面で選択できます。") }}</p>
+<section class="panel stack" id="codex"><h2>{{ locale.text("呼び出し入口の同期") }}</h2>
+<form method="post" action="/settings/codex" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="targets" value="true">
+<fieldset class="stack client-targets"><legend>{{ locale.text("同期先") }}</legend>
+{% for client in clients %}<label class="checkbox"><input type="checkbox" name="{{ client.key }}" value="true" {% if client.settings.enabled %}checked{% endif %}> {{ client.label }}</label>
+{% endfor %}</fieldset>
+<p class="note">{{ locale.text("選んだクライアントごとに呼び出し入口を生成します。有効にすると検索用スキル skilvella-search が常に候補に表示されます。各スキルの使い方は一覧または詳細画面で選択でき、全ての同期先に共通です。") }}</p>
+<p class="note">{{ locale.text("GrokはCodexとClaude Codeの入口も読み込みます。Grokを有効にすると、使い方の設定を反映したGrok用の入口が優先されます。") }}</p>
 <button type="submit" data-busy="{{ locale.text("保存中…") }}">{{ locale.text("保存") }}</button></form>
-<p>{{ locale.text("生成先:") }} <code>{{ self.display_codex_path() }}</code></p>
-<p>{{ locale.text("生成済み件数:") }} {{ codex.exported }}</p>
-{% if !codex.last_error.is_empty() %}<div class="notice warning" role="status"><p>{{ locale.text("同期が停止しています。保存した設定はCodexへまだ反映されていません。以前の候補や自動選択が残っている可能性があります。") }}</p><p>{{ locale.text("Codex連携エラー:") }} {{ codex.last_error }}</p></div>{% endif %}
-<p class="note">{{ locale.text("MCP公開とは別の設定です。正常な同期後に非公開スキルの入口を外します。MCPは非公開の本文を返しません。本文の原本は複製しません。") }}</p>
+{% for client in clients %}<div class="stack" id="sync-{{ client.key }}"><h3>{{ client.label }}</h3>
+<p>{{ locale.text("生成先:") }} <code>{{ client.path }}</code></p>
+{% if !client.link_path.is_empty() %}<p>{{ locale.text("リンク先:") }} <code>{{ client.link_path }}</code></p>{% endif %}
+<p>{{ locale.text("生成済み件数:") }} {{ client.settings.exported }}</p>
+{% if !client.settings.last_error.is_empty() %}<div class="notice warning" role="status"><p>{{ locale.text("同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。") }}</p><p>{{ locale.text("同期エラー:") }} {{ client.settings.last_error }}</p></div>{% endif %}
+</div>
+{% endfor %}<p class="note">{{ locale.text("MCP公開とは別の設定です。正常な同期後に非公開スキルの入口を外します。MCPは非公開の本文を返しません。本文の原本は複製しません。") }}</p>
 </section>
 <section class="panel stack" id="updates" data-updates data-csrf="{{ csrf }}"><h2>{{ locale.text("アプリの更新") }}</h2>
 <p>{{ locale.text("現在のバージョン:") }} <strong>{{ version }}</strong></p>

@@ -6,10 +6,7 @@ mod common;
 
 #[tokio::test]
 async fn disconnected_policy_save_remains_observable_until_sync_finishes() {
-    let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(format!("navigation-{}", uuid::Uuid::new_v4()));
+    let root = common::isolated_root("navigation");
     fs::create_dir_all(root.join("source/one")).unwrap();
     fs::write(
         root.join("source/one/SKILL.md"),
@@ -28,10 +25,8 @@ async fn disconnected_policy_save_remains_observable_until_sync_finishes() {
     let client = Client::new();
     let db = rusqlite::Connection::open(root.join("data/library.sqlite3")).unwrap();
     db.execute_batch("BEGIN IMMEDIATE").unwrap();
-    let request = client
-        .post(format!("{}/skills/{id}/codex", server.base))
+    let request = common::form_post(&client, format!("{}/skills/{id}/codex", server.base))
         .header("accept", "application/json")
-        .header("content-type", "application/x-www-form-urlencoded")
         .body(format!(
             "csrf={}&mode=automatic&operation={operation}",
             state.csrf
@@ -70,9 +65,7 @@ async fn disconnected_policy_save_remains_observable_until_sync_finishes() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert!(state.library.codex_policy(&id).unwrap().automatic);
-    let response = client
-        .post(format!("{}/skills/{id}/codex", server.base))
-        .header("content-type", "application/x-www-form-urlencoded")
+    let response = common::form_post(&client, format!("{}/skills/{id}/codex", server.base))
         .body(format!(
             "csrf={}&mode=search&operation={operation}",
             state.csrf
@@ -83,23 +76,19 @@ async fn disconnected_policy_save_remains_observable_until_sync_finishes() {
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert!(state.library.codex_policy(&id).unwrap().automatic);
     let cancelled = uuid::Uuid::new_v4();
-    let status: serde_json::Value = client
-        .post(format!(
-            "{}/settings/policy-operations/{cancelled}",
-            server.base
-        ))
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(format!("csrf={}", state.csrf))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let status: serde_json::Value = common::form_post(
+        &client,
+        format!("{}/settings/policy-operations/{cancelled}", server.base),
+    )
+    .body(format!("csrf={}", state.csrf))
+    .send()
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
     assert_eq!(status["state"], "cancelled");
-    let late = client
-        .post(format!("{}/skills/{id}/codex", server.base))
-        .header("content-type", "application/x-www-form-urlencoded")
+    let late = common::form_post(&client, format!("{}/skills/{id}/codex", server.base))
         .body(format!(
             "csrf={}&mode=search&operation={cancelled}",
             state.csrf
@@ -133,10 +122,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
     let state = AppState::new(library);
     let server = common::HttpServer::start(state.clone()).await;
     let base = server.base.clone();
-    let client = Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
+    let client = common::no_redirect_client();
     let policy_url = format!("{base}/skills/{id}/codex");
     let bulk_url = format!("{base}/bulk");
     let settings_url = format!("{base}/settings/codex");
@@ -151,9 +137,9 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         .await
         .unwrap();
     assert!(body.contains("value=\"search\" selected"));
-    assert!(body.contains("Codexでの使い方"));
+    assert!(body.contains("使い方"));
     assert!(!state.library.codex_settings().unwrap().enabled);
-    assert!(body.contains("設定画面のCodex連携が有効で、同期に成功した場合に適用されます。"));
+    assert!(body.contains("設定画面で選んだ同期先へ、同期に成功した場合に適用されます。"));
     assert!(body.contains("href=\"/settings#codex\""));
     for (url, field, value) in [
         (&policy_url, "mode", "command"),
@@ -166,9 +152,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         );
         for bad_token in ["", "wrong"] {
             assert_eq!(
-                client
-                    .post(url)
-                    .header("content-type", "application/x-www-form-urlencoded")
+                common::form_post(&client, url)
                     .body(format!("csrf={bad_token}&{field}={value}"))
                     .send()
                     .await
@@ -178,10 +162,8 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
             );
         }
         assert_eq!(
-            client
-                .post(url)
+            common::form_post(&client, url)
                 .header("origin", "https://attacker.example")
-                .header("content-type", "application/x-www-form-urlencoded")
                 .body(format!("csrf={token}&{field}={value}"))
                 .send()
                 .await
@@ -191,9 +173,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         );
     }
     assert_eq!(
-        client
-            .post(&policy_url)
-            .header("content-type", "application/x-www-form-urlencoded")
+        common::form_post(&client, &policy_url)
             .body(format!("csrf={token}&mode=unknown"))
             .send()
             .await
@@ -207,9 +187,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         ("search", false, false),
     ] {
         assert_eq!(
-            client
-                .post(&policy_url)
-                .header("content-type", "application/x-www-form-urlencoded")
+            common::form_post(&client, &policy_url)
                 .body(format!("csrf={token}&mode={mode}"))
                 .send()
                 .await
@@ -237,9 +215,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         (policy_url.clone(), format!("csrf={token}&mode=command")),
     ] {
         assert_eq!(
-            client
-                .post(url)
-                .header("content-type", "application/x-www-form-urlencoded")
+            common::form_post(&client, url)
                 .body(body)
                 .send()
                 .await
@@ -290,10 +266,8 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
     let inline_url = format!(
         "{base}/skills/{second}/codex?repository_source=test&repository=&q=two%20words&tag=a%2Bb&offset=50"
     );
-    let response = client
-        .post(&inline_url)
+    let response = common::form_post(&client, &inline_url)
         .header("accept", "application/json")
-        .header("content-type", "application/x-www-form-urlencoded")
         .body(format!("csrf={token}&mode=automatic"))
         .send()
         .await
@@ -317,10 +291,8 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         .unwrap();
     assert!(row(&listing, second).contains("value=\"automatic\" checked"));
     assert_eq!(
-        client
-            .post(&inline_url)
+        common::form_post(&client, &inline_url)
             .header("accept", "application/json")
-            .header("content-type", "application/x-www-form-urlencoded")
             .body("csrf=bad&mode=search")
             .send()
             .await
@@ -329,9 +301,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         StatusCode::FORBIDDEN
     );
     assert!(state.library.codex_policy(second).unwrap().automatic);
-    let fallback = client
-        .post(&inline_url)
-        .header("content-type", "application/x-www-form-urlencoded")
+    let fallback = common::form_post(&client, &inline_url)
         .body(format!("csrf={token}&mode=search"))
         .send()
         .await
@@ -359,10 +329,8 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
     assert!(unknown.contains("不明な設定です。使い方を選んでください。"));
     assert!(!unknown.contains(" checked"));
     assert_eq!(
-        client
-            .post(format!("{base}/skills/{untouched}/codex"))
+        common::form_post(&client, format!("{base}/skills/{untouched}/codex"))
             .header("accept", "application/json")
-            .header("content-type", "application/x-www-form-urlencoded")
             .body(format!("csrf={token}&mode=search"))
             .send()
             .await
@@ -380,9 +348,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         ("automatic", true, true),
         ("search", false, false),
     ] {
-        let response = client
-            .post(&bulk_url)
-            .header("content-type", "application/x-www-form-urlencoded")
+        let response = common::form_post(&client, &bulk_url)
             .body(
                 [
                     ("csrf", token.as_str()),
@@ -420,7 +386,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
             format!("{id},{second}"),
             "",
             "unknown",
-            "Codexでの使い方を選択してください。",
+            "使い方を選択してください。",
         ),
         (
             String::new(),
@@ -438,12 +404,10 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
             format!("{id},{second}"),
             "",
             "",
-            "変更する公開状態・追加タグ・Codexでの使い方のいずれかを指定してください。",
+            "変更する公開状態・追加タグ・使い方のいずれかを指定してください。",
         ),
     ] {
-        let response = client
-            .post(&bulk_url)
-            .header("content-type", "application/x-www-form-urlencoded")
+        let response = common::form_post(&client, &bulk_url)
             .body(
                 [
                     ("csrf", token.as_str()),
@@ -464,9 +428,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
     }
     let before = state.library.detail(&id, false).unwrap();
     assert_eq!(
-        client
-            .post(&bulk_url)
-            .header("content-type", "application/x-www-form-urlencoded")
+        common::form_post(&client, &bulk_url)
             .body(
                 [
                     ("csrf", token.as_str()),
@@ -491,9 +453,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
     assert_eq!(before.summary.published, after.summary.published);
     assert_eq!(before.summary.tags, after.summary.tags);
     assert_eq!(
-        client
-            .post(&bulk_url)
-            .header("content-type", "application/x-www-form-urlencoded")
+        common::form_post(&client, &bulk_url)
             .body(
                 [
                     ("csrf", token.as_str()),
@@ -521,9 +481,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
     }
     // Codexモード未指定の従来の一括操作では設定を維持する。
     assert_eq!(
-        client
-            .post(&bulk_url)
-            .header("content-type", "application/x-www-form-urlencoded")
+        common::form_post(&client, &bulk_url)
             .body(
                 [
                     ("csrf", token.as_str()),
@@ -544,9 +502,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
     assert!(state.library.codex_policy(&id).unwrap().command);
     for enabled in [true, false] {
         assert_eq!(
-            client
-                .post(&settings_url)
-                .header("content-type", "application/x-www-form-urlencoded")
+            common::form_post(&client, &settings_url)
                 .body(format!("csrf={token}&enabled={enabled}"))
                 .send()
                 .await
@@ -562,7 +518,12 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
             .text()
             .await
             .unwrap();
-        assert!(body.contains(&format!("value=\"{enabled}\" selected")));
+        // 旧形式（enabledだけ）のPOSTはCodexのチェック状態だけを切り替える。
+        assert_eq!(
+            body.contains("name=\"codex\" value=\"true\" checked"),
+            enabled
+        );
+        assert!(!body.contains("name=\"claude\" value=\"true\" checked"));
         assert!(body.contains("生成済み件数:"));
         assert!(body.contains("skilvella-search"));
         let saved = Library::open_for_user(&root.join("data"), &home, None).unwrap();
@@ -570,9 +531,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         let unknown_file = home.join(".agents/skills/skilvella/unknown.txt");
         if enabled {
             assert_eq!(
-                client
-                    .post(&bulk_url)
-                    .header("content-type", "application/x-www-form-urlencoded")
+                common::form_post(&client, &bulk_url)
                     .body(format!(
                         "csrf={token}&selected={id},{second}&codex_mode=automatic"
                     ))
@@ -596,10 +555,8 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
                 );
             }
             assert!(!home.join(".agents/skills/skilvella/untouched").exists());
-            let response = client
-                .post(&policy_url)
+            let response = common::form_post(&client, &policy_url)
                 .header("accept", "application/json")
-                .header("content-type", "application/x-www-form-urlencoded")
                 .body(format!("csrf={token}&mode=command"))
                 .send()
                 .await
@@ -615,10 +572,8 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
                     .contains("allow_implicit_invocation: false")
             );
             fs::write(&unknown_file, "User-owned file").unwrap();
-            let response = client
-                .post(&policy_url)
+            let response = common::form_post(&client, &policy_url)
                 .header("accept", "application/json")
-                .header("content-type", "application/x-www-form-urlencoded")
                 .body(format!("csrf={token}&mode=automatic"))
                 .send()
                 .await
@@ -626,15 +581,15 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
             assert_eq!(response.status(), StatusCode::OK);
             let sync: serde_json::Value = response.json().await.unwrap();
             assert_eq!(sync["enabled"], true);
-            assert!(!sync["last_error"].as_str().unwrap().is_empty());
+            // 同期先の失敗は、Codexも含めて全クライアント共通の「表示名: エラー」形式で返す。
+            let last_error = sync["last_error"].as_str().unwrap();
+            assert!(last_error.starts_with("Codex: "), "{last_error}");
         } else {
             let settings = saved.codex_settings().unwrap();
             assert!(!settings.last_error.is_empty());
             assert!(settings.exported > 0);
-            let response = client
-                .post(&policy_url)
+            let response = common::form_post(&client, &policy_url)
                 .header("accept", "application/json")
-                .header("content-type", "application/x-www-form-urlencoded")
                 .body(format!("csrf={token}&mode=search"))
                 .send()
                 .await
@@ -643,8 +598,12 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
             let sync: serde_json::Value = response.json().await.unwrap();
             assert_eq!(sync["enabled"], false);
             assert!(!sync["last_error"].as_str().unwrap().is_empty());
-            let warning = "同期が停止しています。保存した設定はCodexへまだ反映されていません。以前の候補や自動選択が残っている可能性があります。";
-            assert!(body.contains(warning));
+            let warning = "同期が停止しています。保存した設定は同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。";
+            // 設定画面は同期先ごとの警告を表示し、一覧・詳細画面は従来の警告を表示する。
+            assert!(body.contains(
+                "同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。"
+            ));
+            assert!(body.contains("同期エラー:"));
             let detail = client
                 .get(&detail_url)
                 .send()
@@ -665,4 +624,94 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         fs::read_to_string(source.join("example/SKILL.md")).unwrap(),
         "---\nname: example\ndescription: Example skill\n---\nOriginal body\n"
     );
+}
+
+/// 設定画面の同期先チェックボックス（複数選択）が、CSRF境界を保ったまま各クライアントへ保存されること。
+#[tokio::test]
+async fn sync_target_form_selects_multiple_clients() {
+    use skilvella::model::SkillClient;
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(".work/test-http")
+        .join(uuid::Uuid::new_v4().to_string());
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let library = Library::open_for_user(&root.join("data"), &home, None).unwrap();
+    let state = AppState::new(library);
+    let server = common::HttpServer::start(state.clone()).await;
+    let base = server.base.clone();
+    let client = common::no_redirect_client();
+    let token = state.csrf.to_string();
+    let url = format!("{base}/settings/codex");
+    let post = |body: String| common::form_post(&client, &url).body(body).send();
+    // CSRFなし・同期先の指定なしは拒否し、設定を変えない。
+    assert_eq!(
+        post("csrf=wrong&targets=true&claude=true".into())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        post(format!("csrf={token}")).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert!(!state.library.sync_summary().unwrap().enabled);
+    assert_eq!(
+        post(format!("csrf={token}&targets=true&claude=true&grok=true"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    let enabled = |client| state.library.client_settings(client).unwrap().enabled;
+    assert!(!enabled(SkillClient::Codex));
+    assert!(enabled(SkillClient::Claude));
+    assert!(enabled(SkillClient::Grok));
+    assert!(
+        home.join(".grok/skills/skilvella/skilvella-search/SKILL.md")
+            .is_file()
+    );
+    assert!(
+        home.join(".claude/skills/skilvella-search/SKILL.md")
+            .is_file()
+    );
+    assert!(!home.join(".agents/skills/skilvella").exists());
+    let body = client
+        .get(format!("{base}/settings"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(body.contains("name=\"claude\" value=\"true\" checked"));
+    assert!(body.contains("name=\"grok\" value=\"true\" checked"));
+    assert!(!body.contains("name=\"codex\" value=\"true\" checked"));
+    assert!(body.contains("リンク先:"));
+    // 旧形式のPOSTはCodexだけを切り替え、Claude Code・Grokの選択を保つ。
+    assert_eq!(
+        post(format!("csrf={token}&enabled=true"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert!(enabled(SkillClient::Codex));
+    assert!(enabled(SkillClient::Claude));
+    // 全て外すと、各クライアントの入口とリンクを探索先から外す。
+    assert_eq!(
+        post(format!("csrf={token}&targets=true"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert!(!state.library.sync_summary().unwrap().enabled);
+    assert!(state.library.sync_summary().unwrap().last_error.is_empty());
+    assert!(!home.join(".claude/skills/skilvella-search").exists());
+    assert!(
+        fs::symlink_metadata(home.join(".claude/skills/skilvella-search")).is_err(),
+        "link itself must be removed"
+    );
+    assert!(!home.join(".grok/skills/skilvella").exists());
 }

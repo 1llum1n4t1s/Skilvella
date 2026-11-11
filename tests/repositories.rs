@@ -4,16 +4,13 @@ use skilvella::{
     library::Library,
     model::{SearchQuery, SkillMetadata},
 };
-use std::{fs, path::PathBuf};
+use std::fs;
 
 mod common;
 
 #[tokio::test]
 async fn scan_errors_link_to_global_list_editor_and_disappear_after_fix() {
-    let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(format!("error-flow-{}", uuid::Uuid::new_v4()));
+    let root = common::isolated_root("error-flow");
     let source = root.join("source");
     fs::create_dir_all(source.join("broken")).unwrap();
     fs::write(source.join("broken/SKILL.md"), "---\nname: [\n---\nBody").unwrap();
@@ -34,13 +31,8 @@ async fn scan_errors_link_to_global_list_editor_and_disappear_after_fix() {
     let state = AppState::new(library);
     let csrf = state.csrf.to_string();
     let server = common::HttpServer::start(state.clone()).await;
-    let client = Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
-    let scan = client
-        .post(format!("{}/scan", server.base))
-        .header("content-type", "application/x-www-form-urlencoded")
+    let client = common::no_redirect_client();
+    let scan = common::form_post(&client, format!("{}/scan", server.base))
         .body(format!("csrf={csrf}"))
         .send()
         .await
@@ -81,9 +73,7 @@ async fn scan_errors_link_to_global_list_editor_and_disappear_after_fix() {
         .unwrap();
     assert!(detail.contains("読み取りエラー:"));
     assert!(detail.contains("id=\"content\""));
-    let saved = client
-        .post(format!("{}/skills/{}/content", server.base, broken.id))
-        .header("content-type", "application/x-www-form-urlencoded")
+    let saved = common::form_post(&client, format!("{}/skills/{}/content", server.base, broken.id))
         .body(format!("csrf={csrf}&revision={revision}&content=---%0Aname%3A%20repaired%0Adescription%3A%20repaired%20skill%0A---%0ABody"))
         .send()
         .await
@@ -194,10 +184,7 @@ async fn scan_errors_link_to_global_list_editor_and_disappear_after_fix() {
 
 #[tokio::test]
 async fn forget_missing_checks_paths_and_deletes_filtered_records_across_pages() {
-    let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(format!("forget-missing-{}", uuid::Uuid::new_v4()));
+    let root = common::isolated_root("forget-missing");
     let source = root.join("source");
     for i in 0..101 {
         let dir = source.join(format!("repo/old-{i:03}"));
@@ -242,13 +229,9 @@ async fn forget_missing_checks_paths_and_deletes_filtered_records_across_pages()
     let state = AppState::new(library.clone());
     let token = state.csrf.to_string();
     let server = common::HttpServer::start(state).await;
-    let client = Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
+    let client = common::no_redirect_client();
     let post = |csrf: &str, count: usize| {
-        client.post(format!("{}/missing/forget", server.base))
-        .header("content-type", "application/x-www-form-urlencoded")
+        common::form_post(&client, format!("{}/missing/forget", server.base))
         .body(format!("csrf={csrf}&expected={count}&repository_source=test&repository=repo&q=old&tag=&category="))
     };
     let page = client
@@ -373,10 +356,7 @@ async fn forget_missing_checks_paths_and_deletes_filtered_records_across_pages()
 
 #[tokio::test]
 async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
-    let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(format!("repository-bulk-http-{}", uuid::Uuid::new_v4()));
+    let root = common::isolated_root("repository-bulk-http");
     let source = root.join("source");
     let special = "repo & 日本語 + %";
     for repository in ["repo", special, "unselected"] {
@@ -427,10 +407,7 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
             .map(|(key, value)| format!("{}={}", encode(key), encode(value)))
             .collect::<Vec<_>>()
             .join("&");
-        client
-            .post(format!("{}/repositories/bulk", server.base))
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(body)
+        common::form_post(&client, format!("{}/repositories/bulk", server.base)).body(body)
     };
     let scope = |repository: &str| {
         serde_json::json!({
@@ -486,13 +463,8 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
             "取得元を1件以上選んでください。",
         ),
         (true, "invalid", "invalid", "公開状態が不正です。"),
-        (true, "", "invalid", "Codexでの使い方を選択してください。"),
-        (
-            true,
-            "",
-            "",
-            "変更する公開状態・Codexでの使い方を指定してください。",
-        ),
+        (true, "", "invalid", "使い方を選択してください。"),
+        (true, "", "", "変更する公開状態・使い方を指定してください。"),
     ] {
         let mut fields = valid.clone();
         fields
@@ -595,10 +567,7 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
 
 #[tokio::test]
 async fn repository_selection_scopes_search_counts_and_pagination() {
-    let root = std::env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(format!("repositories-{}", uuid::Uuid::new_v4()));
+    let root = common::isolated_root("repositories");
     let source = root.join("source");
     fs::create_dir_all(source.join("repo/.git")).unwrap();
     fs::create_dir_all(source.join("empty/.git")).unwrap();
@@ -832,8 +801,7 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
         detail.contains("class=\"back\" href=\"/?repository_source=test&#38;repository=repo\"")
     );
     for action in ["scan", "bulk"] {
-        let response = client.post(format!("{base}/{action}"))
-            .header("content-type", "application/x-www-form-urlencoded")
+        let response = common::form_post(&client, format!("{base}/{action}"))
             .body(format!("csrf={token}&repository_source=test&repository=repo&selected={selected_id}&published=true&tags="))
             .send().await.unwrap();
         assert!(response.status().is_success());
@@ -849,9 +817,7 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
         assert!(body.contains("skill-01"));
         assert!(!body.contains("personal-only"));
     }
-    let top = client
-        .post(format!("{base}/scan"))
-        .header("content-type", "application/x-www-form-urlencoded")
+    let top = common::form_post(&client, format!("{base}/scan"))
         .body(format!("csrf={token}"))
         .send()
         .await

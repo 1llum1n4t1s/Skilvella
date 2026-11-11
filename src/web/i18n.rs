@@ -45,10 +45,13 @@ const CLIENT_KEYS: &[(&str, &str)] = &[
     ),
     (
         "policy-sync-failed",
-        "保存しましたが、Codexへの同期に失敗しました。設定画面を確認してください。",
+        "保存しましたが、同期先への同期に失敗しました。設定画面を確認してください。",
     ),
     ("policy-saving", "保存中…"),
-    ("policy-disabled", "保存しました。Codex連携は無効です。"),
+    (
+        "policy-disabled",
+        "保存しました。同期先が選ばれていないため入口には反映されません。",
+    ),
     ("policy-saved", "保存しました。"),
     ("dirty", "未保存の変更"),
     ("confirm-title", "操作の確認"),
