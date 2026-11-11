@@ -131,8 +131,17 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         .skills[0]
         .id
         .clone();
+    // 旧「フォルダー」画面のURLは、条件を保ったまま統合後のライブラリへ転送する。
+    let moved = client
+        .get(format!("{base_url}/sources?message=source-renamed"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(moved.status(), StatusCode::SEE_OTHER);
+    assert_eq!(moved.headers()["location"], "/?message=source-renamed");
     for path in [
-        "/sources".to_owned(),
+        "/".to_owned(),
+        "/?source=test".into(),
         "/?repository_source=test&repository=".into(),
         "/skills/new".into(),
         format!("/skills/{skill_id}"),
@@ -178,15 +187,16 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         .status(),
         StatusCode::SEE_OTHER
     );
+    // 表示名を空にすると識別子の表示に戻る。
     let body = client
-        .get(format!("{base_url}/sources"))
+        .get(format!("{base_url}/?source=test"))
         .send()
         .await
         .unwrap()
         .text()
         .await
         .unwrap();
-    assert!(body.contains("<h3>test</h3>"));
+    assert!(body.contains("<span class=\"folder-label\">test</span>"));
     let initial = rpc(&client, &base_url, 1, "initialize", json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"integration-test","version":"1"}})).await;
     assert_eq!(initial["serverInfo"]["name"], "skilvella");
     let tools = rpc(&client, &base_url, 2, "tools/list", json!({})).await;
@@ -598,15 +608,21 @@ async fn directory_settings_forms_and_icons_work_over_http() {
     let server = common::HttpServer::start(state.clone()).await;
     let url = server.base.clone();
     let client = common::no_redirect_client();
+    // 既定フォルダーの場所の変更は、ライブラリのフォルダー表示から行う。
+    let default_alias = state.library.directory_settings().unwrap().source_alias;
     let page = client
-        .get(format!("{url}/sources"))
+        .get(format!("{url}/?source={default_alias}"))
         .send()
         .await
         .unwrap()
         .text()
         .await
         .unwrap();
-    assert!(page.contains("参照するフォルダー（絶対パス）") && page.contains("現在の場所"));
+    assert!(
+        page.contains("参照するフォルダー（絶対パス）")
+            && page.contains("action=\"/sources/directory\"")
+            && page.contains("data-folder-browse")
+    );
     assert!(!page.contains("<select name=\"mode\""));
     assert!(!page.contains("/sources/migrate") && !page.contains("name=\"destination\""));
     assert_eq!(
@@ -635,6 +651,36 @@ async fn directory_settings_forms_and_icons_work_over_http() {
         StatusCode::BAD_REQUEST
     );
     assert!(native.join("example/SKILL.md").is_file());
+    // フォルダー選択ダイアログもCSRF検査を通す（正しいトークンでは実際に開くため送らない）。
+    for token in ["wrong", ""] {
+        assert_eq!(
+            common::post_form(&client, &format!("{url}/dialog/folder"), &[("csrf", token)])
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    // 識別子を入力しない追加で既に管理中のフォルダーを選ぶと、表示名を示して案内する。
+    let duplicate = common::post_form(
+        &client,
+        &format!("{url}/sources/add"),
+        &[("csrf", &token), ("path", &native.to_string_lossy())],
+    )
+    .await
+    .text()
+    .await
+    .unwrap();
+    assert!(duplicate.contains("として管理中です") && duplicate.contains("notice warning"));
+    let empty = common::post_form(
+        &client,
+        &format!("{url}/sources/add"),
+        &[("csrf", &token), ("path", "  ")],
+    )
+    .await
+    .text()
+    .await
+    .unwrap();
+    assert!(empty.contains("フォルダーを選んでください。"));
 
     let expected_path: PathBuf = native.components().collect();
     assert!(page.contains(&format!("value=\"{}\"", expected_path.to_string_lossy())));

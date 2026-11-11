@@ -153,6 +153,8 @@ pub async fn run(
         };
         // MCPの長時間接続を閉じてから、実行中のHTTP処理の完了を待つ。
         cancel_mcp();
+        // 開いたままのフォルダー選択ダイアログが、処理中のHTTP要求として終了を止めないようにする。
+        skilvella::dialog::release_waiters();
         let _ = stop_http.send(());
         let result = server.await;
         stop_watcher(watcher).await;

@@ -1,7 +1,9 @@
 <p class="note">{{ locale.text("別のフォルダーを管理対象に切り替えます。スキルのファイルは移動しません。") }}</p>
-<form method="post" action="/sources/directory" class="stack">
+<form method="post" action="/sources/directory" class="stack" data-folder-form>
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <input type="hidden" name="mode" value="custom">
-  <label>{{ locale.text("参照するフォルダー（絶対パス）") }}<input name="path" value="{{ self.display_path(directory_path) }}" required placeholder="{{ locale.text("例: D:\\Skills または /Users/you/Skills") }}" spellcheck="false"></label>
+  <label for="directory-path">{{ locale.text("参照するフォルダー（絶対パス）") }}</label>
+  <div class="path-picker"><input id="directory-path" name="path" value="{{ self.display_path(directory_path) }}" required placeholder="{{ locale.text("例: D:\\Skills または /Users/you/Skills") }}" spellcheck="false" data-folder-path><button type="button" data-folder-browse hidden>{{ locale.text("参照…") }}</button></div>
+  <p class="note" data-folder-status role="status" aria-live="polite"></p>
   <div><button type="submit" data-busy="{{ locale.text("変更中…") }}">{{ locale.text("参照先を変更") }}</button></div>
 </form>

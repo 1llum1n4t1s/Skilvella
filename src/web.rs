@@ -95,6 +95,7 @@ pub fn router() -> Router<AppState> {
         .route("/sources/name", post(set_source_name))
         .route("/sources/remove", post(remove_source))
         .route("/sources/directory", post(set_directory))
+        .route("/dialog/folder", post(pick_folder))
         .route("/scan", post(scan))
         .route("/bulk", post(bulk))
         .route("/missing/forget", post(forget_missing))
@@ -370,12 +371,15 @@ async fn set_codex_policy(
                 Err(e) => failure(locale, e),
             }
         }
-        Ok(_) if !selection.repository_source.is_empty() => Redirect::to(&format!(
-            "{}&message=codex-saved#skill-{}",
-            repository_page_url(&selection, &query),
-            encoded(&id),
-        ))
-        .into_response(),
+        // 一覧から送った（検索条件を持つ）場合は、同じ一覧の同じ行へ戻す。
+        Ok(_) if !selection.repository_source.is_empty() || !query.status.is_empty() => {
+            Redirect::to(&format!(
+                "{}&message=codex-saved#skill-{}",
+                repository_page_url(&selection, &query),
+                encoded(&id),
+            ))
+            .into_response()
+        }
         Ok(_) => redirect(&format!("/skills/{}", encoded(&id)), "codex-saved"),
         Err(e) => failure(locale, e),
     }
@@ -490,7 +494,9 @@ fn encoded(s: &str) -> String {
 }
 // message は内部で決まる通知IDと数値だけを含む。表示言語は遷移先のリクエストで決める。
 fn redirect(path: &str, message: &str) -> Response {
-    Redirect::to(&format!("{path}?message={message}")).into_response()
+    // フォルダー表示（`/?source=...`）のように既に条件を持つURLへは `&` で足す。
+    let separator = if path.contains('?') { '&' } else { '?' };
+    Redirect::to(&format!("{path}{separator}message={message}")).into_response()
 }
 fn tags(s: &str) -> Vec<String> {
     s.split([',', '、', '\n'])
@@ -525,20 +531,18 @@ impl Notice {
             "skill-created" => {
                 "スキルを作成しました。公開するには管理情報で公開を有効にしてください。"
             }
-            "scan" | "directory-saved" => {
+            "scan" | "directory-saved" | "folder-added" => {
                 let summary = locale.format(
                     "スキャン完了: {count}件を登録、エラー{errors}件、見つからないスキル{missing}件。",
                     &[("count", &self.indexed.to_string()), ("errors", &self.errors.to_string()), ("missing", &self.missing.to_string())],
                 );
-                return if self.message == "directory-saved" {
-                    let separator = if locale.language() == "ja" { "" } else { " " };
-                    format!(
-                        "{}{separator}{summary}",
-                        locale.text("管理対象フォルダーの設定を保存しました。")
-                    )
-                } else {
-                    summary
+                let prefix = match self.message.as_str() {
+                    "directory-saved" => locale.text("管理対象フォルダーの設定を保存しました。"),
+                    "folder-added" => locale.text("フォルダーを追加しました。"),
+                    _ => return summary,
                 };
+                let separator = if locale.language() == "ja" { "" } else { " " };
+                return format!("{prefix}{separator}{summary}");
             }
             "repositories-updated" => {
                 return locale.format(
@@ -555,6 +559,21 @@ impl Notice {
         locale.text(key).to_owned()
     }
 }
+/// サイドバーに並べる管理中フォルダー1件。
+///
+/// フォルダー内にGitリポジトリなどの取得元が複数ある場合だけ、取得元を入れ子で示す。
+/// 以前は「ライブラリ（取得元）」と「フォルダー」を別画面にしていたが、
+/// ライブラリはフォルダーの中身そのものなので、1画面のツリーにまとめている。
+struct FolderView {
+    source: Source,
+    groups: Vec<RepositoryGroup>,
+}
+impl FolderView {
+    /// 取得元を入れ子で表示するか。フォルダー全体が1つの個人スキル群なら省略する。
+    fn nested(&self) -> bool {
+        self.groups.len() > 1 || self.groups.iter().any(|g| !g.repository.is_empty())
+    }
+}
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexPage {
@@ -563,15 +582,29 @@ struct IndexPage {
     query: SearchQuery,
     selection: RepositorySelection,
     groups: Vec<RepositoryGroup>,
-    selected: bool,
     reset: String,
     results: SearchResults,
     error_count: usize,
     policies: BTreeMap<String, Option<CodexSkillPolicy>>,
     current_query: String,
     sources: Vec<Source>,
+    folders: Vec<FolderView>,
+    /// 表示中のフォルダー。「すべてのスキル」ではNone。
+    folder: Option<Source>,
+    /// 表示中の取得元。フォルダー全体の表示ではNone。
+    group: Option<RepositoryGroup>,
+    /// 全フォルダーの現在のスキル数（サイドバーの「すべて」の件数）。
+    total: usize,
+    directory: DirectorySettings,
+    /// 追加に失敗したときに入力欄へ戻すパス。
+    add_path: String,
+    /// 既定フォルダーの場所を変更するフォームの値と、失敗後に開いておくか。
+    directory_path: String,
+    directory_editing: bool,
     codex: CodexSyncSettings,
     message: String,
+    /// 失敗の通知は警告として表示する。
+    failed: bool,
     previous: String,
     next: String,
 }
@@ -591,9 +624,38 @@ impl IndexPage {
     }
     fn group_url(&self, group: &RepositoryGroup) -> String {
         if group.unknown {
-            return "/sources".into();
+            // 取得元を判定できないフォルダーは、警告と対処を示すフォルダー表示へ案内する。
+            return folder_url(&group.source);
         }
         repository_url(&group.source, &group.repository)
+    }
+    fn folder_url(&self, alias: &str) -> String {
+        folder_url(alias)
+    }
+    /// フォルダーを作成先に選んだ状態で新規作成画面を開くURL。
+    fn new_skill_url(&self, alias: &str) -> String {
+        format!("/skills/new?source={}", encoded(alias))
+    }
+    /// 取得元の表示名。リポジトリ外のスキルは「個人スキル」、フォルダー自体が
+    /// リポジトリなら（`.`）フォルダーの表示名を使う。
+    fn group_label(&self, group: &RepositoryGroup) -> String {
+        if group.unknown {
+            self.locale.text("取得元を確認できません").into()
+        } else if group.repository.is_empty() {
+            self.locale.text("個人スキル").into()
+        } else if group.repository == "." {
+            self.source_name(&group.source)
+        } else {
+            group.repository.clone()
+        }
+    }
+    fn is_current_group(&self, group: &RepositoryGroup) -> bool {
+        self.group.as_ref().is_some_and(|current| {
+            current.source == group.source && current.repository == group.repository
+        })
+    }
+    fn is_current_folder(&self, alias: &str) -> bool {
+        self.group.is_none() && self.folder.as_ref().is_some_and(|f| f.alias == alias)
     }
     fn source_label(&self, alias: &str) -> String {
         self.sources
@@ -602,147 +664,20 @@ impl IndexPage {
             .map(Source::label)
             .unwrap_or_else(|| alias.to_owned())
     }
-}
-/// 取得元一覧の1リポジトリを開く基本URLを組み立てる。
-///
-/// 取得元とリポジトリ名はどちらも `encoded` で同じ規則に従ってエンコードする。
-/// メッセージや状態などの追加パラメーターは、呼び出し側で `&...` として後ろへ足す。
-/// 検索条件を引き継ぐ `repository_page_url` は `source` を重ねて持つ別形式のため、
-/// この関数へは統合しない。
-fn repository_url(source: &str, repository: &str) -> String {
-    format!(
-        "/?repository_source={}&repository={}",
-        encoded(source),
-        encoded(repository)
-    )
-}
-fn repository_page_url(selection: &RepositorySelection, query: &SearchQuery) -> String {
-    format!(
-        "/?repository_source={}&repository={}&q={}&source={}&tag={}&category={}&status={}&offset={}",
-        encoded(&selection.repository_source),
-        encoded(&selection.repository),
-        encoded(&query.q),
-        encoded(&selection.repository_source),
-        encoded(&query.tag),
-        encoded(&query.category),
-        encoded(&query.status),
-        query.offset,
-    )
-}
-async fn index(
-    Extension(locale): Extension<Locale>,
-    State(state): State<AppState>,
-    Query(query): Query<SearchQuery>,
-    Query(selection): Query<RepositorySelection>,
-    Query(notice): Query<Notice>,
-) -> Response {
-    let mut query = query;
-    if query.status.is_empty() {
-        query.status = "present".into();
-    }
-    query.limit = 50;
-    query.source = selection.repository_source.clone();
-    let q = query.clone();
-    let selected = !selection.repository_source.is_empty()
-        || matches!(query.status.as_str(), "error" | "missing" | "all");
-    let scope = selection.clone();
-    match state
-        .run(move |lib| {
-            let (groups, error_count) = lib.repository_groups_with_error_count()?;
-            let results = if selected && scope.repository_source.is_empty() {
-                lib.search(q, false)?
-            } else if selected {
-                lib.search_repository_with_groups(q, scope, &groups)?
-            } else {
-                SearchResults {
-                    skills: Vec::new(),
-                    total: groups.iter().map(|g| g.count - g.missing).sum(),
-                    indexed_at: String::new(),
-                }
-            };
-            let ids = results
-                .skills
-                .iter()
-                .map(|skill| skill.id.clone())
-                .collect::<Vec<_>>();
-            let policies = lib.codex_policies(&ids)?;
-            Ok((
-                results,
-                groups,
-                policies,
-                lib.sources()?,
-                lib.sync_summary()?,
-                error_count,
-            ))
-        })
-        .await
-    {
-        Ok((results, groups, policies, sources, codex, error_count)) => {
-            let reset = repository_url(&selection.repository_source, &selection.repository);
-            let page_url = |offset| {
-                let mut page = query.clone();
-                page.offset = offset;
-                repository_page_url(&selection, &page)
-            };
-            let current_query = page_url(query.offset).trim_start_matches("/?").to_owned();
-            let previous = if query.offset > 0 {
-                page_url(query.offset.saturating_sub(50))
-            } else {
-                String::new()
-            };
-            let next = if query.offset.saturating_add(50) < results.total {
-                page_url(query.offset.saturating_add(50))
-            } else {
-                String::new()
-            };
-            render(
-                locale,
-                IndexPage {
-                    locale,
-                    csrf: state.csrf.to_string(),
-                    query,
-                    selection,
-                    groups,
-                    selected,
-                    reset,
-                    results,
-                    error_count,
-                    policies,
-                    current_query,
-                    sources,
-                    codex,
-                    message: notice.text(locale),
-                    previous,
-                    next,
-                },
-            )
-        }
-        Err(e) => failure(locale, e),
-    }
-}
-#[derive(Template)]
-#[template(path = "sources.html")]
-struct SourcesPage {
-    locale: Locale,
-    csrf: String,
-    sources: Vec<Source>,
-    message: String,
-    alias: String,
-    path: String,
-    directory: DirectorySettings,
-    directory_path: String,
-    directory_editing: bool,
-}
-
-impl SourcesPage {
-    fn has_directory_source(&self) -> bool {
+    /// 識別子を付けない表示名。サイドバーと見出しで使う。
+    fn source_name(&self, alias: &str) -> String {
         self.sources
             .iter()
-            .any(|source| source.alias == self.directory.source_alias)
+            .find(|s| s.alias == alias)
+            .map(|s| s.display_name.clone())
+            .unwrap_or_else(|| alias.to_owned())
     }
-
     fn display_path(&self, path: impl AsRef<str>) -> String {
         display_path(path.as_ref())
+    }
+    /// 取得元ごとの一括設定は、絞り込みのない「すべてのスキル」でだけ表示する。
+    fn show_repository_bulk(&self) -> bool {
+        self.folder.is_none() && self.query.status == "present" && !self.groups.is_empty()
     }
 }
 fn display_path(path: &str) -> String {
@@ -764,13 +699,206 @@ fn display_path(path: &str) -> String {
     }
     path.to_owned()
 }
-
-async fn sources(
+/// 管理中フォルダー全体を表示するURL。
+fn folder_url(alias: &str) -> String {
+    format!("/?source={}", encoded(alias))
+}
+/// 取得元一覧の1リポジトリを開く基本URLを組み立てる。
+///
+/// 取得元とリポジトリ名はどちらも `encoded` で同じ規則に従ってエンコードする。
+/// メッセージや状態などの追加パラメーターは、呼び出し側で `&...` として後ろへ足す。
+fn repository_url(source: &str, repository: &str) -> String {
+    format!(
+        "/?repository_source={}&repository={}",
+        encoded(source),
+        encoded(repository)
+    )
+}
+/// 検索条件とページ位置を保ったまま一覧を開くURL。
+///
+/// 取得元を選んでいる場合は従来の `repository_source` 形式、フォルダー全体や
+/// 「すべてのスキル」では `source` だけで絞り込む形式にする。
+fn repository_page_url(selection: &RepositorySelection, query: &SearchQuery) -> String {
+    if selection.repository_source.is_empty() {
+        return format!(
+            "/?q={}&source={}&tag={}&category={}&status={}&offset={}",
+            encoded(&query.q),
+            encoded(&query.source),
+            encoded(&query.tag),
+            encoded(&query.category),
+            encoded(&query.status),
+            query.offset,
+        );
+    }
+    format!(
+        "/?repository_source={}&repository={}&q={}&source={}&tag={}&category={}&status={}&offset={}",
+        encoded(&selection.repository_source),
+        encoded(&selection.repository),
+        encoded(&query.q),
+        encoded(&selection.repository_source),
+        encoded(&query.tag),
+        encoded(&query.category),
+        encoded(&query.status),
+        query.offset,
+    )
+}
+/// 一覧画面へ戻すフォームの入力値。失敗時に入力をやり直さずに済むよう保持する。
+#[derive(Default)]
+struct LibraryForms {
+    add_path: String,
+    directory_draft: Option<String>,
+}
+async fn index(
     Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
-    Query(n): Query<Notice>,
+    Query(query): Query<SearchQuery>,
+    Query(selection): Query<RepositorySelection>,
+    Query(notice): Query<Notice>,
 ) -> Response {
-    source_page(locale, &state, n.text(locale), String::new(), String::new()).await
+    let message = notice.text(locale);
+    library_page(
+        locale,
+        &state,
+        query,
+        selection,
+        message,
+        false,
+        LibraryForms::default(),
+    )
+    .await
+}
+async fn library_page(
+    locale: Locale,
+    state: &AppState,
+    mut query: SearchQuery,
+    selection: RepositorySelection,
+    message: String,
+    failed: bool,
+    forms: LibraryForms,
+) -> Response {
+    if query.status.is_empty() {
+        query.status = "present".into();
+    }
+    query.limit = 50;
+    if !selection.repository_source.is_empty() {
+        query.source = selection.repository_source.clone();
+    }
+    let q = query.clone();
+    let scope = selection.clone();
+    match state
+        .run(move |lib| {
+            let (groups, error_count) = lib.repository_groups_with_error_count()?;
+            let results = if scope.repository_source.is_empty() {
+                lib.search(q, false)?
+            } else {
+                lib.search_repository_with_groups(q, scope, &groups)?
+            };
+            let ids = results
+                .skills
+                .iter()
+                .map(|skill| skill.id.clone())
+                .collect::<Vec<_>>();
+            let policies = lib.codex_policies(&ids)?;
+            Ok((
+                results,
+                groups,
+                policies,
+                lib.sources()?,
+                lib.sync_summary()?,
+                error_count,
+                lib.directory_settings()?,
+            ))
+        })
+        .await
+    {
+        Ok((results, groups, policies, sources, codex, error_count, directory)) => {
+            let reset = if !selection.repository_source.is_empty() {
+                repository_url(&selection.repository_source, &selection.repository)
+            } else if !query.source.is_empty() {
+                folder_url(&query.source)
+            } else {
+                "/".into()
+            };
+            let page_url = |offset| {
+                let mut page = query.clone();
+                page.offset = offset;
+                repository_page_url(&selection, &page)
+            };
+            let current_query = page_url(query.offset).trim_start_matches("/?").to_owned();
+            let previous = if query.offset > 0 {
+                page_url(query.offset.saturating_sub(50))
+            } else {
+                String::new()
+            };
+            let next = if query.offset.saturating_add(50) < results.total {
+                page_url(query.offset.saturating_add(50))
+            } else {
+                String::new()
+            };
+            let folder = sources.iter().find(|s| s.alias == query.source).cloned();
+            let group = groups
+                .iter()
+                .find(|g| {
+                    !selection.repository_source.is_empty()
+                        && g.source == selection.repository_source
+                        && g.repository == selection.repository
+                })
+                .cloned();
+            let folders = sources
+                .iter()
+                .map(|source| FolderView {
+                    source: source.clone(),
+                    groups: groups
+                        .iter()
+                        .filter(|g| g.source == source.alias)
+                        .cloned()
+                        .collect(),
+                })
+                .collect();
+            let total = sources.iter().map(|s| s.skill_count).sum();
+            let directory_editing = forms.directory_draft.is_some();
+            let directory_path = forms
+                .directory_draft
+                .unwrap_or_else(|| directory.path.clone());
+            render(
+                locale,
+                IndexPage {
+                    locale,
+                    csrf: state.csrf.to_string(),
+                    query,
+                    selection,
+                    groups,
+                    reset,
+                    results,
+                    error_count,
+                    policies,
+                    current_query,
+                    sources,
+                    folders,
+                    folder,
+                    group,
+                    total,
+                    directory,
+                    add_path: forms.add_path,
+                    directory_path,
+                    directory_editing,
+                    codex,
+                    message,
+                    failed,
+                    previous,
+                    next,
+                },
+            )
+        }
+        Err(e) => failure(locale, e),
+    }
+}
+/// 旧「フォルダー」画面のURL。ブックマークや以前の通知リンクを一覧へ転送する。
+async fn sources(axum::extract::RawQuery(query): axum::extract::RawQuery) -> Response {
+    match query {
+        Some(query) if !query.is_empty() => Redirect::to(&format!("/?{query}")).into_response(),
+        _ => Redirect::to("/").into_response(),
+    }
 }
 #[derive(Deserialize)]
 struct SourceNameForm {
@@ -786,60 +914,13 @@ async fn set_source_name(
     if let Some(response) = csrf_error(locale, &state, &form.csrf) {
         return response;
     }
+    let alias = form.alias.clone();
     match state
         .run_mut(move |lib| lib.set_source_display_name(&form.alias, &form.display_name))
         .await
     {
-        Ok(()) => redirect("/sources", "source-renamed"),
+        Ok(()) => redirect(&folder_url(&alias), "source-renamed"),
         Err(e) => error(locale, StatusCode::BAD_REQUEST, &format!("{e:#}")),
-    }
-}
-async fn source_page(
-    locale: Locale,
-    state: &AppState,
-    message: String,
-    alias: String,
-    path: String,
-) -> Response {
-    source_page_with_directory(locale, state, message, alias, path, None).await
-}
-async fn source_page_with_directory(
-    locale: Locale,
-    state: &AppState,
-    message: String,
-    alias: String,
-    path: String,
-    draft: Option<(String, String)>,
-) -> Response {
-    match state
-        .run(|lib| Ok((lib.sources()?, lib.directory_settings()?)))
-        .await
-    {
-        Ok((sources, directory)) => {
-            let directory_editing = draft.is_some();
-            let directory_path = draft.map(|(_, path)| path).unwrap_or_else(|| {
-                if directory.path.is_empty() {
-                    directory.custom_path.clone()
-                } else {
-                    directory.path.clone()
-                }
-            });
-            render(
-                locale,
-                SourcesPage {
-                    locale,
-                    csrf: state.csrf.to_string(),
-                    sources,
-                    message,
-                    alias,
-                    path,
-                    directory,
-                    directory_path,
-                    directory_editing,
-                },
-            )
-        }
-        Err(e) => failure(locale, e),
     }
 }
 #[derive(Deserialize)]
@@ -858,27 +939,47 @@ async fn set_directory(
         return response;
     }
     let mode = form.mode.clone();
-    let path = form.path.clone();
+    let path = form.path.trim().to_owned();
     match state
-        .run_mut(move |library| library.set_directory(&mode, &path))
+        .run_mut(move |library| {
+            let report = library.set_directory(&mode, &path)?;
+            Ok((report, library.directory_settings()?.source_alias))
+        })
         .await
     {
-        Ok(report) => {
+        Ok((report, alias)) => {
             state.rescan.notify_one();
-            redirect("/sources", &scan_notice("directory-saved", report))
+            let target = if alias.is_empty() {
+                "/".to_owned()
+            } else {
+                folder_url(&alias)
+            };
+            redirect(&target, &scan_notice("directory-saved", report))
         }
         Err(error) => {
-            source_page_with_directory(
+            let current = state
+                .run(|lib| lib.directory_settings())
+                .await
+                .map(|d| d.source_alias)
+                .unwrap_or_default();
+            library_page(
                 locale,
                 &state,
-                with_detail(
+                SearchQuery {
+                    source: current,
+                    ..Default::default()
+                },
+                RepositorySelection::default(),
+                folder_error_text(
                     locale,
                     "設定を変更できませんでした: {detail}。以前の設定は保持されています。",
                     error,
                 ),
-                String::new(),
-                String::new(),
-                Some((form.mode, form.path)),
+                true,
+                LibraryForms {
+                    directory_draft: Some(form.path),
+                    ..Default::default()
+                },
             )
             .await
         }
@@ -887,11 +988,30 @@ async fn set_directory(
 #[derive(Deserialize)]
 struct SourceForm {
     csrf: String,
+    /// 旧来の明示識別子。現在の画面は送らず、フォルダー名から自動で採番する。
+    #[serde(default)]
     alias: String,
     #[serde(default)]
     path: String,
     #[serde(default)]
     action: String,
+}
+/// フォルダー登録の失敗を、原因と対処が分かる翻訳済みの文言にする。
+fn folder_error_text(locale: Locale, fallback: &str, error: anyhow::Error) -> String {
+    match error.downcast_ref::<FolderError>() {
+        Some(FolderError::AlreadyRegistered { name }) => locale.format(
+            "このフォルダーは「{name}」として管理中です。",
+            &[("name", name)],
+        ),
+        Some(FolderError::Overlaps { name, path }) => locale.format(
+            "「{name}」（{path}）と親子関係にあるため追加できません。同じスキルを二重に読み込まないよう、どちらか一方だけを管理してください。",
+            &[("name", name), ("path", &display_path(path))],
+        ),
+        Some(FolderError::OverlapsData) => locale
+            .text("Skilvellaのデータフォルダーと重なるフォルダーは追加できません。")
+            .to_owned(),
+        None => with_detail(locale, fallback, error),
+    }
 }
 async fn add_source(
     Extension(locale): Extension<Locale>,
@@ -901,26 +1021,44 @@ async fn add_source(
     if let Some(r) = csrf_error(locale, &state, &f.csrf) {
         return r;
     }
-    let alias = f.alias.clone();
-    let path = f.path.clone();
     if !matches!(f.action.as_str(), "" | "register") {
         return error(locale, StatusCode::BAD_REQUEST, "登録方法が不正です。");
     }
-    match state
-        .run_mut(move |lib| lib.add_source(&alias, std::path::Path::new(&path)))
-        .await
-    {
-        Ok(report) => {
+    let alias = f.alias.trim().to_owned();
+    let path = f.path.trim().to_owned();
+    let result = if path.is_empty() {
+        Err(anyhow::anyhow!(
+            locale.text("フォルダーを選んでください。").to_owned()
+        ))
+    } else {
+        state
+            .run_mut(move |lib| {
+                let path = std::path::Path::new(&path);
+                if alias.is_empty() {
+                    lib.add_folder(path)
+                } else {
+                    lib.add_source(&alias, path).map(|report| (alias, report))
+                }
+            })
+            .await
+    };
+    match result {
+        Ok((alias, report)) => {
             state.rescan.notify_one();
-            redirect("/sources", &scan_notice("scan", report))
+            redirect(&folder_url(&alias), &scan_notice("folder-added", report))
         }
         Err(e) => {
-            source_page(
+            library_page(
                 locale,
                 &state,
-                with_detail(locale, "登録できませんでした: {detail}", e),
-                f.alias,
-                f.path,
+                SearchQuery::default(),
+                RepositorySelection::default(),
+                folder_error_text(locale, "登録できませんでした: {detail}", e),
+                true,
+                LibraryForms {
+                    add_path: f.path,
+                    ..Default::default()
+                },
             )
             .await
         }
@@ -937,9 +1075,52 @@ async fn remove_source(
     match state.run_mut(move |lib| lib.remove_source(&f.alias)).await {
         Ok(_) => {
             state.rescan.notify_one();
-            redirect("/sources", "source-removed")
+            redirect("/", "source-removed")
         }
         Err(e) => failure(locale, e),
+    }
+}
+/// 「参照…」ボタンから、OS標準のフォルダー選択ダイアログを開く。
+///
+/// 選ばれたパスを返すだけで、登録や変更は行わない（登録は従来のフォームPOSTで行う）。
+/// デスクトップのない環境では `unsupported` を返し、画面側はパスの直接入力へ切り替える。
+async fn pick_folder(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(form): Form<Token>,
+) -> Response {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
+        return response;
+    }
+    let title = locale.text("スキルフォルダーを選択").to_owned();
+    // 終了・再起動を妨げないよう、ダイアログは切り離したスレッドで開いて非同期に待つ。
+    match crate::dialog::pick_folder_async(title).await {
+        Ok(crate::dialog::Picked::Folder(path)) => {
+            axum::Json(serde_json::json!({"path": display_path(&path.to_string_lossy())}))
+                .into_response()
+        }
+        Ok(crate::dialog::Picked::Cancelled) => {
+            axum::Json(serde_json::json!({"cancelled": true})).into_response()
+        }
+        Ok(crate::dialog::Picked::Busy) => (
+            StatusCode::CONFLICT,
+            axum::Json(serde_json::json!({"busy": true})),
+        )
+            .into_response(),
+        Ok(crate::dialog::Picked::Unsupported) => (
+            StatusCode::NOT_IMPLEMENTED,
+            axum::Json(serde_json::json!({"unsupported": true})),
+        )
+            .into_response(),
+        Err(error) => {
+            // 開けなかった理由はログに残し、画面はパスの直接入力へ切り替える。
+            eprintln!("Folder dialog failed: {error:#}");
+            (
+                StatusCode::NOT_IMPLEMENTED,
+                axum::Json(serde_json::json!({"unsupported": true})),
+            )
+                .into_response()
+        }
     }
 }
 #[derive(Deserialize)]
@@ -957,10 +1138,17 @@ struct RepositoryToken {
     csrf: String,
     #[serde(flatten)]
     selection: RepositorySelection,
+    /// フォルダー全体を表示中の場合のフォルダー識別子。操作後に同じ表示へ戻す。
+    #[serde(default)]
+    source: String,
 }
-fn repository_redirect(selection: &RepositorySelection, message: &str) -> Response {
+fn repository_redirect(selection: &RepositorySelection, source: &str, message: &str) -> Response {
     if selection.repository_source.is_empty() {
-        redirect("/", message)
+        if source.is_empty() {
+            redirect("/", message)
+        } else {
+            redirect(&folder_url(source), message)
+        }
     } else {
         // メッセージは既存どおりエンコードせずに付け足す（呼び出し側が固定文字列を渡す）。
         Redirect::to(&format!(
@@ -981,7 +1169,7 @@ async fn scan(
     match state.run_mut(|lib| lib.scan()).await {
         Ok(r) => {
             state.rescan.notify_one();
-            repository_redirect(&f.selection, &scan_notice("scan", r))
+            repository_redirect(&f.selection, &f.source, &scan_notice("scan", r))
         }
         Err(e) => failure(locale, e),
     }
@@ -991,6 +1179,8 @@ struct BulkForm {
     csrf: String,
     #[serde(flatten)]
     selection: RepositorySelection,
+    #[serde(default)]
+    source: String,
     #[serde(default)]
     selected: String,
     #[serde(default)]
@@ -1097,7 +1287,7 @@ async fn bulk(
         .run_mut(move |lib| lib.bulk_settings(&ids, published, &add_tags, codex))
         .await
     {
-        Ok(_) => repository_redirect(&f.selection, "skills-updated"),
+        Ok(_) => repository_redirect(&f.selection, &f.source, "skills-updated"),
         Err(e) => failure(locale, e),
     }
 }
@@ -1238,7 +1428,7 @@ async fn detail_page(
                 Ok(selection) => {
                     repository_url(&selection.repository_source, &selection.repository)
                 }
-                Err(_) => "/sources".into(),
+                Err(_) => folder_url(&detail.summary.source),
             };
             let codex = lib.sync_summary()?;
             Ok((detail, source_label, codex, library_url))
@@ -1392,14 +1582,21 @@ struct NewPage {
     content: String,
     message: String,
 }
+/// 新規作成画面の初期値。フォルダー表示から開いた場合はそのフォルダーを選んでおく。
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct NewSkillQuery {
+    source: String,
+}
 async fn new_skill(
     Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
+    Query(initial): Query<NewSkillQuery>,
 ) -> Response {
     new_page(
         locale,
         &state,
-        String::new(),
+        initial.source,
         String::new(),
         "---\nname: new-skill\ndescription: スキルの用途\n---\n\n# 手順\n\n".into(),
         String::new(),

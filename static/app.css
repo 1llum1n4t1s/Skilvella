@@ -285,21 +285,46 @@ tbody tr:hover { background: var(--violet-soft); }
 .confirmation-dialog h2 { margin: 0 0 16px; font-size: 20px; }
 .confirmation-dialog p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
 .confirmation-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin-top: 24px; }
-.folder-connection { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin: 0 0 24px; padding: 0 0 18px; border-bottom: 1px solid var(--line); }
-.folder-connection p { margin: 0; overflow-wrap: anywhere; }
-.folder-page summary { cursor: pointer; font-weight: 600; line-height: 1.6; }
-.folder-page details[open]>summary { margin-bottom: 16px; }
-.folder-secondary summary { font-size: 13px; color: var(--muted); }
+/* ライブラリ: 左にフォルダーのツリー、右にスキル一覧を並べる1画面構成。 */
+.library-layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 28px; align-items: start; }
+.library-main { min-width: 0; }
+.sidebar { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; display: grid; gap: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 3px 12px 3px 12px; background: var(--paper); }
+.sidebar-title { margin: 0 0 10px; font-size: 12px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+.folder-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.folder-nav ul ul { margin: 2px 0 6px 14px; padding-left: 8px; border-left: 1px solid var(--line); }
+.folder-nav a, .sidebar-links a { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; color: var(--ink); text-decoration: none; font-size: 14px; }
+.folder-nav ul ul a { font-size: 13px; padding-block: 5px; }
+.folder-nav a:hover, .sidebar-links a:hover { background: var(--soft); }
+.folder-nav a[aria-current="page"], .sidebar-links a[aria-current="page"] { background: var(--soft); color: var(--accent-strong); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
+.folder-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-nav .count, .sidebar-links .count { font-size: 11px; color: var(--muted); }
+.folder-nav .badge { padding: 0 6px; }
+.add-folder { gap: 8px; }
+.add-folder > button { width: 100%; }
+.add-folder p:empty { display: none; }
+.manual-path summary, .folder-secondary summary, .repository-bulk-panel>summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.manual-path[open]>summary, .folder-secondary[open]>summary { margin-bottom: 12px; }
+.sidebar > .note { margin: 0; }
+.sidebar-links { display: grid; gap: 2px; border-top: 1px solid var(--line); padding-top: 12px; }
+.sidebar-links .note { margin: 8px 10px 0; overflow-wrap: anywhere; }
+.breadcrumb { margin: 0 0 4px; font-size: 13px; color: var(--muted); }
+.folder-info { display: grid; gap: 10px; }
+.folder-info > p { margin: 0; }
+.folder-location { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+.folder-location code { overflow-wrap: anywhere; }
+.folder-info .error-text { display: inline; font-size: inherit; }
+.folder-actions { display: grid; gap: 14px; border-top: 1px solid var(--line); margin-top: 6px; padding-top: 14px; }
+.folder-actions form>.note { display: inline-block; margin-left: 12px; }
+.path-picker { display: flex; gap: 8px; }
+.path-picker input { flex: 1; min-width: 0; }
+.repository-bulk-panel { margin-top: 24px; }
+.repository-bulk-panel[open]>summary { margin-bottom: 14px; }
 .heading > div { min-width: 0; max-width: 100%; }
 .heading p.muted { overflow-wrap: anywhere; }
-.folder-card-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-.folder-card-heading h3 { min-width: 0; overflow-wrap: anywhere; margin: 0; font-family: ui-monospace, Consolas, monospace; letter-spacing: .02em; }
-.folder-location { display: grid; gap: 5px; margin: 0 0 10px; }
-.folder-location code { overflow-wrap: anywhere; }
-.folder-card .error-text { display: inline; font-size: inherit; }
-.folder-card-secondary { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 18px; display: grid; gap: 18px; }
-.folder-card-secondary form>.note { display: inline-block; margin-left: 12px; }
-.folder-add>summary { font-size: 16px; }
+@media (max-width: 960px) {
+  .library-layout { grid-template-columns: 1fr; }
+  .sidebar { position: static; }
+}
 @media (max-width: 900px) {
   .brand span { display: none; }
   .topbar { padding-inline: 18px; gap: 16px; }
@@ -342,7 +367,8 @@ tbody tr:hover { background: var(--violet-soft); }
   .search-row button { padding-inline: 18px; }
   .confirmation-dialog { padding: 18px; }
   .confirmation-actions button { flex: 1; }
-  .folder-card-secondary form>.note { display: block; margin: 8px 0 0; }
+  .folder-actions form>.note { display: block; margin: 8px 0 0; }
+  .path-picker { flex-wrap: wrap; }
   [id] { scroll-margin-top: 160px; }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -979,3 +979,116 @@ fn client_entries_are_never_ingested_as_original_skills() {
         l.remove_source(alias).unwrap();
     }
 }
+
+/// 利用者が選んだフォルダーの登録は識別子を入力させず、過去の登録や既定フォルダーと
+/// 名前が衝突しても登録できる（別PCで「Alias already belongs to another directory」に
+/// なった不具合の回帰テスト）。
+#[test]
+fn added_folders_get_unique_identifiers_and_reuse_only_the_same_folder() {
+    use skilvella::model::FolderError;
+    let b = base();
+    let home = b.join("home");
+    let auto = home.join(".agents/skills");
+    skill(&auto.join("auto"), "auto");
+    let first = b.join("one/skills");
+    let second = b.join("two/skills");
+    let japanese = b.join("スキル集");
+    skill(&first.join("a"), "first");
+    skill(&second.join("b"), "second");
+    skill(&japanese.join("c"), "japanese");
+    let l = Library::open_for_user(&b.join("data"), &home, None).unwrap();
+    l.initialize_directory(&home, None).unwrap();
+    assert_eq!(l.directory_settings().unwrap().source_alias, "default");
+
+    // 同名フォルダーは連番の識別子になり、表示名はフォルダー名のまま。
+    let (one, _) = l.add_folder(&first).unwrap();
+    let (two, _) = l.add_folder(&second).unwrap();
+    assert_eq!((one.as_str(), two.as_str()), ("skills", "skills-2"));
+    let (third, _) = l.add_folder(&japanese).unwrap();
+    assert_eq!(third, "folder");
+    let sources = l.sources().unwrap();
+    let label = |alias: &str| {
+        sources
+            .iter()
+            .find(|s| s.alias == alias)
+            .unwrap()
+            .display_name
+            .clone()
+    };
+    assert_eq!(label("skills-2"), "skills");
+    assert_eq!(label("folder"), "スキル集");
+
+    // 管理から外した後、同じ識別子の別フォルダーを登録しても衝突しない。
+    let first_id = all(&l).into_iter().find(|s| s.name == "first").unwrap().id;
+    publish(&l, &first_id);
+    l.remove_source(&one).unwrap();
+    let elsewhere = b.join("three/skills");
+    skill(&elsewhere.join("d"), "elsewhere");
+    let (fresh, _) = l.add_folder(&elsewhere).unwrap();
+    assert_eq!(fresh, "skills-3");
+
+    // 同じフォルダーを再登録すると、以前の識別子・スキルID・公開設定を引き継ぐ。
+    let (again, _) = l.add_folder(&first).unwrap();
+    assert_eq!(again, one);
+    let restored = all(&l).into_iter().find(|s| s.name == "first").unwrap();
+    assert_eq!(restored.id, first_id);
+    assert!(restored.published);
+
+    // 管理中のフォルダーは表記揺れがあっても重複登録せず、表示名を示す。
+    let spelled = PathBuf::from(
+        second
+            .to_string_lossy()
+            .replace('/', std::path::MAIN_SEPARATOR_STR),
+    );
+    let spelled = if cfg!(windows) {
+        PathBuf::from(spelled.to_string_lossy().to_uppercase())
+    } else {
+        spelled
+    };
+    let error = l.add_folder(&spelled).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<FolderError>(),
+        Some(&FolderError::AlreadyRegistered {
+            name: "skills".into()
+        })
+    );
+
+    // 親子関係にあるフォルダーは、重なる側の表示名と場所を示して拒否する。
+    let error = l.add_folder(&b.join("two")).unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<FolderError>(),
+        Some(FolderError::Overlaps { name, .. }) if name == "skills"
+    ));
+    assert!(format!("{error:#}").contains("overlap"));
+
+    // 既定フォルダーの識別子 `default` と同じ名前のフォルダーも登録できる。
+    let named_default = b.join("default");
+    skill(&named_default.join("e"), "named default");
+    let (alias, _) = l.add_folder(&named_default).unwrap();
+    assert_eq!(alias, "default-2");
+}
+
+/// 旧来の明示識別子でも、同じフォルダーの再登録は表記揺れを区別しない。
+#[test]
+fn explicit_alias_reregistration_compares_canonical_paths() {
+    let b = base();
+    let root = b.join("source");
+    skill(&root.join("one"), "one");
+    let l = Library::open(&b.join("data")).unwrap();
+    l.add_source("work", &root).unwrap();
+    l.remove_source("work").unwrap();
+    // Windowsでは大文字小文字の違う表記で再登録しても同じフォルダーとして扱う。
+    let spelled = if cfg!(windows) {
+        PathBuf::from(root.to_string_lossy().to_uppercase())
+    } else {
+        root.clone()
+    };
+    l.add_source("work", &spelled).unwrap();
+    assert_eq!(l.sources().unwrap().len(), 1);
+    let other = b.join("other");
+    skill(&other.join("two"), "two");
+    assert!(
+        format!("{:#}", l.add_source("work", &other).unwrap_err())
+            .contains("Alias already belongs")
+    );
+}

@@ -394,6 +394,55 @@
     });
   });
 
+  // 「＋ フォルダーを追加」「参照…」: Skilvella本体にOS標準のフォルダー選択ダイアログを開かせる。
+  // ブラウザーからは絶対パスを取得できないため、選んだパスはサーバーから受け取る。
+  // ダイアログを開けない環境（SSH接続など）では、パスの直接入力欄を開いて案内する。
+  document.querySelectorAll("[data-folder-browse]").forEach(button => {
+    const form = button.form;
+    const input = form?.querySelector("[data-folder-path]");
+    const csrf = form?.querySelector('input[name="csrf"]')?.value;
+    if (!form || !input || !csrf) return;
+    const manual = form.querySelector("[data-folder-manual]");
+    const status = form.querySelector("[data-folder-status]");
+    button.hidden = false;
+    // ダイアログで選べる場合は直接入力欄を畳む（入力済みの値が戻されたときは開いたままにする）。
+    if (manual && !input.value && !status?.textContent) manual.open = false;
+    const showStatus = key => { if (status) status.textContent = key ? t(key) : ""; };
+    button.addEventListener("click", async () => {
+      if (button.disabled || form.dataset.submitting === "true") return;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      showStatus("folder-dialog-opening");
+      try {
+        const response = await fetch("/dialog/folder", {
+          method: "POST",
+          headers: { Accept: "application/json" },
+          body: new URLSearchParams({ csrf }),
+          cache: "no-store",
+        });
+        let result = {};
+        try { result = await response.json(); } catch { /* 下で未対応として扱う。 */ }
+        if (typeof result.path === "string" && result.path) {
+          input.value = result.path;
+          showStatus("");
+          // 追加フォームは選んだ時点で登録まで進める。場所の変更は内容を確認してから送信する。
+          if (button.hasAttribute("data-submit")) form.requestSubmit();
+          else input.focus();
+          return;
+        }
+        if (result.cancelled) { showStatus(""); return; }
+        showStatus(result.busy ? "folder-dialog-busy" : "folder-dialog-unavailable");
+      } catch {
+        showStatus("folder-dialog-unavailable");
+      } finally {
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+      }
+      if (manual) manual.open = true;
+      input.focus();
+    });
+  });
+
   const updates = document.querySelector("[data-updates]");
   if (updates) {
     const checkButton = updates.querySelector("[data-update-check]");

@@ -75,6 +75,18 @@ const CLIENT_KEYS: &[(&str, &str)] = &[
         "preview-failed",
         "プレビューを表示できませんでした。本文は編集欄に保持されています。",
     ),
+    (
+        "folder-dialog-opening",
+        "フォルダー選択ダイアログを開いています…",
+    ),
+    (
+        "folder-dialog-unavailable",
+        "フォルダー選択ダイアログを開けませんでした。フォルダーの場所を入力してください。",
+    ),
+    (
+        "folder-dialog-busy",
+        "別のフォルダー選択ダイアログが開いています。先に閉じてください。",
+    ),
     ("update-checking", "更新を確認中…"),
     ("update-available", "バージョン {version} を利用できます。"),
     ("update-current", "最新バージョンです。"),

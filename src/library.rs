@@ -2444,58 +2444,132 @@ impl Library {
         tx.commit()?;
         Ok(())
     }
+    /// 識別子を明示してフォルダーを登録する（旧来のAPI。テスト・互換用）。
+    ///
+    /// 識別子は既存の行（解除済みを含む）と同じフォルダーを指す場合だけ再利用できる。
+    /// 解除済みの行も履歴とスキルIDを保持するため、別フォルダーへ付け替えない。
     pub fn add_source(&self, alias: &str, path: &Path) -> Result<ScanReport> {
-        ensure!(
-            !alias.is_empty()
-                && alias.len() <= 100
-                && alias
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || "_-".contains(c)),
-            "Invalid source alias"
-        );
+        ensure!(valid_source_alias(alias), "Invalid source alias");
+        self.register_source(Some(alias), path)
+            .map(|(_, report)| report)
+    }
+
+    /// 利用者が選んだフォルダーを登録し、割り当てた識別子と走査結果を返す。
+    ///
+    /// 識別子は利用者に入力させず、フォルダー名から自動で作る。以前に管理から外した
+    /// 同じフォルダーがあれば、その識別子を再利用して履歴・設定・スキルIDを引き継ぐ。
+    /// 別PCや再インストール後に、解除済みの登録や既定フォルダー（`default`）と
+    /// 名前が衝突して登録できない問題を避けるための入口。
+    pub fn add_folder(&self, path: &Path) -> Result<(String, ScanReport)> {
+        self.register_source(None, path)
+    }
+
+    fn register_source(
+        &self,
+        requested: Option<&str>,
+        path: &Path,
+    ) -> Result<(String, ScanReport)> {
         let _guard = self.write_guard()?;
         self.ensure_no_pending_migration()?;
+        ensure!(path.is_absolute(), "Directory must be absolute");
         reject_links(path)?;
         let root = path
             .canonicalize()
             .context("Source directory does not exist")?;
         ensure!(root.is_dir(), "Source must be a directory");
-        ensure!(root.to_str().is_some(), "Source path must be valid UTF-8");
+        let root_text = root
+            .to_str()
+            .context("Source path must be valid UTF-8")?
+            .to_owned();
         let data = self.db.parent().context("Invalid database location")?;
-        ensure!(
-            !root.starts_with(data) && !data.starts_with(&root),
-            "Source and library data directories must not overlap"
-        );
+        if root.starts_with(data) || data.starts_with(&root) {
+            return Err(FolderError::OverlapsData.into());
+        }
         let mut c = self.connection()?;
         let tx = c.transaction()?;
-        let mut stmt = tx.prepare("SELECT alias,path,active FROM sources")?;
-        for row in stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, bool>(2)?,
-            ))
-        })? {
-            let (old_alias, old_path, active) = row?;
-            let old_root = PathBuf::from(old_path);
-            if old_alias == alias {
-                ensure!(
-                    old_root == root,
-                    "Alias already belongs to another directory"
-                );
-            } else if active {
-                ensure!(
-                    !root.starts_with(&old_root) && !old_root.starts_with(&root),
-                    "Source directories overlap"
-                );
+        let rows = {
+            let mut stmt = tx.prepare("SELECT alias,path,active FROM sources ORDER BY alias")?;
+            stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, bool>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let root_key = path_key(&root);
+        // 保存済みのパスは表記揺れ（大文字小文字・\\?\ 接頭辞など）を正規化して比べる。
+        // 一時的に読めないフォルダーは保存値のまま比べる。
+        let canonical = |stored: &str| {
+            Path::new(stored)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(stored))
+        };
+        let mut reuse = None;
+        for (old_alias, old_path, active) in &rows {
+            let old_root = canonical(old_path);
+            let same = path_key(&old_root) == root_key;
+            let explicit = requested.is_some_and(|alias| alias == old_alias);
+            if explicit {
+                ensure!(same, "Alias already belongs to another directory");
+            }
+            if same {
+                if *active && !explicit {
+                    return Err(FolderError::AlreadyRegistered {
+                        name: Self::source_display_name_on(&tx, old_alias)?,
+                    }
+                    .into());
+                }
+                // 解除済みの同じフォルダーは、明示指定がなければ識別子を引き継ぐ。
+                // 明示指定と同じ登録の再追加は、従来どおり再走査だけを行う。
+                if requested.is_none() && reuse.is_none() {
+                    reuse = Some(old_alias.clone());
+                }
+            } else if *active && (root.starts_with(&old_root) || old_root.starts_with(&root)) {
+                return Err(FolderError::Overlaps {
+                    name: Self::source_display_name_on(&tx, old_alias)?,
+                    path: old_root.to_string_lossy().into_owned(),
+                }
+                .into());
             }
         }
-        drop(stmt);
-        tx.execute("INSERT INTO sources(alias,path,active) VALUES(?1,?2,1) ON CONFLICT(alias) DO UPDATE SET active=1", params![alias, root.to_string_lossy()])?;
-        Self::set_source_ownership(&tx, alias, false)?;
+        let created = reuse.is_none() && requested.is_none();
+        let alias = match (requested, reuse) {
+            (Some(alias), _) => alias.to_owned(),
+            (None, Some(alias)) => alias,
+            (None, None) => {
+                let base = folder_alias_base(&root);
+                let taken = |candidate: &str| rows.iter().any(|row| row.0 == candidate);
+                let mut alias = base.clone();
+                let mut n = 2;
+                while taken(&alias) {
+                    alias = format!("{base}-{n}");
+                    n += 1;
+                }
+                alias
+            }
+        };
+        tx.execute(
+            "INSERT INTO sources(alias,path,active) VALUES(?1,?2,1)
+             ON CONFLICT(alias) DO UPDATE SET active=1,path=excluded.path",
+            params![alias, root_text],
+        )?;
+        Self::set_source_ownership(&tx, &alias, false)?;
+        if created {
+            // 自動採番した識別子の代わりに、フォルダー名をそのまま表示名にする。
+            let name = root
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root_text.clone());
+            let name: String = name.chars().filter(|c| !c.is_control()).take(100).collect();
+            if !name.is_empty() && name != alias {
+                put(&tx, &format!("{SOURCE_DISPLAY_NAME_PREFIX}{alias}"), &name)?;
+            }
+        }
         let report = self.scan_on(&tx)?;
         tx.commit()?;
-        Ok(report)
+        Ok((alias, report))
     }
     pub fn remove_source(&self, alias: &str) -> Result<()> {
         let _guard = self.write_guard()?;
@@ -3651,6 +3725,38 @@ fn revision_parts(parts: &[&[u8]]) -> String {
     }
     // スキルIDもこの値から作られSQLiteに保存済みのため、16進表現は共通関数で固定する。
     crate::sha256_hex(&hash.finalize())
+}
+/// 旧来の明示識別子の書式。URL・設定キー・スキルIDの材料になるため制御文字や区切りを含めない。
+fn valid_source_alias(alias: &str) -> bool {
+    !alias.is_empty()
+        && alias.len() <= 100
+        && alias
+            .chars()
+            .all(|c| c.is_alphanumeric() || "_-".contains(c))
+}
+/// フォルダー名から自動採番の基になる識別子を作る。
+///
+/// 識別子はURLやスキルIDに入るため、ASCIIの英数字と `-` に限る。日本語などの
+/// フォルダー名は表示名で保持し、識別子は `folder` に置き換える。
+fn folder_alias_base(root: &Path) -> String {
+    let name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let mut alias = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            alias.push(c);
+        } else if !alias.is_empty() && !alias.ends_with('-') {
+            alias.push('-');
+        }
+    }
+    let alias: String = alias.trim_end_matches('-').chars().take(60).collect();
+    if alias.is_empty() {
+        "folder".into()
+    } else {
+        alias
+    }
 }
 fn skill_id(alias: &str, path: &str) -> String {
     revision(&format!("{alias}\0{path}"))

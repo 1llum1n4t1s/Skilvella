@@ -671,7 +671,8 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
     let base = server.base.clone();
     let get = |query: &str| client.get(format!("{base}/{query}"));
     let top = get("").send().await.unwrap().text().await.unwrap();
-    assert!(!top.contains("<table>"));
+    // 最初の画面から全スキルを一覧し、取得元ごとの一括設定は折りたたんで併置する。
+    assert!(top.contains("<table>") && top.contains("id=\"repository-bulk-form\""));
     fs::create_dir_all(root.join("standalone").join("empty/.git")).unwrap();
     control.scan().unwrap();
     assert!(
@@ -710,7 +711,8 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
             .iter()
             .any(|group| group.source == "standalone" && group.repository == "empty")
     );
-    assert!(!top.contains("skill-name"));
+    // 最初の画面でもスキルを一覧し、取得元への入口はサイドバーと一括設定に残す。
+    assert!(top.contains("skill-name"));
     assert!(top.contains("repository=repo-extra"));
     assert!(top.contains("repository=empty"));
     assert!(!top.contains("repository_source=test&#38;repository=."));
@@ -780,7 +782,8 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
         .text()
         .await
         .unwrap();
-    assert!(!unselected.contains("<table>"));
+    // 取得元を選ばない検索は、全フォルダーを対象に条件を保ったまま表示する。
+    assert!(unselected.contains("すべてのスキル") && unselected.contains("value=\"tools\""));
     let standalone = get("?repository_source=standalone&repository=.")
         .send()
         .await
@@ -825,7 +828,7 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
         .text()
         .await
         .unwrap();
-    assert!(!top.contains("<table>"));
+    assert!(top.contains("<table>"));
     fs::rename(source.join("repo"), root.join("offline-repo")).unwrap();
     control.scan().unwrap();
     let groups = control.repository_groups().unwrap();
@@ -935,7 +938,8 @@ async fn repository_selection_scopes_search_counts_and_pagination() {
             .text()
             .await
             .unwrap()
-            .contains("class=\"back\" href=\"/sources\"")
+            // 取得元を確認できない場合は、警告を表示するフォルダー全体の表示へ戻す。
+            .contains("class=\"back\" href=\"/?source=test\"")
     );
     let normal = get("?repository_source=standalone&repository=.")
         .send()

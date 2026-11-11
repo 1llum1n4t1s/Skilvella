@@ -183,3 +183,36 @@ pub struct SkillFile {
     pub start_line: usize,
     pub total_lines: usize,
 }
+
+/// フォルダー登録で利用者に原因と対処を示す必要がある失敗。
+///
+/// 管理画面はこの型を取り出して翻訳済みの文言に置き換える。英語の `Display` は
+/// ログ・テスト・MCP以外の呼び出し元向けで、既存テストが参照する語（`overlap`）を保つ。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FolderError {
+    /// 同じフォルダーが既に管理中。`name` は管理中の表示名。
+    AlreadyRegistered { name: String },
+    /// 管理中のフォルダーと親子関係にある。`name` / `path` は重なる側のフォルダー。
+    Overlaps { name: String, path: String },
+    /// Skilvellaのデータフォルダーと重なる。
+    OverlapsData,
+}
+
+impl std::fmt::Display for FolderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyRegistered { name } => {
+                write!(f, "This folder is already managed as \"{name}\"")
+            }
+            Self::Overlaps { name, path } => write!(
+                f,
+                "Source directories overlap with \"{name}\" ({path}); remove one of them first"
+            ),
+            Self::OverlapsData => {
+                f.write_str("Source and library data directories must not overlap")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FolderError {}
