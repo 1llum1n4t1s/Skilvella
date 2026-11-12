@@ -10,7 +10,7 @@
       <li><a href="/" {% if folder.is_none() && query.status == "present" %}aria-current="page"{% endif %}><span class="folder-label">{{ locale.text("すべてのスキル") }}</span><span class="count">{{ total }}</span></a></li>
       {% for f in folders %}
       <li><a href="{{ self.folder_url(f.source.alias) }}" title="{{ self.display_path(f.source.path) }}" {% if self.is_current_folder(f.source.alias) %}aria-current="page"{% endif %}><span class="folder-label">{{ f.source.display_name }}</span>{% if f.source.error_count > 0 %}<span class="badge warning" title="{{ locale.text("読み取りエラー") }}">!</span>{% endif %}<span class="count">{{ f.source.skill_count }}</span></a>
-        {% if f.nested() %}<ul>{% for g in f.groups %}<li><a href="{{ self.group_url(g) }}" {% if self.is_current_group(g) %}aria-current="page"{% endif %}><span class="folder-label">{{ self.group_label(g) }}</span>{% if !g.unknown %}<span class="count">{{ g.count - g.missing }}</span>{% endif %}</a></li>{% endfor %}</ul>{% endif %}
+        {% if f.nested() %}<ul>{% for g in f.groups %}<li><a href="{{ self.group_url(g) }}" title="{{ self.group_label(g) }}" {% if self.is_current_group(g) %}aria-current="page"{% endif %}><span class="folder-label">{{ self.group_label(g) }}</span>{% if !g.unknown %}<span class="count">{{ g.count - g.missing }}</span>{% endif %}</a></li>{% endfor %}</ul>{% endif %}
       </li>
       {% endfor %}
     </ul>

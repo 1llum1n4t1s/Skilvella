@@ -219,27 +219,27 @@ code, .path { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; o
 .bulk label { max-width: 240px; flex: 1; font-size: 11px; }
 .bulk button { margin-left: auto; }
 .bulk-note { margin: 0; padding: 10px 18px; background: var(--paper); border-inline: 1px solid var(--line); }
-.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 4px 10px; background: var(--paper); }
+.table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 4px 10px; background: var(--paper); }
 table { border-collapse: collapse; width: 100%; text-align: left; }
-.table-wrap table { min-width: 1050px; }
-.table-wrap .states { min-width: 160px; }
-.codex-mode-cell { min-width: 220px; }
+.table-wrap table { min-width: 640px; }
+.table-wrap .states { min-width: 0; }
+.codex-mode-cell { min-width: 150px; }
 .codex-mode-options { display: grid; gap: 7px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .codex-mode-options label { flex-direction: row; align-items: flex-start; gap: 7px; font-size: 12px; font-weight: 500; line-height: 1.35; }
 .codex-mode-options input { flex: 0 0 auto; margin: 0; }
 .client-targets { min-width: 0; margin: 0; padding: 0; border: 0; }
 .client-targets legend { padding: 0; font-weight: 600; }
 .codex-policy-status:not(:empty) { display: block; margin-top: 8px; }
-th { background: var(--input); color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .05em; white-space: nowrap; padding: 14px 18px; border-bottom: 1px solid var(--line); }
-td { padding: 18px; vertical-align: top; border-bottom: 1px solid var(--line); font-size: 12px; }
+th { background: var(--input); color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .05em; white-space: nowrap; padding: 14px 12px; border-bottom: 1px solid var(--line); }
+td { padding: 16px 12px; vertical-align: top; border-bottom: 1px solid var(--line); font-size: 12px; }
 tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: var(--violet-soft); }
 .check { width: 38px; padding-right: 0; }
-.skill-cell { width: 43%; min-width: 240px; }
+.skill-cell { width: 40%; min-width: 180px; }
 .skill-name { font-size: 15px; font-weight: 650; text-decoration: none; }
 .skill-name:hover { text-decoration: underline; }
 .description { margin: 7px 0; color: var(--muted); line-height: 1.7; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.path { font-size: 11px; color: var(--muted); }
+.path { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
 .tags, .states { display: flex; gap: 6px; flex-wrap: wrap; }
 .tag, .badge { padding: 3px 7px; border: 1px solid var(--line); border-radius: 3px; background: var(--raised); color: var(--muted); font-size: 11px; white-space: nowrap; font-weight: 600; }
 .tag { background: var(--violet-soft); color: var(--violet); }
@@ -288,9 +288,10 @@ tbody tr:hover { background: var(--violet-soft); }
 /* ライブラリ: 左にフォルダーのツリー、右にスキル一覧を並べる1画面構成。 */
 .library-layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 28px; align-items: start; }
 .library-main { min-width: 0; }
-.sidebar { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; display: grid; gap: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 3px 12px 3px 12px; background: var(--paper); }
+.sidebar { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; overflow-x: hidden; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 3px 12px 3px 12px; background: var(--paper); }
 .sidebar-title { margin: 0 0 10px; font-size: 12px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
-.folder-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.folder-nav { min-width: 0; }
+.folder-nav ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; }
 .folder-nav ul ul { margin: 2px 0 6px 14px; padding-left: 8px; border-left: 1px solid var(--line); }
 .folder-nav a, .sidebar-links a { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; color: var(--ink); text-decoration: none; font-size: 14px; }
 .folder-nav ul ul a { font-size: 13px; padding-block: 5px; }
@@ -376,7 +377,7 @@ tbody tr:hover { background: var(--violet-soft); }
 }
 
 /* 一覧の「状態」列の公開・非公開ラジオ。使い方の選択と同じ見た目の小さな2択にする。 */
-.publish-options { display: flex; gap: 4px; margin: 0 0 4px; padding: 0; border: 0; }
+.publish-options { display: grid; justify-items: start; gap: 4px; min-width: 0; margin: 0 0 4px; padding: 0; border: 0; }
 .publish-options label { display: flex; flex-direction: row; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .publish-options input { width: auto; margin: 0; }
 .publish-options label:has(input[value="true"]:checked) { border-color: var(--published); background: var(--published-bg); color: var(--published); font-weight: 600; }
