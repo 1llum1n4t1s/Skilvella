@@ -23,7 +23,11 @@ jobs:
       # 依存クレートのビルド結果を GitHub のキャッシュへ保存し、毎回の全依存コンパイルを避ける。
       # セルフホストランナーもジョブごとに作業フォルダーを初期化するため、同じキャッシュを使う。
       # キーはOS・ツールチェーン・Cargo.lock から作られ、依存が変われば作り直される。
+      # cache-bin は必ず無効にする。有効だと後処理の「Cleaning cargo/bin」が、セルフホストランナーで
+      # 共有している CARGO_HOME/bin の rustup 本体を消し、以後のジョブが rustup・cargo を実行できなくなる。
       - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          cache-bin: "false"
       - run: cargo fmt --all --check
       # launcher 機能は `launcher = []` で依存を追加せず、src・tests に cfg(feature = "launcher") の分岐もない。
       # そのため機能付きの1回の実行で、既定機能の全ターゲットと起動補助（bin・テスト）を同じ条件で検査できる。
