@@ -5,15 +5,17 @@ SkilvellaはRust製のローカルスキル管理アプリです。構造・デ�
 ## 開発と検証
 
 - `rust-toolchain.toml` に固定されたRustを使用し、依存解決は `Cargo.lock` に従ってください。OS別のビルド要件は [開発手順](docs/DEVELOPMENT.md#開発) を参照してください。
-- コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。[CI](.github/workflows/ci.yml) はWindowsのGitHubホストランナーとmacOS・LinuxのARM64セルフホストランナーを使い、フォークからのプルリクエストでは検証ジョブをスキップします。
+- コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。[CI](.github/workflows/ci.yml) はWindowsのGitHubホストランナーとmacOS・LinuxのARM64セルフホストランナーを使い、フォークからのプルリクエストでは検証ジョブをスキップします。CIは依存クレートのビルド結果をキャッシュします。
 
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --all-targets --features launcher -- -D warnings
 cargo clippy --locked --features release-update-test --bin skilvella-release --test release_update -- -D warnings
 cargo test --locked --features launcher
-cargo build --release --locked
 ```
+
+- 修正の途中は、変更に対応するテスト（`cargo test --locked --features launcher --test <名前>` や対象のテスト名）だけを実行し、上の一式は作業の最後に1回実行してください。
+- `cargo build --release --locked`（thin LTO・`codegen-units = 1`）は時間がかかるため、CIでは `release/` ブランチとタグでだけ実行します。手元では `Cargo.toml`・`Cargo.lock`・ビルド設定・機能（features）を変更した場合に実行してください。公開前の release ビルドは [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) の手順で両OSとも行います。
 
 - 文書だけの変更では、記載したコマンド・パス・挙動を実装と照合し、リンク先と差分を確認してください。
 - `tests/localization.rs` は初回HTMLとリダイレクト後の通知の翻訳、言語Cookieのポート分離、言語設定と更新操作のHTTP/CSRF境界を検証します。

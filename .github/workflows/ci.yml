@@ -20,6 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: rustup show
+      # 依存クレートのビルド結果を GitHub のキャッシュへ保存し、毎回の全依存コンパイルを避ける。
+      # セルフホストランナーもジョブごとに作業フォルダーを初期化するため、同じキャッシュを使う。
+      # キーはOS・ツールチェーン・Cargo.lock から作られ、依存が変われば作り直される。
+      - uses: Swatinem/rust-cache@v2.9.3
       - run: cargo fmt --all --check
       # launcher 機能は `launcher = []` で依存を追加せず、src・tests に cfg(feature = "launcher") の分岐もない。
       # そのため機能付きの1回の実行で、既定機能の全ターゲットと起動補助（bin・テスト）を同じ条件で検査できる。
@@ -30,4 +34,8 @@ jobs:
       - run: cargo test --locked --features launcher
         env:
           SKILVELLA_MIGRATION_TEST_ROOT: ${{ runner.temp }}
-      - run: cargo build --release --locked
+      # release プロファイル（thin LTO・codegen-units=1）のビルドは最も時間がかかり、確かめるのは
+      # release 設定でビルドが通ることだけ（コードは clippy・テストでコンパイル済み）。
+      # 公開前にも両OSで release ビルドを行うため、push ごとではなく release ブランチとタグで実行する。
+      - if: startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/')
+        run: cargo build --release --locked
