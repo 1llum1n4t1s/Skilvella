@@ -257,5 +257,6 @@
   "＋ フォルダーを追加": "+ Añadir carpeta",
   "作成先のフォルダーが必要です": "Se necesita una carpeta de destino",
   "作成先フォルダー": "Carpeta de destino",
-  "公開状態を変更できませんでした。": "No se pudo cambiar el estado de publicación."
+  "公開状態を変更できませんでした。": "No se pudo cambiar el estado de publicación.",
+  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "No se pudo confirmar que la nueva versión se haya iniciado. Espera un momento y vuelve a cargar la página."
 }

@@ -257,5 +257,6 @@
   "＋ フォルダーを追加": "+ Ordner hinzufügen",
   "作成先のフォルダーが必要です": "Ein Zielordner ist erforderlich",
   "作成先フォルダー": "Zielordner",
-  "公開状態を変更できませんでした。": "Der Veröffentlichungsstatus konnte nicht geändert werden."
+  "公開状態を変更できませんでした。": "Der Veröffentlichungsstatus konnte nicht geändert werden.",
+  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "Der Start der neuen Version konnte nicht bestätigt werden. Warten Sie kurz und laden Sie die Seite dann neu."
 }

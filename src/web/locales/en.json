@@ -257,5 +257,6 @@
   "＋ フォルダーを追加": "+ Add folder",
   "作成先のフォルダーが必要です": "A destination folder is required",
   "作成先フォルダー": "Destination folder",
-  "公開状態を変更できませんでした。": "Could not change the publication status."
+  "公開状態を変更できませんでした。": "Could not change the publication status.",
+  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "Could not confirm that the new version has started. Wait a moment, then reload the page."
 }

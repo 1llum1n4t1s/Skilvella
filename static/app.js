@@ -504,7 +504,12 @@
       });
       let result;
       try { result = await response.json(); } catch { throw new Error(`HTTP ${response.status}`); }
-      if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : `HTTP ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(typeof result.error === "string" ? result.error : `HTTP ${response.status}`);
+        // アプリの再起動でトークンが変わった古い画面。接続の問題ではないため案内だけを表示する。
+        error.reload = result.reload === true;
+        throw error;
+      }
       return result;
     }
     async function checkForUpdates() {
@@ -531,11 +536,33 @@
       } catch (error) {
         info = null;
         installButton.hidden = true;
-        updateStatus("update-check-failed", {}, error.message);
+        if (error.reload) status.textContent = error.message;
+        else updateStatus("update-check-failed", {}, error.message);
       } finally {
         busy = false;
         checkButton.disabled = false;
       }
+    }
+    // 更新のインストール後、アプリは同じURLで再起動する。設定画面を短い間隔で取得し、
+    // 起動中の版（data-version）が更新前から変わったら再読み込みする。再起動中の
+    // 接続失敗は待機の一部として扱い、上限時間を過ぎたら手動の再読み込みを案内する。
+    async function reloadWhenRestarted(expected) {
+      const previous = updates.dataset.version;
+      const deadline = Date.now() + 180000;
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        try {
+          const response = await fetch("/settings", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+          if (!response.ok) continue;
+          const page = new DOMParser().parseFromString(await response.text(), "text/html");
+          const running = page.querySelector("[data-updates]")?.dataset.version;
+          if (running && running !== previous && (!expected || running === expected)) {
+            window.location.reload();
+            return;
+          }
+        } catch { /* 再起動中は接続できないため、そのまま待つ。 */ }
+      }
+      updateStatus("update-reload-manual");
     }
     checkButton.addEventListener("click", () => { void checkForUpdates(); });
     installButton.addEventListener("click", () => {
@@ -550,12 +577,15 @@
           updateStatus("update-downloading");
           await requestUpdate("install");
           updateStatus("update-restarting");
+          // 再起動後の新しい版が同じURLで応答したら、自動で画面を読み込み直す。
+          await reloadWhenRestarted(info.latest_version);
         } catch (error) {
           info = null;
           installButton.hidden = true;
           busy = false;
           checkButton.disabled = false;
-          updateStatus("update-install-failed", {}, error.message);
+          if (error.reload) status.textContent = error.message;
+          else updateStatus("update-install-failed", {}, error.message);
         } finally {
           pendingConfirmation = null;
         }

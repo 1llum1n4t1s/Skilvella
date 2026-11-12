@@ -459,7 +459,7 @@ async fn check_update(
     State(state): State<AppState>,
     Form(form): Form<Token>,
 ) -> Response {
-    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
+    if let Some(response) = update_csrf_error(locale, &state, &form.csrf) {
         return response;
     }
     match tokio::task::spawn_blocking(crate::update::check).await {
@@ -467,6 +467,23 @@ async fn check_update(
         Ok(Err(error)) => update_failure(error.to_string()),
         Err(error) => update_failure(error.to_string()),
     }
+}
+/// 更新操作は画面のJavaScriptだけが呼ぶため、トークン不一致もJSONで返す。
+/// アプリの再起動（更新・再起動操作）でトークンは作り直されるので、開いたままの
+/// 古い画面から操作すると不一致になる。`reload` で画面に再読み込みを案内させる。
+fn update_csrf_error(locale: Locale, state: &AppState, token: &str) -> Option<Response> {
+    (token != state.csrf.as_ref()).then(|| {
+        (
+            StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({
+                "error": locale.text(
+                    "操作用トークンが一致しません。画面を再読み込みしてからやり直してください。"
+                ),
+                "reload": true,
+            })),
+        )
+            .into_response()
+    })
 }
 fn update_failure(message: String) -> Response {
     (
@@ -480,7 +497,7 @@ async fn install_update(
     State(state): State<AppState>,
     Form(form): Form<Token>,
 ) -> Response {
-    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
+    if let Some(response) = update_csrf_error(locale, &state, &form.csrf) {
         return response;
     }
     let result = tokio::task::spawn_blocking(|| {

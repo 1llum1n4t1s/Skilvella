@@ -36,6 +36,10 @@ async fn settings_are_read_only_and_update_actions_require_csrf() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        // 画面のJavaScriptが「HTTP 403」ではなく再読み込みの案内を出せるよう、JSONで返す。
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["reload"], true);
+        assert!(body["error"].as_str().unwrap().contains("再読み込み"));
     }
     let response = client
         .get(format!("{base}/assets/i18n.js"))

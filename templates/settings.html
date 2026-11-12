@@ -35,7 +35,7 @@
 </div>
 {% endfor %}<p class="note">{{ locale.text("MCP公開とは別の設定です。正常な同期後に非公開スキルの入口を外します。MCPは非公開の本文を返しません。本文の原本は複製しません。") }}</p>
 </section>
-<section class="panel stack" id="updates" data-updates data-csrf="{{ csrf }}"><h2>{{ locale.text("アプリの更新") }}</h2>
+<section class="panel stack" id="updates" data-updates data-csrf="{{ csrf }}" data-version="{{ version }}"><h2>{{ locale.text("アプリの更新") }}</h2>
 <p>{{ locale.text("現在のバージョン:") }} <strong>{{ version }}</strong></p>
 <p data-update-status role="status" aria-live="polite">{{ locale.text("更新を確認できます。") }}</p>
 <div class="actions"><button type="button" data-update-check>{{ locale.text("更新を確認") }}</button><button type="button" class="primary" data-update-install hidden>{{ locale.text("更新をインストール") }}</button><a class="button" href="https://github.com/1llum1n4t1s/Skilvella/releases" target="_blank" rel="noreferrer" data-update-release hidden>{{ locale.text("リリースを開く") }}</a></div>

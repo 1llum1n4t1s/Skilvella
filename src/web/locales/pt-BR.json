@@ -257,5 +257,6 @@
   "＋ フォルダーを追加": "+ Adicionar pasta",
   "作成先のフォルダーが必要です": "É necessária uma pasta de destino",
   "作成先フォルダー": "Pasta de destino",
-  "公開状態を変更できませんでした。": "Não foi possível alterar o status de publicação."
+  "公開状態を変更できませんでした。": "Não foi possível alterar o status de publicação.",
+  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "Não foi possível confirmar que a nova versão foi iniciada. Aguarde um momento e recarregue a página."
 }
