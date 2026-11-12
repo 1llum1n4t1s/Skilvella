@@ -106,6 +106,7 @@ pub fn router() -> Router<AppState> {
         .route("/skills/{id}/content", post(save))
         .route("/skills/{id}/metadata", post(metadata))
         .route("/skills/{id}/codex", post(set_codex_policy))
+        .route("/skills/{id}/published", post(set_published))
         .route("/skills/{id}/restore", post(restore))
         .route("/preview", post(preview))
         .route("/assets/{name}", get(asset))
@@ -348,15 +349,7 @@ async fn set_codex_policy(
     })
     .await;
     match result.unwrap_or_else(|e| Err(e.into())) {
-        Ok((_, sync))
-            if headers
-                .get(header::ACCEPT)
-                .and_then(|h| h.to_str().ok())
-                .is_some_and(|h| {
-                    h.split(',')
-                        .any(|v| v.trim().starts_with("application/json"))
-                }) =>
-        {
+        Ok((_, sync)) if wants_json(&headers) => {
             // 完了判定で読めた同期状態をそのまま返す。読めなかった場合だけ従来どおり
             // 読み直し、2回目に成功すればJSONを返す挙動を保つ。
             let sync = match sync {
@@ -381,6 +374,83 @@ async fn set_codex_policy(
             .into_response()
         }
         Ok(_) => redirect(&format!("/skills/{}", encoded(&id)), "codex-saved"),
+        Err(e) => failure(locale, e),
+    }
+}
+/// 一覧の「状態」列から送る公開状態のフォーム。`published` は `true` か `false`。
+#[derive(Deserialize)]
+struct PublishedForm {
+    csrf: String,
+    published: String,
+}
+/// `Accept: application/json` を含む要求か（画面のJavaScriptからの保存）。
+fn wants_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|h| {
+            h.split(',')
+                .any(|v| v.trim().starts_with("application/json"))
+        })
+}
+/// 1件の公開状態を切り替える。
+///
+/// 画面のラジオボタンはJSONで結果を受け取り、失敗時は選択を元に戻して理由を表示する。
+/// JavaScriptなしの送信は、使い方の保存と同じく元の一覧の同じ行へ戻す。
+/// 公開時の再検証と同期は `Library::set_published` と `run_mut` が行う。
+async fn set_published(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<SearchQuery>,
+    Query(selection): Query<RepositorySelection>,
+    headers: HeaderMap,
+    Form(form): Form<PublishedForm>,
+) -> Response {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
+        return response;
+    }
+    let json = wants_json(&headers);
+    let published = match form.published.as_str() {
+        "true" => true,
+        "false" => false,
+        _ if json => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({"error": locale.text("公開状態が不正です。")})),
+            )
+                .into_response();
+        }
+        _ => return error(locale, StatusCode::BAD_REQUEST, "公開状態が不正です。"),
+    };
+    let key = id.clone();
+    let result = state
+        .run_mut(move |lib| {
+            lib.set_published(&key, published)?;
+            lib.sync_summary()
+        })
+        .await;
+    match result {
+        Ok(sync) if json => axum::Json(serde_json::json!({
+            "published": published,
+            "enabled": sync.enabled,
+            "last_error": sync.last_error,
+        }))
+        .into_response(),
+        Err(e) if json => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({"error": format!("{e:#}")})),
+        )
+            .into_response(),
+        Ok(_) if !selection.repository_source.is_empty() || !query.status.is_empty() => {
+            Redirect::to(&format!(
+                "{}&message=skills-updated#skill-{}",
+                repository_page_url(&selection, &query),
+                encoded(&id),
+            ))
+            .into_response()
+        }
+        Ok(_) => redirect(&format!("/skills/{}", encoded(&id)), "metadata-saved"),
         Err(e) => failure(locale, e),
     }
 }

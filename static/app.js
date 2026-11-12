@@ -339,6 +339,46 @@
       }
     });
   });
+  // 一覧の「状態」列: 公開・非公開のラジオを選んだ時点で保存する。
+  // 失敗したら選択を元に戻し、理由を行内に表示する（公開時はサーバーがファイルを再検証する）。
+  document.querySelectorAll(".publish-form").forEach(form => {
+    const fieldset = form.querySelector("fieldset");
+    const status = form.querySelector(".publish-status");
+    let saved = form.querySelector('input[name="published"]:checked')?.value ?? "";
+    const showStatus = (text, failed = false) => {
+      status.textContent = text;
+      status.classList.toggle("error-text", failed);
+    };
+    form.addEventListener("change", async event => {
+      if (!(event.target instanceof HTMLInputElement) || event.target.name !== "published") return;
+      const value = event.target.value;
+      if (value === saved) return;
+      const body = new URLSearchParams(new FormData(form));
+      fieldset.disabled = true;
+      form.setAttribute("aria-busy", "true");
+      showStatus(t("policy-saving"));
+      try {
+        const response = await fetch(form.action, { method: "POST", headers: { Accept: "application/json" }, body, keepalive: true });
+        let result = {};
+        try { result = await response.json(); } catch { /* 下で失敗として扱う。 */ }
+        if (!response.ok || typeof result.published !== "boolean") throw new Error(typeof result.error === "string" ? result.error : `HTTP ${response.status}`);
+        saved = value;
+        const warning = document.getElementById("codex-sync-warning");
+        if (warning && typeof result.last_error === "string") {
+          warning.querySelector("#codex-sync-error").textContent = result.last_error;
+          warning.hidden = !result.last_error;
+        }
+        showStatus(t(result.last_error ? "policy-sync-failed" : "policy-saved"));
+      } catch (error) {
+        // 保存できなかった選択は残さず、保存済みの状態へ戻す。
+        form.querySelectorAll('input[name="published"]').forEach(input => { input.checked = input.value === saved; });
+        showStatus(t("publish-failed") + (error.message ? " " + error.message : ""), true);
+      } finally {
+        fieldset.disabled = false;
+        form.removeAttribute("aria-busy");
+      }
+    });
+  });
   const repositoryForm = document.getElementById("repository-bulk-form");
   function repositorySelectionChanged() {
     if (!repositoryForm) return false;

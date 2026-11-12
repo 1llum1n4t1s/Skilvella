@@ -327,7 +327,13 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         .unwrap();
     let unknown = row(&listing, untouched);
     assert!(unknown.contains("不明な設定です。使い方を選んでください。"));
-    assert!(!unknown.contains(" checked"));
+    // 同じ行には公開状態のラジオもあるため、使い方のフォームだけで未選択を確認する。
+    let mode_form = unknown
+        .split("class=\"codex-policy-form\"")
+        .nth(1)
+        .and_then(|rest| rest.split("</form>").next())
+        .unwrap();
+    assert!(!mode_form.contains(" checked"));
     assert_eq!(
         common::form_post(&client, format!("{base}/skills/{untouched}/codex"))
             .header("accept", "application/json")

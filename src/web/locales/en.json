@@ -256,5 +256,6 @@
   "選んだフォルダー内に新しいフォルダーと SKILL.md を作成します。既存のファイルは上書きしません。": "Creates a new folder and SKILL.md inside the selected folder. Existing files are never overwritten.",
   "＋ フォルダーを追加": "+ Add folder",
   "作成先のフォルダーが必要です": "A destination folder is required",
-  "作成先フォルダー": "Destination folder"
+  "作成先フォルダー": "Destination folder",
+  "公開状態を変更できませんでした。": "Could not change the publication status."
 }

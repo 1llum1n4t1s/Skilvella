@@ -775,3 +775,143 @@ async fn directory_settings_forms_and_icons_work_over_http() {
     assert_eq!(reopened.directory_settings().unwrap().mode, "disabled");
     assert_eq!(reopened.search(Default::default(), false).unwrap().total, 0);
 }
+
+/// 一覧の公開・非公開ラジオ: CSRF・入力値の検査、JSON応答、タグの保持、
+/// 不正なファイルの公開拒否、JavaScriptなしの送信の戻り先を確認する。
+#[tokio::test]
+async fn list_publication_radio_saves_only_the_published_flag() {
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(".work/test-http")
+        .join(uuid::Uuid::new_v4().to_string());
+    let source = base.join("skills");
+    fs::create_dir_all(source.join("good")).unwrap();
+    fs::create_dir_all(source.join("broken")).unwrap();
+    fs::write(
+        source.join("good/SKILL.md"),
+        "---\nname: good-skill\ndescription: Valid skill\n---\nbody\n",
+    )
+    .unwrap();
+    fs::write(source.join("broken/SKILL.md"), "no frontmatter\n").unwrap();
+    let library = Library::open(&base.join("data")).unwrap();
+    library.add_source("test", &source).unwrap();
+    let skills = library.search(Default::default(), false).unwrap().skills;
+    let good = skills
+        .iter()
+        .find(|s| s.name == "good-skill")
+        .unwrap()
+        .id
+        .clone();
+    let broken = skills
+        .iter()
+        .find(|s| s.error.is_some())
+        .unwrap()
+        .id
+        .clone();
+    library
+        .set_metadata(
+            &good,
+            skilvella::model::SkillMetadata {
+                tags: vec!["keep-tag".into()],
+                category: "kept".into(),
+                published: false,
+            },
+        )
+        .unwrap();
+    let state = AppState::new(library);
+    let token = state.csrf.to_string();
+    let server = common::HttpServer::start(state.clone()).await;
+    let client = common::no_redirect_client();
+    let url = |id: &str| format!("{}/skills/{id}/published", server.base);
+    let post_json = |id: String, fields: Vec<(&'static str, String)>| {
+        let client = client.clone();
+        let target = url(&id);
+        async move {
+            let pairs: Vec<(&str, &str)> = fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            common::form_post(&client, &target)
+                .header("accept", "application/json")
+                .body(common::encode_form(&pairs))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    let page = client
+        .get(&server.base)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains(&format!("action=\"/skills/{good}/published?")));
+    assert!(page.contains("name=\"published\" value=\"false\" checked"));
+
+    for csrf in ["wrong", ""] {
+        let response = post_json(
+            good.clone(),
+            vec![("csrf", csrf.into()), ("published", "true".into())],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    let invalid = post_json(
+        good.clone(),
+        vec![("csrf", token.clone()), ("published", "maybe".into())],
+    )
+    .await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert!(invalid.json::<Value>().await.unwrap()["error"].is_string());
+
+    // 公開に切り替えても、タグとカテゴリは変わらない。
+    let published = post_json(
+        good.clone(),
+        vec![("csrf", token.clone()), ("published", "true".into())],
+    )
+    .await;
+    assert_eq!(published.status(), StatusCode::OK);
+    assert_eq!(published.json::<Value>().await.unwrap()["published"], true);
+    let detail = state.library.detail(&good, false).unwrap();
+    assert!(detail.summary.published);
+    assert_eq!(detail.summary.tags, vec!["keep-tag"]);
+    assert_eq!(detail.summary.category, "kept");
+
+    // 読み取りエラーのスキルは公開せず、理由をJSONで返す。
+    let rejected = post_json(
+        broken.clone(),
+        vec![("csrf", token.clone()), ("published", "true".into())],
+    )
+    .await;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    assert!(rejected.json::<Value>().await.unwrap()["error"].is_string());
+    assert!(
+        !state
+            .library
+            .detail(&broken, false)
+            .unwrap()
+            .summary
+            .published
+    );
+
+    // JavaScriptなしの送信は、元の一覧の同じ行へ戻す。
+    let fallback = common::post_form(
+        &client,
+        &format!(
+            "{}?q=&source=&tag=&category=&status=present&offset=0",
+            url(&good)
+        ),
+        &[("csrf", &token), ("published", "false")],
+    )
+    .await;
+    assert_eq!(fallback.status(), StatusCode::SEE_OTHER);
+    let location = fallback.headers()["location"].to_str().unwrap().to_owned();
+    assert!(location.starts_with("/?q=") && location.ends_with(&format!("#skill-{good}")));
+    assert!(
+        !state
+            .library
+            .detail(&good, false)
+            .unwrap()
+            .summary
+            .published
+    );
+}

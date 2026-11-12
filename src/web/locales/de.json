@@ -256,5 +256,6 @@
   "選んだフォルダー内に新しいフォルダーと SKILL.md を作成します。既存のファイルは上書きしません。": "Erstellt im ausgewählten Ordner einen neuen Ordner mit SKILL.md. Vorhandene Dateien werden nie überschrieben.",
   "＋ フォルダーを追加": "+ Ordner hinzufügen",
   "作成先のフォルダーが必要です": "Ein Zielordner ist erforderlich",
-  "作成先フォルダー": "Zielordner"
+  "作成先フォルダー": "Zielordner",
+  "公開状態を変更できませんでした。": "Der Veröffentlichungsstatus konnte nicht geändert werden."
 }

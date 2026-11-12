@@ -3296,6 +3296,31 @@ impl Library {
         tx.commit()?;
         Ok(())
     }
+    /// 一覧のラジオボタンから、1件の公開状態だけを切り替える。
+    ///
+    /// タグ・カテゴリは変更しない（管理情報フォームと違い、他の項目を上書きしない）。
+    /// 公開時は `set_metadata` と同じくファイルを再検証し、不在・読み取り不能・不正な
+    /// frontmatterなら公開しない。再検証で本文が更新されるため、その場合だけ対象行の
+    /// 検索索引を置き換える。
+    pub fn set_published(&self, id: &str, published: bool) -> Result<()> {
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
+        let c = self.connection()?;
+        let tx = c.unchecked_transaction()?;
+        let (_, path) = self.locate(&tx, id)?;
+        if published {
+            refresh_valid(&tx, id, &path)?;
+        }
+        tx.execute(
+            "UPDATE skills SET published=?2 WHERE id=?1",
+            params![id, published],
+        )?;
+        if published {
+            refresh_fts(&tx, id)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
     pub fn forget_missing(
         &self,
         mut query: SearchQuery,

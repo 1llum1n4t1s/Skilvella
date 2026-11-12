@@ -375,6 +375,17 @@ tbody tr:hover { background: var(--violet-soft); }
   *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
 }
 
+/* 一覧の「状態」列の公開・非公開ラジオ。使い方の選択と同じ見た目の小さな2択にする。 */
+.publish-options { display: flex; gap: 4px; margin: 0 0 4px; padding: 0; border: 0; }
+.publish-options label { display: flex; flex-direction: row; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.publish-options input { width: auto; margin: 0; }
+.publish-options label:has(input[value="true"]:checked) { border-color: var(--published); background: var(--published-bg); color: var(--published); font-weight: 600; }
+.publish-options label:has(input[value="false"]:checked) { border-color: var(--muted); font-weight: 600; }
+.publish-options:disabled { opacity: .6; }
+.publish-status:empty { display: none; }
+.publish-status { display: block; max-width: 220px; overflow-wrap: anywhere; }
+.publish-status.error-text { color: var(--danger); }
+
 .repository-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
 .repository-card { display: flex; flex-direction: column; gap: 10px; padding: 20px; border: 1px solid var(--line); background: var(--paper); text-decoration: none; overflow-wrap: anywhere; }
 .repository-card { position: relative; }

@@ -53,6 +53,7 @@ const CLIENT_KEYS: &[(&str, &str)] = &[
         "保存しました。同期先が選ばれていないため入口には反映されません。",
     ),
     ("policy-saved", "保存しました。"),
+    ("publish-failed", "公開状態を変更できませんでした。"),
     ("dirty", "未保存の変更"),
     ("confirm-title", "操作の確認"),
     ("cancel", "キャンセル"),
