@@ -10,8 +10,17 @@ updates:
       time: "09:00"
       timezone: "Asia/Tokyo"
     groups:
+      # velopack（Windowsインストーラー版のみ）は、tools/pack-windows-installer.ps1 が
+      # 固定するVelopack CLIと同じ版にそろえる必要がある。他の依存とまとめず、
+      # 安定版が出るたびにメジャー更新も含めて単独のPRで知らせる。
+      # 1.2.161 は zip 8.x に依存しており、zip の脆弱性警告の解消は
+      # zip 9 系へ移行した velopack 安定版への更新で行う。
+      velopack:
+        patterns: ["velopack"]
+        update-types: ["major", "minor", "patch"]
       cargo-minor-patch:
         patterns: ["*"]
+        exclude-patterns: ["velopack"]
         update-types: ["minor", "patch"]
 
   - package-ecosystem: "rust-toolchain"
