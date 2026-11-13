@@ -32,7 +32,8 @@ for ($folder = $work; $null -ne $folder; $folder = $folder.Parent) {
         throw "The work path contains a reparse point: $($folder.FullName)"
     }
 }
-$vpkHelp = vpk --help | Out-String
+# GitHub Actions では vpk が色付け用のエスケープシーケンスを出し、`\b` の照合が外れるため取り除いてから比べる。
+$vpkHelp = (vpk --help | Out-String) -replace "`e\[[0-9;]*m", ''
 if ($vpkHelp -notmatch '\bVelopack CLI 1\.2\.161\b') {
     throw 'Velopack CLI 1.2.161 is required.'
 }

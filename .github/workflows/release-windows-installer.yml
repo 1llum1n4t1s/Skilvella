@@ -61,6 +61,18 @@ jobs:
           ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
           persist-credentials: false
 
+      - name: 梱包スクリプトをワークフローと同じコミットから取得
+        # 公開済みタグの梱包スクリプトに不具合があっても、main で直した版で付け直せるようにする。
+        # 製品のソースはタグのまま使い、tools/ の梱包スクリプトだけをワークフローのコミットに揃える。
+        if: inputs.release_tag != '' && github.ref == 'refs/heads/main'
+        # actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: .workflow-src
+          sparse-checkout: tools
+          persist-credentials: false
+
       - name: 添付先を確認
         if: inputs.release_tag != ''
         env:
@@ -71,6 +83,11 @@ jobs:
           # チェックアウトしたソースが添付先のタグそのものであることを確かめる。
           $tagCommit = git rev-parse "refs/tags/$env:RELEASE_TAG^{commit}"
           if ($LASTEXITCODE -ne 0 -or (git rev-parse HEAD) -cne $tagCommit) { throw "The checked-out source is not $env:RELEASE_TAG." }
+          if (Test-Path -LiteralPath .workflow-src/tools) {
+            Copy-Item -Path .workflow-src/tools/* -Destination tools -Recurse -Force
+            Remove-Item -LiteralPath .workflow-src -Recurse -Force
+            Write-Host "Using packaging scripts from $env:GITHUB_SHA"
+          }
           # toolchain 導入前なので Cargo.toml の [package] version を直接読む。
           $package = [regex]::Match((Get-Content -LiteralPath Cargo.toml -Raw), '(?ms)^\[package\]\s*\r?\n(?<body>.*?)(?=^\[|\z)')
           $version = [regex]::Match($package.Groups['body'].Value, '(?m)^version\s*=\s*"([^"]+)"\s*$').Groups[1].Value
@@ -90,7 +107,8 @@ jobs:
           dotnet tool install --global vpk --version 1.2.161
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # 起動できることをここで確かめる（失敗時は vpk 自身のエラーをログに残す）。
-          $help = vpk --help 2>&1 | Out-String
+          # 色付け用のエスケープシーケンスを取り除いてから版を照合する。
+          $help = (vpk --help 2>&1 | Out-String) -replace "`e\[[0-9;]*m", ''
           if ($help -notmatch '\bVelopack CLI 1\.2\.161\b') { Write-Host $help; throw 'vpk 1.2.161 could not start.' }
 
       - name: 本体をビルド
