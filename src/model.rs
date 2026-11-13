@@ -55,6 +55,15 @@ impl SkillClient {
             Self::Grok => "Grok",
         }
     }
+
+    /// 入口名からクライアントで入力する呼び出しコマンドを作る。
+    /// Codexはスキルを `$name` で明示し、Claude Code・Grokは `/name` で呼び出す。
+    pub fn command(self, name: &str) -> String {
+        match self {
+            Self::Codex => format!("${name}"),
+            Self::Claude | Self::Grok => format!("/{name}"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

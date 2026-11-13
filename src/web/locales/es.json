@@ -258,5 +258,10 @@
   "作成先のフォルダーが必要です": "Se necesita una carpeta de destino",
   "作成先フォルダー": "Carpeta de destino",
   "公開状態を変更できませんでした。": "No se pudo cambiar el estado de publicación.",
-  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "No se pudo confirmar que la nueva versión se haya iniciado. Espera un momento y vuelve a cargar la página."
+  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "No se pudo confirmar que la nueva versión se haya iniciado. Espera un momento y vuelve a cargar la página.",
+  "呼び出しコマンド": "Comandos de invocación",
+  "クライアントの入力欄でこのコマンドを入力すると、このスキルを呼び出せます。": "Escriba este comando en el campo de entrada del cliente para invocar esta habilidad.",
+  "「検索のみ」のため、コマンドはありません。コマンドで呼び出すには、下の使い方で「コマンド候補のみ」か「自動選択＋コマンド候補」を選んでください。": "No hay comando porque el modo es «Solo búsqueda». Para invocarla con un comando, elija abajo «Solo sugerencias de comandos» o «Selección automática + sugerencias de comandos».",
+  "同期先が選ばれていないため、コマンドはありません。": "No hay comando porque no se ha seleccionado ningún destino de sincronización.",
+  "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Solo las habilidades publicadas y legibles se convierten en comandos. Publíquela en MCP y compruebe que no haya errores de lectura."
 }

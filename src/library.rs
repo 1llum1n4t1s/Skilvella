@@ -320,6 +320,41 @@ mod codex_index {
                 })
                 .collect()
         }
+        /// 管理画面に表示する呼び出しコマンド名（id → 入口名）。
+        ///
+        /// 入口を生成できる状態（有効なフォルダー・公開・存在・読み取りエラーなし）のスキルだけを返す。
+        /// 使い方の設定は含めず判定しないため、画面側で「検索のみ」のときは表示を隠す
+        /// （一覧は再読込せずに使い方を切り替えるため、名前は常に渡しておく）。
+        /// 索引の名前は原本と同じ `parse` で得ており、リビジョンが一致する限り入口生成時の名前と等しい。
+        pub(crate) fn skill_commands(&self, ids: &[String]) -> Result<BTreeMap<String, String>> {
+            if ids.is_empty() {
+                return Ok(BTreeMap::new());
+            }
+            let c = self.connection()?;
+            let duplicates = duplicate_skill_names(&c)?;
+            let mut statement = c.prepare("SELECT k.name FROM skills k JOIN sources s ON s.alias=k.source WHERE k.id=?1 AND s.active=1 AND k.published=1 AND k.missing=0 AND k.error IS NULL")?;
+            let mut commands = BTreeMap::new();
+            for id in ids {
+                let name: Option<String> =
+                    statement.query_row([id], |row| row.get(0)).optional()?;
+                if let Some(name) = name {
+                    let duplicate = duplicates.contains(&name);
+                    commands.insert(id.clone(), entry_command_name(id, &name, duplicate));
+                }
+            }
+            Ok(commands)
+        }
+        /// 呼び出し入口の同期が有効なクライアント（表示順は `SkillClient::ALL`）。
+        pub(crate) fn enabled_clients(&self) -> Result<Vec<SkillClient>> {
+            let c = self.connection()?;
+            let mut clients = Vec::new();
+            for client in SkillClient::ALL {
+                if load_settings(&c, client)?.enabled {
+                    clients.push(client);
+                }
+            }
+            Ok(clients)
+        }
         pub fn set_codex_policy(&self, id: &str, automatic: bool, command: bool) -> Result<()> {
             ensure!(
                 !automatic || command,
@@ -554,35 +589,16 @@ mod codex_index {
                         continue;
                     };
                     let original = &entry.name;
-                    let valid_name = !original.is_empty()
-                        && original.len() <= 64
-                        && !original.contains("--")
-                        && !original.starts_with('-')
-                        && !original.ends_with('-')
-                        && original
-                            .bytes()
-                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
                     let suffix = &id[..id.len().min(8)];
-                    let mut name = if valid_name {
-                        original.clone()
-                    } else {
-                        format!("skill-{suffix}")
-                    };
                     let duplicates = if let Some(names) = &duplicate_names {
                         names
                     } else {
-                        let mut statement = c.prepare("SELECT k.name FROM skills k JOIN sources s ON s.alias=k.source WHERE s.active=1 AND k.published=1 AND k.missing=0 AND k.error IS NULL GROUP BY k.name HAVING count(*)>1")?;
-                        duplicate_names.insert(
-                            statement
-                                .query_map([], |r| r.get::<_, String>(0))?
-                                .collect::<rusqlite::Result<HashSet<_>>>()?,
-                        )
+                        duplicate_names.insert(duplicate_skill_names(c)?)
                     };
                     let duplicates = duplicates.contains(original);
-                    if name == "skilvella-search" || duplicates {
-                        name.truncate(55);
-                        name = format!("{}-{suffix}", name.trim_end_matches('-'));
-                    }
+                    // 管理画面のコマンド表示（`skill_commands`）と同じ関数で決め、
+                    // 画面に出す名前と生成物のフォルダー名がずれないようにする。
+                    let name = entry_command_name(&id, original, duplicates);
                     ensure!(
                         !desired.contains_key(&format!("{name}/SKILL.md")),
                         "Skill entry command name collision: {name}"
@@ -1102,6 +1118,43 @@ mod codex_index {
         dir: PathBuf,
         target: PathBuf,
         names: BTreeSet<String>,
+    }
+
+    /// 入口の対象になる（有効・公開・存在・エラーなし）スキルのうち、同じ名前が複数あるもの。
+    /// 重複名は入口名に識別子の接頭辞を付けて衝突を避けるため、生成と画面表示で共用する。
+    fn duplicate_skill_names(c: &Connection) -> Result<HashSet<String>> {
+        let mut statement = c.prepare("SELECT k.name FROM skills k JOIN sources s ON s.alias=k.source WHERE s.active=1 AND k.published=1 AND k.missing=0 AND k.error IS NULL GROUP BY k.name HAVING count(*)>1")?;
+        Ok(statement
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<HashSet<_>>>()?)
+    }
+
+    /// 呼び出し入口のコマンド名（生成する `<name>/SKILL.md` のフォルダー名）を決める純粋関数。
+    ///
+    /// - クライアントが受け付けない名前（英小文字・数字・`-` 以外、64文字超など）は `skill-<id先頭8文字>`
+    /// - 同名の公開スキルがある場合と、検索用入口 `skilvella-search` と同名の場合は `-<id先頭8文字>` を付ける
+    ///
+    /// 入口生成（`export_codex`）と管理画面の表示の両方がこの関数を使い、名前の規則を1か所に保つ。
+    fn entry_command_name(id: &str, original: &str, duplicate: bool) -> String {
+        let valid_name = !original.is_empty()
+            && original.len() <= 64
+            && !original.contains("--")
+            && !original.starts_with('-')
+            && !original.ends_with('-')
+            && original
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        let suffix = &id[..id.len().min(8)];
+        let mut name = if valid_name {
+            original.to_owned()
+        } else {
+            format!("skill-{suffix}")
+        };
+        if name == "skilvella-search" || duplicate {
+            name.truncate(55);
+            name = format!("{}-{suffix}", name.trim_end_matches('-'));
+        }
+        name
     }
 
     /// Codexの `agents/openai.yaml` の代わりに、Claude Code・Grok共通の

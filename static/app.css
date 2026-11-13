@@ -240,6 +240,15 @@ tbody tr:hover { background: var(--violet-soft); }
 .skill-name:hover { text-decoration: underline; }
 .description { margin: 7px 0; color: var(--muted); line-height: 1.7; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .path { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+/* 呼び出しコマンド。クリック1回で全体を選択でき、そのままコピーして入力欄へ貼れる。 */
+.skill-commands { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
+.skill-commands[hidden] { display: none; }
+code.command { display: inline-block; padding: 2px 8px; border-radius: 6px; background: var(--soft); border: 1px solid var(--line); color: var(--accent-strong); font-size: 12px; user-select: all; cursor: text; }
+.command-box { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); }
+.command-box h3 { margin: 0 0 8px; font-size: 13px; }
+.command-list { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 6px; }
+.command-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.command-list code.command { font-size: 14px; }
 .tags, .states { display: flex; gap: 6px; flex-wrap: wrap; }
 .tag, .badge { padding: 3px 7px; border: 1px solid var(--line); border-radius: 3px; background: var(--raised); color: var(--muted); font-size: 11px; white-space: nowrap; font-weight: 600; }
 .tag { background: var(--violet-soft); color: var(--violet); }

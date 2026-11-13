@@ -721,3 +721,111 @@ async fn sync_target_form_selects_multiple_clients() {
     );
     assert!(!home.join(".grok/skills/skilvella").exists());
 }
+
+/// 一覧・詳細に出す呼び出しコマンドが、実際に生成した入口のフォルダー名と一致することを確かめる。
+/// 名前をそのまま使える場合・使えない名前（`skill-<id>`）・同名の重複（`-<id>`）を網羅し、
+/// 「検索のみ」と非公開のスキルにはコマンドを出さない（理由の案内を出す）ことも検証する。
+#[tokio::test]
+async fn skill_pages_show_invocation_commands_matching_exported_entries() {
+    use skilvella::model::SkillClient;
+    let root = common::isolated_root("commands");
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let skills = [
+        ("alpha", "alpha"),
+        ("bad", "Bad Name"),
+        ("dup1", "dup"),
+        ("dup2", "dup"),
+        ("quiet", "quiet"),
+        ("hidden", "hidden"),
+    ];
+    for (dir, name) in skills {
+        fs::create_dir_all(root.join("source").join(dir)).unwrap();
+        fs::write(
+            root.join("source").join(dir).join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Test {dir}\n---\nBody\n"),
+        )
+        .unwrap();
+    }
+    let library = Library::open_for_user(&root.join("data"), &home, None).unwrap();
+    library.add_source("test", &root.join("source")).unwrap();
+    let found = library.search(Default::default(), false).unwrap().skills;
+    let id_of = |dir: &str| {
+        found
+            .iter()
+            .find(|s| s.relative_path.starts_with(dir))
+            .unwrap()
+            .id
+            .clone()
+    };
+    for (dir, _) in skills {
+        let id = id_of(dir);
+        library.set_published(&id, dir != "hidden").unwrap();
+        // 「検索のみ」は既定値なので、quiet以外をコマンド候補にする。
+        if dir != "quiet" {
+            library.set_codex_policy(&id, false, true).unwrap();
+        }
+    }
+    library
+        .set_clients_enabled(&[(SkillClient::Codex, true), (SkillClient::Claude, true)])
+        .unwrap();
+    assert!(library.sync_summary().unwrap().last_error.is_empty());
+    let exported = |name: &str| {
+        home.join(".agents/skills/skilvella")
+            .join(name)
+            .join("SKILL.md")
+            .is_file()
+    };
+    let suffix = |dir: &str| id_of(dir)[..8].to_owned();
+    let expected = [
+        ("alpha", "alpha".to_owned()),
+        ("bad", format!("skill-{}", suffix("bad"))),
+        ("dup1", format!("dup-{}", suffix("dup1"))),
+        ("dup2", format!("dup-{}", suffix("dup2"))),
+    ];
+    for (_, name) in &expected {
+        assert!(exported(name), "entry {name} was not exported");
+    }
+    assert!(!exported("quiet") && !exported("hidden"));
+
+    let state = AppState::new(library);
+    let server = common::HttpServer::start(state.clone()).await;
+    let client = Client::new();
+    let get = |path: String| {
+        let client = client.clone();
+        let url = format!("{}{path}", server.base);
+        async move { client.get(url).send().await.unwrap().text().await.unwrap() }
+    };
+    let list = get("/".into()).await;
+    for (dir, name) in &expected {
+        // Codexは `$name`、Claude Codeは `/name`。一覧と詳細の両方に出す。
+        assert!(list.contains(&format!(">${name}</code>")), "{dir}: {list}");
+        assert!(list.contains(&format!(">/{name}</code>")), "{dir}");
+        let detail = get(format!("/skills/{}", id_of(dir))).await;
+        assert!(detail.contains(&format!(">${name}</code>")), "{dir}");
+        assert!(detail.contains(&format!(">/{name}</code>")), "{dir}");
+    }
+    // 検索のみの行は名前を持つが隠し、非公開の行には名前自体を出さない。
+    let quiet_row = list
+        .split("id=\"skill-")
+        .find(|row| row.starts_with(&id_of("quiet")))
+        .unwrap();
+    assert!(quiet_row.contains("data-skill-commands hidden"));
+    assert!(!list.contains(">$hidden</code>") && !list.contains(">/hidden</code>"));
+    let quiet = get(format!("/skills/{}", id_of("quiet"))).await;
+    assert!(!quiet.contains("class=\"command\""));
+    assert!(quiet.contains("「検索のみ」のため、コマンドはありません。"));
+    let hidden = get(format!("/skills/{}", id_of("hidden"))).await;
+    assert!(!hidden.contains("class=\"command\""));
+    assert!(hidden.contains("公開中で読み取れるスキルだけがコマンドになります。"));
+
+    // 同期先をすべて外すと、コマンドは出さず設定への案内を出す。
+    state
+        .library
+        .set_clients_enabled(&[(SkillClient::Codex, false), (SkillClient::Claude, false)])
+        .unwrap();
+    let alpha = get(format!("/skills/{}", id_of("alpha"))).await;
+    assert!(!alpha.contains("class=\"command\""));
+    assert!(alpha.contains("同期先が選ばれていないため、コマンドはありません。"));
+    assert!(!get("/".into()).await.contains("data-skill-commands"));
+}

@@ -258,5 +258,10 @@
   "作成先のフォルダーが必要です": "Ein Zielordner ist erforderlich",
   "作成先フォルダー": "Zielordner",
   "公開状態を変更できませんでした。": "Der Veröffentlichungsstatus konnte nicht geändert werden.",
-  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "Der Start der neuen Version konnte nicht bestätigt werden. Warten Sie kurz und laden Sie die Seite dann neu."
+  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "Der Start der neuen Version konnte nicht bestätigt werden. Warten Sie kurz und laden Sie die Seite dann neu.",
+  "呼び出しコマンド": "Aufrufbefehle",
+  "クライアントの入力欄でこのコマンドを入力すると、このスキルを呼び出せます。": "Geben Sie diesen Befehl im Eingabefeld des Clients ein, um diesen Skill aufzurufen.",
+  "「検索のみ」のため、コマンドはありません。コマンドで呼び出すには、下の使い方で「コマンド候補のみ」か「自動選択＋コマンド候補」を選んでください。": "Kein Befehl, da „Nur Suche“ gewählt ist. Wählen Sie unten „Nur Befehlsvorschläge“ oder „Automatische Auswahl + Befehlsvorschläge“, um ihn per Befehl aufzurufen.",
+  "同期先が選ばれていないため、コマンドはありません。": "Kein Befehl, da kein Synchronisierungsziel ausgewählt ist.",
+  "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Nur veröffentlichte, lesbare Skills werden zu Befehlen. Veröffentlichen Sie ihn über MCP und stellen Sie sicher, dass keine Lesefehler vorliegen."
 }

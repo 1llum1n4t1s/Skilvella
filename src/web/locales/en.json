@@ -258,5 +258,10 @@
   "作成先のフォルダーが必要です": "A destination folder is required",
   "作成先フォルダー": "Destination folder",
   "公開状態を変更できませんでした。": "Could not change the publication status.",
-  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "Could not confirm that the new version has started. Wait a moment, then reload the page."
+  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "Could not confirm that the new version has started. Wait a moment, then reload the page.",
+  "呼び出しコマンド": "Invocation commands",
+  "クライアントの入力欄でこのコマンドを入力すると、このスキルを呼び出せます。": "Type this command in the client's input box to invoke this skill.",
+  "「検索のみ」のため、コマンドはありません。コマンドで呼び出すには、下の使い方で「コマンド候補のみ」か「自動選択＋コマンド候補」を選んでください。": "No command because the mode is “Search only”. To invoke it by command, choose “Command suggestions only” or “Automatic selection + command suggestions” below.",
+  "同期先が選ばれていないため、コマンドはありません。": "No command because no sync target is selected.",
+  "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Only published, readable skills become commands. Publish it to MCP and make sure there are no read errors."
 }

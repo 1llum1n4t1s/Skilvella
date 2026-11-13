@@ -258,5 +258,10 @@
   "作成先のフォルダーが必要です": "Un dossier de destination est nécessaire",
   "作成先フォルダー": "Dossier de destination",
   "公開状態を変更できませんでした。": "Impossible de modifier l'état de publication.",
-  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "Impossible de confirmer le démarrage de la nouvelle version. Patientez un instant, puis rechargez la page."
+  "新しいバージョンの起動を確認できませんでした。しばらく待ってからページを再読み込みしてください。": "Impossible de confirmer le démarrage de la nouvelle version. Patientez un instant, puis rechargez la page.",
+  "呼び出しコマンド": "Commandes d’appel",
+  "クライアントの入力欄でこのコマンドを入力すると、このスキルを呼び出せます。": "Saisissez cette commande dans la zone de saisie du client pour appeler cette compétence.",
+  "「検索のみ」のため、コマンドはありません。コマンドで呼び出すには、下の使い方で「コマンド候補のみ」か「自動選択＋コマンド候補」を選んでください。": "Aucune commande, car le mode est « Recherche seule ». Pour l’appeler par commande, choisissez ci-dessous « Suggestions de commandes seules » ou « Sélection automatique + suggestions de commandes ».",
+  "同期先が選ばれていないため、コマンドはありません。": "Aucune commande, car aucune cible de synchronisation n’est sélectionnée.",
+  "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Seules les compétences publiées et lisibles deviennent des commandes. Publiez-la via MCP et vérifiez qu’il n’y a pas d’erreur de lecture."
 }

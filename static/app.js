@@ -268,6 +268,16 @@
     const button = event.submitter;
     policyNavigation ??= () => { if (button?.isConnected && !button.disabled) form.requestSubmit(button); else form.requestSubmit(); };
   }, true);
+  // 一覧の行の呼び出しコマンドは、保存済みの使い方がコマンドを出す設定で、かつ公開中のときだけ見せる。
+  // 名前は描画時に公開中だったスキルにだけ埋め込まれるため、非公開から公開にした行は再読込まで出ない。
+  function refreshCommands(form) {
+    const row = form.closest("tr");
+    const block = row?.querySelector("[data-skill-commands]");
+    if (!block) return;
+    const mode = row.querySelector('.codex-policy-form input[name="mode"]:checked')?.value;
+    const published = row.querySelector('.publish-form input[name="published"]:checked')?.value;
+    block.hidden = !mode || mode === "search" || published !== "true";
+  }
   function policyStatus(form, key) {
     form.dataset.policyStatus = key;
     form.querySelector(".codex-policy-status").textContent = t(key);
@@ -334,6 +344,7 @@
         policyForms.forEach(item => { item.querySelector("fieldset").disabled = policyUncertain; });
         selectionChanged();
         form.removeAttribute("aria-busy");
+        refreshCommands(form);
         if (!uncertain && hadFocus && (document.activeElement === document.body || document.activeElement === document.documentElement)) selected.focus({ preventScroll: true });
         if (!uncertain && !syncFailed && next) next();
       }
@@ -376,6 +387,7 @@
       } finally {
         fieldset.disabled = false;
         form.removeAttribute("aria-busy");
+        refreshCommands(form);
       }
     });
   });

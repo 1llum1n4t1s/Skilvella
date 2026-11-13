@@ -673,6 +673,10 @@ struct IndexPage {
     results: SearchResults,
     error_count: usize,
     policies: BTreeMap<String, Option<CodexSkillPolicy>>,
+    /// 入口を生成できるスキルの呼び出しコマンド名（id → 入口名）。
+    commands: BTreeMap<String, String>,
+    /// 呼び出し入口の同期が有効なクライアント。
+    clients: Vec<SkillClient>,
     current_query: String,
     sources: Vec<Source>,
     folders: Vec<FolderView>,
@@ -696,6 +700,11 @@ struct IndexPage {
     next: String,
 }
 impl IndexPage {
+    /// 一覧の行に出す呼び出しコマンド（クライアント名, コマンド）。
+    /// 使い方が「検索のみ」の行も返し、表示の切替は画面側（`data-command-visible`）で行う。
+    fn skill_commands(&self, id: &str) -> Vec<(String, String)> {
+        command_list(&self.clients, self.commands.get(id))
+    }
     fn policy_mode(&self, id: &str) -> &'static str {
         let Some(Some(policy)) = self.policies.get(id) else {
             return "";
@@ -886,10 +895,12 @@ async fn library_page(
                 .map(|skill| skill.id.clone())
                 .collect::<Vec<_>>();
             let policies = lib.codex_policies(&ids)?;
+            let commands = (lib.skill_commands(&ids)?, lib.enabled_clients()?);
             Ok((
                 results,
                 groups,
                 policies,
+                commands,
                 lib.sources()?,
                 lib.sync_summary()?,
                 error_count,
@@ -898,7 +909,16 @@ async fn library_page(
         })
         .await
     {
-        Ok((results, groups, policies, sources, codex, error_count, directory)) => {
+        Ok((
+            results,
+            groups,
+            policies,
+            (commands, clients),
+            sources,
+            codex,
+            error_count,
+            directory,
+        )) => {
             let reset = if !selection.repository_source.is_empty() {
                 repository_url(&selection.repository_source, &selection.repository)
             } else if !query.source.is_empty() {
@@ -959,6 +979,8 @@ async fn library_page(
                     results,
                     error_count,
                     policies,
+                    commands,
+                    clients,
                     current_query,
                     sources,
                     folders,
@@ -1467,6 +1489,24 @@ async fn repository_bulk(
         Err(e) => failure(locale, e),
     }
 }
+/// 有効なクライアントごとの呼び出しコマンド（クライアント名, コマンド）。
+/// Claude Code・Grokは同じ `/name` になるため、同じコマンドは1つにまとめて名前を並べる。
+fn command_list(clients: &[SkillClient], name: Option<&String>) -> Vec<(String, String)> {
+    let Some(name) = name else {
+        return Vec::new();
+    };
+    let mut list: Vec<(Vec<&'static str>, String)> = Vec::new();
+    for client in clients {
+        let command = client.command(name);
+        match list.iter_mut().find(|(_, existing)| *existing == command) {
+            Some((labels, _)) => labels.push(client.label()),
+            None => list.push((vec![client.label()], command)),
+        }
+    }
+    list.into_iter()
+        .map(|(labels, command)| (labels.join("・"), command))
+        .collect()
+}
 #[derive(Template)]
 #[template(path = "detail.html")]
 struct DetailPage {
@@ -1476,6 +1516,10 @@ struct DetailPage {
     source_label: String,
     library_url: String,
     detail: SkillDetail,
+    /// 呼び出しコマンド（クライアント名, コマンド）。入口を生成できない場合は空。
+    commands: Vec<(String, String)>,
+    /// 同期先が1つ以上有効か（コマンドがない理由の案内に使う）。
+    clients_enabled: bool,
     preview: String,
     tag_text: String,
     message: String,
@@ -1518,11 +1562,25 @@ async fn detail_page(
                 Err(_) => folder_url(&detail.summary.source),
             };
             let codex = lib.sync_summary()?;
-            Ok((detail, source_label, codex, library_url))
+            let clients = lib.enabled_clients()?;
+            let names = lib.skill_commands(std::slice::from_ref(&key))?;
+            let commands = if detail.codex_policy.command {
+                command_list(&clients, names.get(&key))
+            } else {
+                Vec::new()
+            };
+            Ok((
+                detail,
+                source_label,
+                codex,
+                library_url,
+                commands,
+                !clients.is_empty(),
+            ))
         })
         .await
     {
-        Ok((mut detail, source_label, codex, library_url)) => {
+        Ok((mut detail, source_label, codex, library_url, commands, clients_enabled)) => {
             let dirty = draft.is_some();
             if let Some((content, revision)) = draft {
                 detail.content = content;
@@ -1539,6 +1597,8 @@ async fn detail_page(
                     source_label,
                     library_url,
                     detail,
+                    commands,
+                    clients_enabled,
                     preview,
                     tag_text,
                     message,
