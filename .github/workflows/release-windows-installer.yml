@@ -5,8 +5,10 @@ name: Release Windows installer
 #   本人の PC や SimplySign Desktop は不要。Secrets は Environment "release" の
 #   SIGILUNE_EMAIL / SIGILUNE_TOTP_URI を、梱包・署名の step だけへ渡す。
 # - 手順の本体は tools/pack-windows-installer.ps1 -Sign で、ローカル実行と同じ処理を通す。
-# - 起動: 手動 (workflow_dispatch)。公開するタグ (vX.Y.Z) を --ref に指定して実行する
+# - 起動: 手動 (workflow_dispatch)。main から実行し、release_tag に公開済みのタグ (vX.Y.Z) を指定する
 #   （Environment "release" は main と v* タグだけ許可）。push / tag では自動起動しない。
+#   ビルドするソースは release_tag のタグをチェックアウトし、ワークフロー自体は main の最新版を使う。
+#   こうしておくと、ワークフローの不具合を main で直して公開済みの版へ Setup を付け直せる（タグは動かさない）。
 # - 配布: release_tag を指定したときだけ、そのタグの既存 GitHub Release へ Setup を追加で添付する
 #   （既存 asset は上書きしない）。ZIP 版・macOS 版・SHA256SUMS.txt は従来の手順のまま扱い、ここでは作らない。
 on:
@@ -33,14 +35,30 @@ jobs:
     environment: release
     permissions:
       contents: write
+    env:
+      # vpk 1.2.161 は .NET 9 ランタイム向け。ランナーに無い場合でも新しい版のランタイムで動かす
+      # （無いと vpk が起動できず、梱包スクリプトの版確認で止まる）。
+      DOTNET_ROLL_FORWARD: Major
     defaults:
       run:
         shell: pwsh
     steps:
+      - name: 実行条件を確認
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          # main（最新のワークフロー）から実行するか、従来どおり添付先のタグそのものから実行する。
+          if ($env:GITHUB_REF -cne 'refs/heads/main' -and $env:GITHUB_REF -cne "refs/tags/$env:RELEASE_TAG") {
+            throw "Run this workflow on main (or on the release tag itself): $env:GITHUB_REF"
+          }
+          if ($env:RELEASE_TAG -and $env:RELEASE_TAG -cnotmatch '^v\d+\.\d+\.\d+$') { throw "Release tag must be vX.Y.Z: $env:RELEASE_TAG" }
+
       - name: リポジトリをチェックアウト
         # actions/checkout@v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          # 添付先がある場合は、公開した版のソース（タグ）からビルドする。
+          ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
           persist-credentials: false
 
       - name: 添付先を確認
@@ -50,9 +68,9 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           $ErrorActionPreference = 'Stop'
-          # 公開する版のソースからビルドするため、実行 ref が添付先のタグと一致することを必須にする。
-          if ($env:RELEASE_TAG -cnotmatch '^v\d+\.\d+\.\d+$') { throw "Release tag must be vX.Y.Z: $env:RELEASE_TAG" }
-          if ($env:GITHUB_REF -cne "refs/tags/$env:RELEASE_TAG") { throw "Run this workflow with --ref $env:RELEASE_TAG to attach the Setup to that release." }
+          # チェックアウトしたソースが添付先のタグそのものであることを確かめる。
+          $tagCommit = git rev-parse "refs/tags/$env:RELEASE_TAG^{commit}"
+          if ($LASTEXITCODE -ne 0 -or (git rev-parse HEAD) -cne $tagCommit) { throw "The checked-out source is not $env:RELEASE_TAG." }
           # toolchain 導入前なので Cargo.toml の [package] version を直接読む。
           $package = [regex]::Match((Get-Content -LiteralPath Cargo.toml -Raw), '(?ms)^\[package\]\s*\r?\n(?<body>.*?)(?=^\[|\z)')
           $version = [regex]::Match($package.Groups['body'].Value, '(?m)^version\s*=\s*"([^"]+)"\s*$').Groups[1].Value
@@ -71,6 +89,9 @@ jobs:
           # tools/pack-windows-installer.ps1 が要求する固定版。
           dotnet tool install --global vpk --version 1.2.161
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # 起動できることをここで確かめる（失敗時は vpk 自身のエラーをログに残す）。
+          $help = vpk --help 2>&1 | Out-String
+          if ($help -notmatch '\bVelopack CLI 1\.2\.161\b') { Write-Host $help; throw 'vpk 1.2.161 could not start.' }
 
       - name: 本体をビルド
         # 依存 crate の build script も動くため、この step には署名用 Secrets を渡さない。

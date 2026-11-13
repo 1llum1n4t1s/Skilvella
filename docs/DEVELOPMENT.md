@@ -95,10 +95,10 @@ pwsh -NoProfile -File ./tools/pack-windows-installer.ps1 -WorkDirectory D:\work\
 
 このコマンドは動作確認用の未署名Setupを生成します。公開用は `-Sign` を追加し、[Sigilune](https://github.com/1llum1n4t1s/Sigilune)（Certum SimplySignのクラウド鍵をsigntoolの `/dlib` で使うCLI）で署名します。SimplySign Desktopは不要で、手元では事前に `sigilune setup` でCertumアカウントを登録します（実行ファイルは `SIGILUNE_EXE` → PATH → `%USERPROFILE%\.local\Sigilune\bin` の順に探します）。Taskmetryと同じコード署名証明書とCertumのタイムスタンプを使い、SHA-256で署名します。スクリプトはSetupのAuthenticode署名・署名者（CN）・タイムスタンプを検証してからSHA-256を表示します。
 
-公開用Setupは通常GitHub Actionsの「Release Windows installer」（`.github/workflows/release-windows-installer.yml`）で作ります。ZIP版・macOS版と `SHA256SUMS.txt` で公開済みのReleaseのタグを指定して手動実行し、Environment `release` の承認後に同じスクリプトで署名したSetupをそのReleaseへ追加で添付します（既存assetは上書きしません）。
+公開用Setupは通常GitHub Actionsの「Release Windows installer」（`.github/workflows/release-windows-installer.yml`）で作ります。ZIP版・macOS版と `SHA256SUMS.txt` で公開済みのReleaseのタグを指定してmainから手動実行すると、そのタグのソースをビルドし、同じスクリプトで署名したSetupをそのReleaseへ追加で添付します（既存assetは上書きしません。承認待ちはありません）。ワークフローはmainの最新版が使われるため、ワークフローの不具合をmainで直してから公開済みの版へSetupを付け直せます。
 
 ```powershell
-gh workflow run release-windows-installer.yml --ref v1.2.3 -f release_tag=v1.2.3
+gh workflow run release-windows-installer.yml --ref main -f release_tag=v1.2.3
 ```
 
 `release_tag` を空にするとActionsの成果物だけを作ります。署名用Secrets（`SIGILUNE_EMAIL`・`SIGILUNE_TOTP_URI`）はEnvironment `release` に置き、梱包・署名のstepだけへ渡します。
