@@ -1,0 +1,125 @@
+name: Release Windows installer
+
+# Windows インストーラー (SkilvellaApp-win-Setup.exe) を GitHub Actions でビルド・署名する。
+# - 署名: Sigilune (https://github.com/1llum1n4t1s/Sigilune) が Certum SimplySign のクラウド鍵で行う。
+#   本人の PC や SimplySign Desktop は不要。Secrets は Environment "release" の
+#   SIGILUNE_EMAIL / SIGILUNE_TOTP_URI を、梱包・署名の step だけへ渡す。
+# - 手順の本体は tools/pack-windows-installer.ps1 -Sign で、ローカル実行と同じ処理を通す。
+# - 起動: 手動 (workflow_dispatch)。公開するタグ (vX.Y.Z) を --ref に指定して実行する
+#   （Environment "release" は main と v* タグだけ許可）。push / tag では自動起動しない。
+# - 配布: release_tag を指定したときだけ、そのタグの既存 GitHub Release へ Setup を追加で添付する
+#   （既存 asset は上書きしない）。ZIP 版・macOS 版・SHA256SUMS.txt は従来の手順のまま扱い、ここでは作らない。
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Setup を添付する既存 GitHub Release のタグ (vX.Y.Z、--ref と同じ)。空なら Actions の成果物だけ
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-windows-installer
+  cancel-in-progress: false
+
+jobs:
+  installer:
+    if: github.repository == '1llum1n4t1s/Skilvella'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: リポジトリをチェックアウト
+        # actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: 添付先を確認
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 公開する版のソースからビルドするため、実行 ref が添付先のタグと一致することを必須にする。
+          if ($env:RELEASE_TAG -cnotmatch '^v\d+\.\d+\.\d+$') { throw "Release tag must be vX.Y.Z: $env:RELEASE_TAG" }
+          if ($env:GITHUB_REF -cne "refs/tags/$env:RELEASE_TAG") { throw "Run this workflow with --ref $env:RELEASE_TAG to attach the Setup to that release." }
+          # toolchain 導入前なので Cargo.toml の [package] version を直接読む。
+          $package = [regex]::Match((Get-Content -LiteralPath Cargo.toml -Raw), '(?ms)^\[package\]\s*\r?\n(?<body>.*?)(?=^\[|\z)')
+          $version = [regex]::Match($package.Groups['body'].Value, '(?m)^version\s*=\s*"([^"]+)"\s*$').Groups[1].Value
+          if ("v$version" -cne $env:RELEASE_TAG) { throw "Cargo version v$version differs from $env:RELEASE_TAG." }
+          $assets = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
+          if ($LASTEXITCODE -ne 0) { throw "Release $env:RELEASE_TAG was not found. Create it with the ZIP/macOS assets first." }
+          if ($assets -contains 'SkilvellaApp-win-Setup.exe') { throw 'The release already has SkilvellaApp-win-Setup.exe; existing assets are not overwritten.' }
+
+      - name: Rust と Velopack CLI を準備
+        run: |
+          # rust-toolchain.toml の版を使う。
+          rustup toolchain install --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup target add x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # tools/pack-windows-installer.ps1 が要求する固定版。
+          dotnet tool install --global vpk --version 1.2.161
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 本体をビルド
+        # 依存 crate の build script も動くため、この step には署名用 Secrets を渡さない。
+        # 梱包スクリプトの cargo build と同じ条件でビルドし、次の step では再コンパイルさせない。
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'skilvella-target'
+          "CARGO_TARGET_FOR_PACK=$target" >> $env:GITHUB_ENV
+          cargo build --locked --release --target x86_64-pc-windows-msvc --target-dir $target --features windows-installer --bin skilvella
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Sigilune を導入
+        id: sigilune
+        uses: 1llum1n4t1s/Sigilune@v1
+
+      - name: 梱包・署名
+        env:
+          SIGILUNE_EMAIL: ${{ secrets.SIGILUNE_EMAIL }}
+          SIGILUNE_TOTP_URI: ${{ secrets.SIGILUNE_TOTP_URI }}
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'skilvella-installer'
+          New-Item -ItemType Directory -Path $work | Out-Null
+          "WORK_DIR=$work" >> $env:GITHUB_ENV
+          & ./tools/pack-windows-installer.ps1 -WorkDirectory $work -Sign -CargoTargetDirectory $env:CARGO_TARGET_FOR_PACK
+
+      - name: Sigilune からログアウト
+        # ランナー上の Certum セッションを残さない。
+        if: always() && steps.sigilune.outcome == 'success'
+        run: sigilune logout | Out-Null
+
+      - name: 成果物をアップロード
+        # actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: skilvella-windows-installer
+          path: ${{ env.WORK_DIR }}/packages/SkilvellaApp-win-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: GitHub Release へ Setup を添付
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $env:WORK_DIR 'packages/SkilvellaApp-win-Setup.exe'
+          $signature = Get-AuthenticodeSignature -LiteralPath $setup
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike 'CN=Open Source Developer Yuichiro Shinozaki*' -or !$signature.TimeStamperCertificate) { throw 'Setup signature verification failed.' }
+          "SHA256 $((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash)"
+          # --clobber を付けず、既存 asset を上書きしない。
+          gh release upload $env:RELEASE_TAG $setup --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Setup upload failed.' }

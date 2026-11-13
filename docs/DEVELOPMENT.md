@@ -61,7 +61,7 @@ MCPの固定3ツールと検索拡張の制約は [採用した構成の理由�
 
 Host / Origin・CSRF・プレビュー・`Referrer-Policy` の制約は [重要な不変条件](../DESIGN.md#重要な不変条件)、監視と手動再スキャンの役割は [採用した構成の理由とトレードオフ](../DESIGN.md#採用した構成の理由とトレードオフ) を参照してください。
 
-GitHub ActionsはWindows / macOS / Linuxでformat・Clippy・テスト・リリースビルドを確認します。配布・署名・公証・自動更新のワークフローはまだ含めていません。
+GitHub ActionsはWindows / macOS / Linuxでformat・Clippy・テスト・リリースビルドを確認します。ZIP版・macOS版の配布・公証・自動更新のワークフローはまだ含めていません。Windowsインストーラーのビルド・署名・添付だけは手動起動の専用ワークフローで行います（[Windowsインストーラーの追加配布](#windowsインストーラーの追加配布)）。
 
 ## 配布物の作成と検証
 
@@ -93,7 +93,15 @@ Windows x64で、Taskmetryと同じ固定版のVelopack CLI 1.2.161とRustのビ
 pwsh -NoProfile -File ./tools/pack-windows-installer.ps1 -WorkDirectory D:\work\skilvella-installer
 ```
 
-このコマンドは動作確認用の未署名Setupを生成します。公開用はSimplySign Desktopにログインして `-Sign` を追加します。Taskmetryと同じコード署名証明書とCertumのタイムスタンプを使い、SHA-256で署名します。スクリプトはSetupのAuthenticode署名と署名者を検証してからSHA-256を表示します。
+このコマンドは動作確認用の未署名Setupを生成します。公開用は `-Sign` を追加し、[Sigilune](https://github.com/1llum1n4t1s/Sigilune)（Certum SimplySignのクラウド鍵をsigntoolの `/dlib` で使うCLI）で署名します。SimplySign Desktopは不要で、手元では事前に `sigilune setup` でCertumアカウントを登録します（実行ファイルは `SIGILUNE_EXE` → PATH → `%USERPROFILE%\.local\Sigilune\bin` の順に探します）。Taskmetryと同じコード署名証明書とCertumのタイムスタンプを使い、SHA-256で署名します。スクリプトはSetupのAuthenticode署名・署名者（CN）・タイムスタンプを検証してからSHA-256を表示します。
+
+公開用Setupは通常GitHub Actionsの「Release Windows installer」（`.github/workflows/release-windows-installer.yml`）で作ります。ZIP版・macOS版と `SHA256SUMS.txt` で公開済みのReleaseのタグを指定して手動実行し、Environment `release` の承認後に同じスクリプトで署名したSetupをそのReleaseへ追加で添付します（既存assetは上書きしません）。
+
+```powershell
+gh workflow run release-windows-installer.yml --ref v1.2.3 -f release_tag=v1.2.3
+```
+
+`release_tag` を空にするとActionsの成果物だけを作ります。署名用Secrets（`SIGILUNE_EMAIL`・`SIGILUNE_TOTP_URI`）はEnvironment `release` に置き、梱包・署名のstepだけへ渡します。
 
 `packages/SkilvellaApp-win-Setup.exe` を追加の配布物として扱い、ZIP版とmacOS版の3ファイルには既存の `checksums`、`verify`、自動更新回帰テストを引き続き使います。Setupは別にSHA-256を確認します。`windows-installer` 機能はSetup向けです。通常のZIP版はこの機能を指定せずビルドしてください。
 

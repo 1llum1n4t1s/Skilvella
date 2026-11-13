@@ -1,9 +1,17 @@
 # Windows SDKとVelopackをつなぐ開発用の梱包入口。
+#
+# -Sign は Sigilune (https://github.com/1llum1n4t1s/Sigilune) で Certum SimplySign のクラウド鍵を使って署名する。
+# SimplySign Desktop は不要。手元は `sigilune setup` で登録済みであること、GitHub Actions
+# (.github/workflows/release-windows-installer.yml) は Environment "release" の Secrets を
+# SIGILUNE_EMAIL / SIGILUNE_TOTP_URI で渡す。
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
     [string] $WorkDirectory,
-    [switch] $Sign
+    [switch] $Sign,
+    # 省略時は作業ディレクトリ内の target。CIは署名用Secretsを渡さない前段のstepで同じ条件の
+    # cargo build を済ませ、その出力先を渡す（このスクリプトのcargo buildは再コンパイルしない）。
+    [string] $CargoTargetDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,25 +38,29 @@ if ($vpkHelp -notmatch '\bVelopack CLI 1\.2\.161\b') {
 }
 
 $signing = @()
+# Taskmetryと同じコード署名証明書。thumbprintは証明書の年次更新で変わるため、署名者はCNで照合する。
+$signerCommonName = 'Open Source Developer Yuichiro Shinozaki'
 if ($Sign) {
-    # Taskmetryと同じSimplySign証明書を使い、複数ある場合は有効な証明書を指紋で選ぶ。
-    $now = Get-Date
-    $certificate = Get-ChildItem Cert:\CurrentUser\My |
-        Where-Object {
-            $_.Subject -like 'CN=Open Source Developer Yuichiro Shinozaki*' -and
-            $_.HasPrivateKey -and $_.NotBefore -le $now -and $_.NotAfter -gt $now
-        } |
-        Sort-Object NotAfter -Descending |
-        Select-Object -First 1
-    if (!$certificate) { throw 'The code signing certificate is unavailable. Check SimplySign Desktop.' }
+    . (Join-Path $PSScriptRoot 'Sigilune.Common.ps1')
+    $sigilune = Resolve-SigiluneExe
+    # ビルド前にログインし、認証の失敗を早く検出する（有効なセッションは再利用する）。
+    Connect-Sigilune -SigiluneExe $sigilune
+    # Velopackはファイルごとに署名テンプレートを実行する。1ファイルずつ直列に署名し、
+    # Sigiluneが署名後に有効性・署名者・タイムスタンプを検証する。--replaceは旧signtoolと同じく
+    # 既存の署名を置き換える（Sigiluneは既定で署名済みファイルを拒否するため）。
     $signing = @(
         '--signParallel', '1',
-        '--signParams', "/sha1 $($certificate.Thumbprint) /fd SHA256 /td SHA256 /tr http://time.certum.pl"
+        '--signTemplate', "`"$sigilune`" sign --replace {{file}}"
     )
 }
 
 $repo = Split-Path -Parent $PSScriptRoot
-$build = Join-Path $work.FullName 'target'
+$build = if ($CargoTargetDirectory) {
+    if (![IO.Path]::IsPathFullyQualified($CargoTargetDirectory)) { throw 'Specify an absolute path for the Cargo target directory.' }
+    $CargoTargetDirectory
+} else {
+    Join-Path $work.FullName 'target'
+}
 $payload = Join-Path $work.FullName 'payload'
 $packages = Join-Path $work.FullName 'packages'
 $temp = Join-Path $work.FullName 'temp'
@@ -89,8 +101,10 @@ try {
     if (!(Test-Path -LiteralPath $setup -PathType Leaf)) { throw 'Setup executable was not generated.' }
     if ($Sign) {
         $signature = Get-AuthenticodeSignature -LiteralPath $setup
-        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
-            throw 'Setup failed Authenticode verification with the selected certificate.'
+        if ($signature.Status -ne 'Valid' -or
+            $signature.SignerCertificate.Subject -notlike "CN=$signerCommonName*" -or
+            !$signature.TimeStamperCertificate) {
+            throw 'Setup failed Authenticode verification (signer and timestamp).'
         }
     }
     Get-FileHash -LiteralPath $setup -Algorithm SHA256
