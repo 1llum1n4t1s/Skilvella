@@ -5,7 +5,7 @@ SkilvellaはRust製のローカルスキル管理アプリです。構造・デ�
 ## 開発と検証
 
 - `rust-toolchain.toml` に固定されたRustを使用し、依存解決は `Cargo.lock` に従ってください。OS別のビルド要件は [開発手順](docs/DEVELOPMENT.md#開発) を参照してください。
-- コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。[CI](.github/workflows/ci.yml) はWindowsのGitHubホストランナーとmacOS・LinuxのARM64セルフホストランナーを使い、フォークからのプルリクエストでは検証ジョブをスキップします。CIは依存クレートのビルド結果をキャッシュします。
+- コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。[CI](.github/workflows/ci.yml) はWindows・LinuxのGitHub提供ランナーとmacOSのARM64セルフホストランナーを使い、フォークからのプルリクエストでは検証ジョブをスキップします。CIは依存クレートのビルド結果をキャッシュします。
 
 ```sh
 cargo fmt --all --check
@@ -37,5 +37,6 @@ cargo test --locked --features launcher
 - HTTP境界・CSRF・プレビューの安全設定を維持してください。`Referrer-Policy: same-origin` は通常のフォームPOSTのOriginを保持するために必要です。
 - アプリ更新は `src/update.rs` の検証・ロック・ヘルパー経路を通し、Libraryや利用者スキルを変更しないでください。信頼境界とToolport連携は [更新の設計](DESIGN.md#アプリの更新) を参照してください。
 - GitHub配布物は `release-tools` 機能の `skilvella-release` で梱包してください。梱包とアプリ内更新では `src/update.rs` の `verify_archive` を共用してください。公開前に `verify` で両OSのアーカイブとチェックサムを検証し、Windows x64・Apple Silicon Mac の両方で `release-update-test` 機能の `release_update` を実行して、前の公開版から最終配布物への更新と再起動を確認してください。コマンドと手順は [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) を参照してください。
+- Windowsインストーラー（Setup）は `tools/pack-windows-installer.ps1` で梱包し、公開用の署名は `-Sign`（Sigilune）で行ってください。公開用は手動起動の `.github/workflows/release-windows-installer.yml` で作り、署名用Secretsを梱包・署名のstep以外へ渡さず、既存のRelease assetを上書きしないでください。手順は [Windowsインストーラーの追加配布](docs/DEVELOPMENT.md#windowsインストーラーの追加配布) を参照してください。
 - アイコンの再生成は通常ビルドから独立した `tools/export-icons/Cargo.toml` の開発用パッケージで行い、生成済みの素材を追跡してください。再生成手順は [アイコン素材](docs/DEVELOPMENT.md#アイコン素材) を参照してください。
 - 利用者向けの説明はREADME、設計はDESIGN、作業規約は本書に置き、開発環境・素材生成の詳細は `docs/DEVELOPMENT.md` へ集約してください。
