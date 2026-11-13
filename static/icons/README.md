@@ -6,9 +6,9 @@ Codex組み込みのimagegenで生成した、S字のライブラリカードと
 | --- | --- |
 | `skilvella.png` | 生成マスター、1254×1254、透過RGBA |
 | `icon-16.png` ～ `icon-1024.png` | 各表示サイズ用の透過PNG |
-| `skilvella.ico` | 16・20・24・32・48・64・128・256px入り。favicon・Windowsタスクトレイ向け |
+| `skilvella.ico` | 16・20・24・32・48・64・128・256px入り。favicon・Windowsタスクトレイ・Windows実行ファイルのアイコン向け |
 | `skilvella.icns` | Macのアプリアイコン向け |
 
-PNGへのリサイズとICO/ICNSへの形式変換だけを行っています。faviconと画面ヘッダー、Windowsのタスクトレイ、Macのメニューバーはこの素材を使用しています。トレイ用アイコンは実行ファイルに同梱するため、起動時に画像ファイルの配置は不要です。Windows実行ファイル自体のリソースアイコンは未設定です。
+PNGへのリサイズとICO/ICNSへの形式変換だけを行っています。faviconと画面ヘッダー、Windowsのタスクトレイ、Macのメニューバーはこの素材を使用しています。トレイ用アイコンは実行ファイルに同梱するため、起動時に画像ファイルの配置は不要です。Windows版の本体（`skilvella.exe`）には、`build.rs` がICOをリソースとして埋め込みます。スタートメニューのショートカットやExplorerの表示はこのアイコンを使います。
 
 PNGとICOの再書き出しは [開発手順](../../docs/DEVELOPMENT.md#アイコン素材) を参照してください。MacのICNSは同じPNGから標準の `iconutil` で作成します。
