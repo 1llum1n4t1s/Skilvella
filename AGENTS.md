@@ -18,7 +18,7 @@ cargo test --locked --features launcher
 - `cargo build --release --locked`（thin LTO・`codegen-units = 1`）は時間がかかるため、CIでは `release/` ブランチとタグでだけ実行します。手元では `Cargo.toml`・`Cargo.lock`・ビルド設定・機能（features）を変更した場合に実行してください。公開前の release ビルドは [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) の手順で両OSとも行います。
 
 - 文書だけの変更では、記載したコマンド・パス・挙動を実装と照合し、リンク先と差分を確認してください。
-- `tests/localization.rs` は初回HTMLとリダイレクト後の通知の翻訳、言語Cookieのポート分離、言語設定と更新操作のHTTP/CSRF境界を検証します。
+- `tests/localization.rs` は初回HTMLとリダイレクト後の通知・履歴の理由の翻訳、全辞書のキー・プレースホルダーとテンプレート参照キーの整合、言語Cookieのポート分離、言語設定と更新操作のHTTP/CSRF境界を検証します。
 - `tests/update.rs` は隔離した実行ファイルで更新ヘルパーの置換・再起動・復元・中止、再起動先のプロセス回収、Windowsのログハンドル継承防止を検証します。サービス再起動と監視・管理情報の保持は `src/service.rs` 内のテストで検証します。
 - `tests/library.rs` は保存・検索・パス境界、`tests/directory.rs` は管理フォルダーの選択、フォルダー追加時の識別子の自動採番・同じフォルダーの再登録・重複と親子関係の拒否、親子スキルの境界、`tests/http_mcp.rs` は管理フォームとMCPの連携・分割取得・継続時の競合検出、旧フォルダー画面の転送とフォルダー選択ダイアログのCSRF境界、一覧の公開切替（公開状態だけの保存と不正ファイルの公開拒否）、`tests/watch.rs` は外部変更の反映、`tests/startup.rs` はヘッドレス起動とポート競合時の非変更、`tests/windows_icon.rs` はWindows版の本体に埋め込んだアイコンをシェルが取り出せること、`tests/migration.rs` は旧版の中断移行の起動時復旧・同一性検査・操作ロックを検証します。変更した契約に対応する検証を維持してください。
 - `tests/repositories.rs` は取得元の分類・件数・ページ分割・切断時の保持、不在登録削除のHTTP/CSRF境界と全件検証、読み取りエラーの修正経路、`tests/codex_index.rs` はCodex入口の公開判定・所有権・競合・中断復旧と、Claude Code・Grokの入口の配置・自動選択の制御・Claude Code用リンクの所有と衝突、`tests/codex_http.rs` は同期先フォーム（複数選択と旧形式）のHTTP/CSRF境界と一括変更を検証します。
