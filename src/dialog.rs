@@ -80,7 +80,9 @@ pub async fn pick_folder_async(title: String) -> Result<Picked> {
 }
 
 /// サービスの終了・再起動の前に呼び、ダイアログの結果を待つHTTP要求をすべて返させる。
-/// 開いているダイアログ自体は利用者が閉じるか、プロセスの終了とともに閉じる。
+/// 開いているダイアログ自体は利用者が閉じるまで残る。Windowsでは同じプロセス内のスレッドなので
+/// プロセスの終了とともに閉じるが、macOS・Linuxでは別プロセスとして起動した
+/// `osascript`・`zenity`・`kdialog` が親の終了後も残ることがある。
 pub fn release_waiters() {
     RELEASE.notify_waiters();
 }
