@@ -1496,7 +1496,10 @@ fn a_non_utf8_file_name_does_not_break_the_skill_detail() {
     let alpha = id(&library);
     publish(&library, &alpha);
     let detail = library.detail(&alpha, true).unwrap();
-    assert_eq!(detail.files, vec!["reference.txt".to_string()]);
+    assert_eq!(
+        detail.files,
+        vec!["SKILL.md".to_string(), "reference.txt".to_string()]
+    );
 }
 
 /// 子の `SKILL.md` が消えても、親の参照取得は子の領域へ入らない。大文字小文字を区別しない
