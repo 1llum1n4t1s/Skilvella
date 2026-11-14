@@ -215,6 +215,15 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     for tool in tools["tools"].as_array().unwrap() {
         assert_eq!(tool["annotations"]["readOnlyHint"], true);
     }
+    // 新規スキルは走査で公開状態になるため、未公開時のMCP検索結果を見る前に明示的に未公開へ戻す。
+    let id = state
+        .library
+        .search(Default::default(), false)
+        .unwrap()
+        .skills[0]
+        .id
+        .clone();
+    state.library.set_published(&id, false).unwrap();
     let search = rpc(
         &client,
         &base_url,
@@ -224,13 +233,6 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
     )
     .await;
     assert_eq!(search["structuredContent"]["total"], 0);
-    let id = state
-        .library
-        .search(Default::default(), false)
-        .unwrap()
-        .skills[0]
-        .id
-        .clone();
     let published = common::post_form(
         &client,
         &format!("{base_url}/skills/{id}/metadata"),
@@ -725,7 +727,8 @@ async fn directory_settings_forms_and_icons_work_over_http() {
     let switched = state.library.search(Default::default(), false).unwrap();
     assert_eq!(switched.total, 1);
     assert_ne!(switched.skills[0].id, original);
-    assert!(!switched.skills[0].published && switched.skills[0].tags.is_empty());
+    // 切替先の新規行は別IDで、走査の既定どおり公開状態になる（タグなどは引き継がない）。
+    assert!(switched.skills[0].published && switched.skills[0].tags.is_empty());
     let failed = common::post_form(
         &client,
         &format!("{url}/sources/directory"),

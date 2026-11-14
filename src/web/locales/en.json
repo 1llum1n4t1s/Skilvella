@@ -232,7 +232,7 @@
   "同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。": "Synchronization has stopped. Saved settings have not reached this target yet. Previous commands or automatic selection may remain.",
   "同期エラー:": "Sync error:",
   "同期先を選択してください。": "Select sync targets.",
-  "SKILL.md を含むフォルダーを選ぶと、下の階層のスキルもまとめて読み込みます。ファイルは移動せず、新しいスキルは非公開で登録します。": "Choose a folder containing SKILL.md files to load every skill below it. Files are not moved, and new skills are registered as unpublished.",
+  "SKILL.md を含むフォルダーを選ぶと、下の階層のスキルもまとめて読み込みます。ファイルは移動せず、読み取れた新しいスキルはMCPに公開されます。": "Choose a folder containing SKILL.md files to load every skill below it. Files are not moved, and new readable skills are published to MCP.",
   "Skilvellaのデータフォルダーと重なるフォルダーは追加できません。": "Folders that overlap the Skilvella data folder cannot be added.",
   "「{name}」（{path}）と親子関係にあるため追加できません。同じスキルを二重に読み込まないよう、どちらか一方だけを管理してください。": "Cannot add this folder because it is inside or contains \"{name}\" ({path}). To avoid loading the same skills twice, manage only one of them.",
   "このフォルダーは「{name}」として管理中です。": "This folder is already managed as \"{name}\".",

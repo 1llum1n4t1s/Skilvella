@@ -232,7 +232,7 @@
   "同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。": "La synchronisation est arrêtée. Les réglages enregistrés n’ont pas encore été appliqués à cette cible. D’anciennes commandes ou sélections automatiques peuvent subsister.",
   "同期エラー:": "Erreur de synchronisation :",
   "同期先を選択してください。": "Sélectionnez les cibles de synchronisation.",
-  "SKILL.md を含むフォルダーを選ぶと、下の階層のスキルもまとめて読み込みます。ファイルは移動せず、新しいスキルは非公開で登録します。": "Choisissez un dossier contenant des fichiers SKILL.md pour charger toutes les compétences qu'il contient. Les fichiers ne sont pas déplacés et les nouvelles compétences sont enregistrées comme non publiées.",
+  "SKILL.md を含むフォルダーを選ぶと、下の階層のスキルもまとめて読み込みます。ファイルは移動せず、読み取れた新しいスキルはMCPに公開されます。": "Choisissez un dossier contenant des fichiers SKILL.md pour charger toutes les compétences qu'il contient. Les fichiers ne sont pas déplacés et les nouvelles compétences lisibles sont publiées sur MCP.",
   "Skilvellaのデータフォルダーと重なるフォルダーは追加できません。": "Impossible d'ajouter un dossier qui chevauche le dossier de données de Skilvella.",
   "「{name}」（{path}）と親子関係にあるため追加できません。同じスキルを二重に読み込まないよう、どちらか一方だけを管理してください。": "Impossible d'ajouter ce dossier, car il se trouve dans « {name} » ({path}) ou le contient. Pour ne pas charger deux fois les mêmes compétences, ne gérez que l'un des deux.",
   "このフォルダーは「{name}」として管理中です。": "Ce dossier est déjà géré sous le nom « {name} ».",

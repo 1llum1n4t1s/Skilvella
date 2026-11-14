@@ -14,12 +14,37 @@ fn fixture() -> (PathBuf, Library, PathBuf) {
     fs::write(source.join("alpha/reference.txt"), "one\ntwo\nthree\n").unwrap();
     let library = Library::open(&base.join("data")).unwrap();
     library.add_source("local", &source).unwrap();
+    unpublish_all(&library);
     (base, library, source)
 }
 fn skill(name: &str, body: &str) -> String {
     format!(
         "---\nname: {name}\ndescription: Description for a skill\ncustom: preserved\n---\n{body}\n"
     )
+}
+/// 新規スキルは走査で公開状態になる。未公開スキルの扱いを検証するテストは、準備段階で全件を明示的に未公開へ戻す。
+fn unpublish_all(l: &Library) {
+    // 検索は1回あたり最大100件のため、全件を取り切るまでoffsetを進める。
+    let mut ids = Vec::new();
+    loop {
+        let page = l
+            .search(
+                SearchQuery {
+                    limit: 100,
+                    offset: ids.len(),
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap();
+        if page.skills.is_empty() {
+            break;
+        }
+        ids.extend(page.skills.into_iter().map(|skill| skill.id));
+    }
+    for id in ids {
+        l.set_published(&id, false).unwrap();
+    }
 }
 fn id(l: &Library) -> String {
     l.search(SearchQuery::default(), false).unwrap().skills[0]
@@ -60,6 +85,7 @@ fn repository_bulk_fixture() -> (PathBuf, Library, PathBuf) {
     }
     let library = Library::open_for_user(&base.join("data"), &base.join("home"), None).unwrap();
     library.add_source("local", &source).unwrap();
+    unpublish_all(&library);
     (base, library, source)
 }
 
@@ -187,11 +213,12 @@ fn repository_bulk_updates_all_selected_skills_and_preserves_files_and_history()
             .unwrap(),
         (1, 0)
     );
-    // 一括設定から新規スキルへ自動継承しない。
+    // 一括設定の結果は新規スキルへ継承しない。公開状態は一括設定ではなく走査の既定（公開）で決まり、
+    // Codex同期方針は一括設定の値を引き継がず既定値のままになる。
     let later = library
         .create_skill("local", "repo/later", &skill("later", "body"))
         .unwrap();
-    assert!(!library.detail(&later, false).unwrap().summary.published);
+    assert!(library.detail(&later, false).unwrap().summary.published);
     assert_eq!(
         library.codex_policy(&later).unwrap(),
         CodexSkillPolicy::default()
@@ -916,7 +943,8 @@ fn literal_unicode_search_filters_and_path_boundaries() {
     let second = library
         .create_skill("local", "beta", &skill("日本語検索", "second"))
         .unwrap();
-    assert!(!library.detail(&second, false).unwrap().summary.published);
+    // 新規スキルは走査で公開状態になる（以前は未公開で始まっていた）。
+    assert!(library.detail(&second, false).unwrap().summary.published);
     let duplicate = library
         .search(
             SearchQuery {
@@ -1160,6 +1188,85 @@ fn unreadable_subtree_keeps_readable_siblings_and_blocks_its_published_rows() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
     library.scan().unwrap();
     assert!(library.detail(&restricted, true).is_ok());
+}
+
+#[test]
+fn new_skills_are_published_by_default_except_unreadable_and_user_unpublished_ones() {
+    let (base, library, source) = fixture();
+    // fixtureは既存のalphaを明示的に未公開へ戻してあり、再スキャンで公開へ戻らないことも併せて確認する。
+    let alpha = id(&library);
+    assert!(!library.detail(&alpha, false).unwrap().summary.published);
+    // 新規の正常なスキルは走査で公開状態になる。
+    fs::create_dir_all(source.join("fresh")).unwrap();
+    fs::write(source.join("fresh/SKILL.md"), skill("fresh", "body")).unwrap();
+    // 不正なfrontmatterのスキルは読み取りエラーのため、新規でも未公開のまま。
+    fs::create_dir_all(source.join("broken")).unwrap();
+    fs::write(
+        source.join("broken/SKILL.md"),
+        "---
+name: [broken
+---
+invalid",
+    )
+    .unwrap();
+    library.scan().unwrap();
+    let find = |name: &str| {
+        library
+            .search(
+                SearchQuery {
+                    q: name.into(),
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap()
+            .skills
+    };
+    let fresh = find("fresh");
+    assert_eq!(fresh.len(), 1);
+    assert!(fresh[0].published && fresh[0].error.is_none());
+    let broken: Vec<_> = library
+        .search(SearchQuery::default(), false)
+        .unwrap()
+        .skills
+        .into_iter()
+        .filter(|skill| skill.relative_path == "broken/SKILL.md")
+        .collect();
+    assert_eq!(broken.len(), 1);
+    assert!(broken[0].error.is_some() && !broken[0].published);
+    // 公開検索にも読み取りエラーのスキルは現れない。
+    let visible = library.search(SearchQuery::default(), true).unwrap();
+    assert_eq!(visible.total, 1);
+    assert_eq!(visible.skills[0].id, fresh[0].id);
+    // 利用者が未公開にした既存スキルは、再スキャンしても公開へ戻らない。
+    library.set_published(&fresh[0].id, false).unwrap();
+    library.scan().unwrap();
+    library.scan().unwrap();
+    assert!(
+        !library
+            .detail(&fresh[0].id, false)
+            .unwrap()
+            .summary
+            .published
+    );
+    assert!(!library.detail(&alpha, false).unwrap().summary.published);
+    // 内容更新を伴う再スキャンでも公開状態は変わらない。
+    fs::write(source.join("fresh/SKILL.md"), skill("fresh", "edited")).unwrap();
+    library.scan().unwrap();
+    assert!(
+        !library
+            .detail(&fresh[0].id, false)
+            .unwrap()
+            .summary
+            .published
+    );
+    // 閉じて開き直しても保たれる。
+    drop(library);
+    let reopened = Library::open(&base.join("data")).unwrap();
+    assert_eq!(
+        reopened.search(SearchQuery::default(), true).unwrap().total,
+        0
+    );
 }
 
 #[cfg(unix)]

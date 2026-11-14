@@ -389,6 +389,29 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
     )
     .unwrap();
     library.scan().unwrap();
+    // 新規スキルは走査で公開状態になる。この検証は一括設定の前後の公開状態を比べるため、
+    // 準備段階で全件を明示的に未公開へ戻す（検索は1回100件までなので、取り切るまでoffsetを進める）。
+    let mut ids = Vec::new();
+    loop {
+        let page = library
+            .search(
+                SearchQuery {
+                    limit: 100,
+                    offset: ids.len(),
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap();
+        if page.skills.is_empty() {
+            break;
+        }
+        ids.extend(page.skills.into_iter().map(|skill| skill.id));
+    }
+    assert_eq!(ids.len(), 107);
+    for id in &ids {
+        library.set_published(id, false).unwrap();
+    }
     library.set_codex_enabled(true).unwrap();
     let control = library.clone();
     let state = AppState::new(library);

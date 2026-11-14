@@ -32,6 +32,15 @@ fn fixture() -> (PathBuf, Library, PathBuf, String) {
     library
         .initialize_directory(&base.join("home"), None)
         .unwrap();
+    // 新規スキルは走査で公開状態になる。これらのテストは「復旧処理が公開状態を変えないこと」
+    // 「復旧で公開されること」を検証するため、準備段階で全件を明示的に未公開へ戻しておく。
+    for skill in library
+        .search(SearchQuery::default(), false)
+        .unwrap()
+        .skills
+    {
+        library.set_published(&skill.id, false).unwrap();
+    }
     let alias = library.directory_settings().unwrap().source_alias;
     (base, library, root.canonicalize().unwrap(), alias)
 }

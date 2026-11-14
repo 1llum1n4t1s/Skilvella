@@ -27,6 +27,9 @@ fn setup() -> (PathBuf, Library, String) {
         .skills[0]
         .id
         .clone();
+    // 新規スキルは走査で公開状態になる。公開判定とCodex入口の関係を検証するため、
+    // 準備段階で明示的に未公開へ戻し、各テストが公開操作から始められるようにする。
+    library.set_published(&id, false).unwrap();
     (base, library, id)
 }
 fn publish(library: &Library, id: &str, published: bool) {

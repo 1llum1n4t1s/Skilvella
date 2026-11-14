@@ -2747,7 +2747,10 @@ impl Library {
                 }
                 report.indexed += 1;
                 // 発見したスキルごとに実行されるため、固定SQLは prepare_cached で再利用する。
-                tx.prepare_cached("INSERT INTO skills(id,source,relative_path,name,description,content,revision,error,missing) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,content=excluded.content,revision=excluded.revision,error=excluded.error,missing=0,updated_at=CASE WHEN skills.revision<>excluded.revision THEN CURRENT_TIMESTAMP ELSE skills.updated_at END")?
+                // 新規行だけ、読み取りエラーがなければ公開状態で登録する（published は ?8 が NULL のとき1）。
+                // 既存行は ON CONFLICT の更新対象に published を含めず、利用者が選んだ公開状態を保つ。
+                // 不在・読み取りエラー・不正なfrontmatterの行は、公開しない（MCP検索側も同じ条件で除外する）。
+                tx.prepare_cached("INSERT INTO skills(id,source,relative_path,name,description,content,revision,error,missing,published) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,CASE WHEN ?8 IS NULL THEN 1 ELSE 0 END) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,content=excluded.content,revision=excluded.revision,error=excluded.error,missing=0,updated_at=CASE WHEN skills.revision<>excluded.revision THEN CURRENT_TIMESTAMP ELSE skills.updated_at END")?
                     .execute(params![id, source.alias, relative, name, description, content, revision(&content), error])?;
             }
         }

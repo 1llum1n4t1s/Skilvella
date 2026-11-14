@@ -27,7 +27,7 @@
     </details>
     <p class="note" data-folder-status role="status" aria-live="polite"></p>
   </form>
-  <p class="note">{{ locale.text("SKILL.md を含むフォルダーを選ぶと、下の階層のスキルもまとめて読み込みます。ファイルは移動せず、新しいスキルは非公開で登録します。") }}</p>
+  <p class="note">{{ locale.text("SKILL.md を含むフォルダーを選ぶと、下の階層のスキルもまとめて読み込みます。ファイルは移動せず、読み取れた新しいスキルはMCPに公開されます。") }}</p>
   <div class="sidebar-links">
     {% if error_count > 0 %}<a href="/?status=error" {% if query.status == "error" && folder.is_none() %}aria-current="page"{% endif %}>{{ locale.text("読み取りエラー") }} <span class="count">{{ error_count }}</span></a>{% endif %}
     <a href="/?status=missing" {% if query.status == "missing" && folder.is_none() %}aria-current="page"{% endif %}>{{ locale.text("存在しないスキルの登録を整理") }}</a>

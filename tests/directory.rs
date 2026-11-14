@@ -59,7 +59,8 @@ fn detects_preferred_home_and_recurses_below_skill_markers() {
     assert_eq!(settings.mode, "auto");
     assert_eq!(Path::new(&settings.path), root.canonicalize().unwrap());
     assert_eq!(all(&l).len(), 2);
-    assert!(all(&l).iter().all(|s| !s.published));
+    // 新規に見つかったスキルは、読み取りエラーがなければ公開状態で登録される。
+    assert!(all(&l).iter().all(|s| s.published));
 }
 
 #[test]
@@ -541,7 +542,8 @@ fn switching_is_persistent_atomic_and_keeps_root_history_separate() {
         .unwrap();
     let custom = all(&l).into_iter().find(|s| s.name == "Custom").unwrap();
     assert_ne!(custom.id, original_id);
-    assert!(!custom.published);
+    // 別の保存先の新規行は元の行とは別IDで、走査の既定どおり公開状態になる（元の公開状態を引き継ぐわけではない）。
+    assert!(custom.published);
     assert!(l.detail(&custom.id, false).unwrap().history.is_empty());
     assert_eq!(l.sources().unwrap().len(), 2);
     let before = l.directory_settings().unwrap();
@@ -885,7 +887,8 @@ fn auto_detection_switches_from_offline_old_root_to_available_preferred_root() {
     assert_eq!(Path::new(&current.path), preferred.canonicalize().unwrap());
     assert_ne!(current.source_alias, old_alias);
     assert_eq!(all(&reopened)[0].name, "Preferred root");
-    assert!(!all(&reopened)[0].published);
+    // 新しい保存先の行は別IDの新規行で、走査の既定どおり公開状態になる。
+    assert!(all(&reopened)[0].published);
     fs::rename(home.join(".codex/skills-retained"), &old_root).unwrap();
     reopened
         .set_directory("custom", old_root.to_str().unwrap())
