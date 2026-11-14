@@ -1315,3 +1315,340 @@ fn unix_permissions_and_distinct_backslash_paths() {
     assert!(source.join("a\\b/SKILL.md").is_file());
     assert!(source.join("a/b/SKILL.md").is_file());
 }
+
+/// 相対パスから索引行を取り出す（不在・エラー行も含める）。
+fn row(l: &Library, relative: &str) -> skilvella::model::SkillSummary {
+    l.search(
+        SearchQuery {
+            limit: 100,
+            status: "all".into(),
+            ..Default::default()
+        },
+        false,
+    )
+    .unwrap()
+    .skills
+    .into_iter()
+    .find(|skill| skill.relative_path == relative)
+    .unwrap_or_else(|| panic!("row not found: {relative}"))
+}
+
+#[test]
+fn frontmatter_without_required_keys_or_mapping_is_an_unpublished_error_without_panicking() {
+    let (_base, library, source) = fixture();
+    let alpha = id(&library);
+    // saphyr の添字参照はキー欠落・非マッピングで panic するため、本体は非panicの参照を使う。
+    let cases = [
+        ("name-only", "---\nname: only\n---\nbody\n"),
+        ("description-only", "---\ndescription: only\n---\nbody\n"),
+        ("sequence", "---\n- name\n- description\n---\nbody\n"),
+        ("scalar", "---\njust text\n---\nbody\n"),
+        ("flow-empty", "---\n{}\n---\nbody\n"),
+    ];
+    for (dir, content) in cases {
+        fs::create_dir_all(source.join(dir)).unwrap();
+        fs::write(source.join(dir).join("SKILL.md"), content).unwrap();
+    }
+    let report = library.scan().unwrap();
+    assert_eq!(report.errors, cases.len());
+    for (dir, _) in cases {
+        let found = row(&library, &format!("{dir}/SKILL.md"));
+        assert!(found.error.is_some() && !found.published, "{dir}");
+        // 詳細は読めるが、公開としては返さず、公開化も拒否する。
+        assert!(library.detail(&found.id, true).is_err(), "{dir}");
+        assert!(
+            library
+                .detail(&found.id, false)
+                .unwrap()
+                .summary
+                .error
+                .is_some()
+        );
+        assert!(library.set_published(&found.id, true).is_err(), "{dir}");
+    }
+    // 保存・新規作成も、プロセスを落とさずエラーを返す。
+    let current = library.detail(&alpha, false).unwrap();
+    for (_, content) in cases {
+        assert!(
+            library
+                .save_content(&alpha, &current.revision, content)
+                .is_err()
+        );
+        assert!(library.create_skill("local", "created", content).is_err());
+    }
+    assert!(!source.join("created").exists());
+    assert_eq!(
+        fs::read_to_string(source.join("alpha/SKILL.md")).unwrap(),
+        skill("日本語検索", "初版")
+    );
+}
+
+#[test]
+fn deeply_nested_frontmatter_is_an_error_row_and_ordinary_nesting_still_publishes() {
+    let (_base, library, source) = fixture();
+    let alpha = id(&library);
+    // 本文上限（2 MiB）に収まる小さな入力でも、深い入れ子は解析前に拒否する。
+    let nested = |depth: usize| {
+        format!(
+            "---\nname: deep\ndescription: nested\nlist:\n{}x\n---\nbody\n",
+            "- ".repeat(depth)
+        )
+    };
+    fs::create_dir_all(source.join("deep")).unwrap();
+    fs::write(source.join("deep/SKILL.md"), nested(20_000)).unwrap();
+    fs::create_dir_all(source.join("ordinary")).unwrap();
+    fs::write(
+        source.join("ordinary/SKILL.md"),
+        "---\nname: ordinary\ndescription: fine\nmetadata:\n  author: me\n  tags: [a, b]\n  nested:\n    items:\n      - one\n      - two: [x, {y: z}]\n---\nbody\n",
+    )
+    .unwrap();
+    assert_eq!(library.scan().unwrap().errors, 1);
+    let deep = row(&library, "deep/SKILL.md");
+    assert!(deep.error.as_deref().is_some_and(|e| e.contains("入れ子")));
+    assert!(!deep.published);
+    let ordinary = row(&library, "ordinary/SKILL.md");
+    assert!(ordinary.error.is_none() && ordinary.published);
+    let current = library.detail(&alpha, false).unwrap();
+    assert!(
+        library
+            .save_content(&alpha, &current.revision, &nested(20_000))
+            .is_err()
+    );
+    assert!(
+        library
+            .create_skill("local", "made", &nested(20_000))
+            .is_err()
+    );
+}
+
+/// Windows の `\?\` 形式だけが作れる、末尾が `.` や空白の名前は、`safe_join` が拒否するため読めない。
+/// 公開のまま登録せず、未公開のエラー行にする。既に公開済みの行（旧版で登録）は非公開へ戻せる。
+#[cfg(windows)]
+#[test]
+fn windows_alias_names_are_unpublished_error_rows_and_can_be_unpublished() {
+    let (base, library, source) = fixture();
+    let extended = source.canonicalize().unwrap();
+    let names = ["trail.", "spaced "];
+    for name in names {
+        let dir = extended.join(name);
+        fs::create_dir(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            skill(&format!("alias {name}"), "body"),
+        )
+        .unwrap();
+    }
+    let report = library.scan().unwrap();
+    assert_eq!(report.errors, names.len());
+    let mut ids = Vec::new();
+    for name in names {
+        let found = row(&library, &format!("{name}/SKILL.md"));
+        assert!(found.error.is_some() && !found.published, "{name}");
+        ids.push(found.id);
+    }
+    // MCP検索へは現れない。
+    assert_eq!(
+        library.search(SearchQuery::default(), true).unwrap().total,
+        0
+    );
+    // 旧版が公開で登録した行を直接DBで再現し、実パスを検査できなくても非公開へ戻せる。
+    let db = rusqlite::Connection::open(base.join("data/library.sqlite3")).unwrap();
+    db.execute("UPDATE skills SET published=1,error=NULL", [])
+        .unwrap();
+    drop(db);
+    assert!(library.set_published(&ids[0], true).is_err());
+    library.set_published(&ids[0], false).unwrap();
+    assert!(!row(&library, "trail./SKILL.md").published);
+    library
+        .set_metadata(
+            &ids[1],
+            SkillMetadata {
+                tags: vec!["t".into()],
+                category: String::new(),
+                published: false,
+            },
+        )
+        .unwrap();
+    assert!(!row(&library, "spaced /SKILL.md").published);
+    // 一括の非公開化は全件を処理でき、公開化は従来どおり検証で全件を取り消す。
+    let db = rusqlite::Connection::open(base.join("data/library.sqlite3")).unwrap();
+    db.execute("UPDATE skills SET published=1", []).unwrap();
+    drop(db);
+    assert!(library.bulk_settings(&ids, Some(true), &[], None).is_err());
+    library.bulk_settings(&ids, Some(false), &[], None).unwrap();
+    for name in names {
+        assert!(!row(&library, &format!("{name}/SKILL.md")).published);
+    }
+    // 再スキャンしても、エラー行のまま公開へ戻らない。
+    assert_eq!(library.scan().unwrap().errors, names.len());
+    assert!(library.set_published(&ids[0], true).is_err());
+}
+
+/// 非UTF-8名のファイルが1件あっても、同じスキルの詳細表示（参照ファイル一覧）が失敗しない。
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn a_non_utf8_file_name_does_not_break_the_skill_detail() {
+    use std::os::unix::ffi::OsStrExt;
+    let (_base, library, source) = fixture();
+    let odd = std::ffi::OsStr::from_bytes(b"bad-\xff-name.txt");
+    fs::write(source.join("alpha").join(odd), "odd").unwrap();
+    library.scan().unwrap();
+    let alpha = id(&library);
+    publish(&library, &alpha);
+    let detail = library.detail(&alpha, true).unwrap();
+    assert_eq!(detail.files, vec!["reference.txt".to_string()]);
+}
+
+/// 子の `SKILL.md` が消えても、親の参照取得は子の領域へ入らない。大文字小文字を区別しない
+/// ファイルシステム（Windows・macOS）では、表記違いでも同じ境界として扱う。
+/// Linux では別のディレクトリなので、従来どおり別パスとして読める。
+#[test]
+fn parent_boundary_holds_for_a_missing_child_marker_regardless_of_letter_case() {
+    let (_base, library, source) = fixture();
+    let case_insensitive = cfg!(any(windows, target_os = "macos"));
+    fs::create_dir_all(source.join("alpha/child")).unwrap();
+    fs::write(source.join("alpha/child/SKILL.md"), skill("child", "child")).unwrap();
+    fs::write(source.join("alpha/child/ref.txt"), "child secret\n").unwrap();
+    library.scan().unwrap();
+    let alpha = row(&library, "alpha/SKILL.md").id;
+    publish(&library, &alpha);
+    // 子のマーカーを消失させる（境界は消失扱いの子の行から保持される）。
+    fs::rename(
+        source.join("alpha/child/SKILL.md"),
+        source.join("alpha/child/OFF.md"),
+    )
+    .unwrap();
+    library.scan().unwrap();
+    assert!(row(&library, "alpha/child/SKILL.md").missing);
+    assert!(library.read_file(&alpha, "child/ref.txt", 1, 5).is_err());
+    assert!(
+        !library
+            .detail(&alpha, true)
+            .unwrap()
+            .files
+            .iter()
+            .any(|file| file.starts_with("child"))
+    );
+    if case_insensitive {
+        for spelled in ["CHILD/ref.txt", "Child/REF.txt"] {
+            let error = library
+                .read_file(&alpha, spelled, 1, 5)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("nested skill"), "{spelled}: {error}");
+        }
+    } else {
+        // 別ディレクトリ `CHILD` は子の領域ではないため、従来どおり読める。
+        fs::create_dir_all(source.join("alpha/CHILD")).unwrap();
+        fs::write(source.join("alpha/CHILD/ref.txt"), "other\n").unwrap();
+        assert_eq!(
+            library
+                .read_file(&alpha, "CHILD/ref.txt", 1, 5)
+                .unwrap()
+                .text,
+            "other"
+        );
+    }
+}
+
+/// 大文字小文字を区別しないファイルシステム（Windows・macOS）では、フォルダー名の大文字小文字だけの
+/// 変更を同じスキルとして扱う。非公開のスキルを公開へ戻さず、旧行も残さない。
+/// Linux では別のパスなので、従来どおり旧行が不在になり別の新規行が作られる。
+#[test]
+fn letter_case_only_folder_rename_keeps_one_row_and_its_unpublished_state() {
+    let (base, library, source) = fixture();
+    let original = row(&library, "alpha/SKILL.md");
+    assert!(!original.published);
+    fs::rename(source.join("alpha"), source.join("tmp-alpha")).unwrap();
+    fs::rename(source.join("tmp-alpha"), source.join("ALPHA")).unwrap();
+    let report = library.scan().unwrap();
+    let rows = |library: &Library| {
+        library
+            .search(
+                SearchQuery {
+                    limit: 100,
+                    status: "all".into(),
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap()
+            .skills
+    };
+    if cfg!(any(windows, target_os = "macos")) {
+        assert_eq!(report.missing, 0);
+        let all = rows(&library);
+        assert_eq!(all.len(), 1);
+        // IDは最初の登録のまま、綴りだけが実パスへ追随し、非公開のまま保たれる。
+        assert_eq!(all[0].id, original.id);
+        assert_eq!(all[0].relative_path, "ALPHA/SKILL.md");
+        assert!(!all[0].published && !all[0].missing && all[0].error.is_none());
+        assert_eq!(
+            library
+                .search(
+                    SearchQuery {
+                        status: "missing".into(),
+                        ..Default::default()
+                    },
+                    false
+                )
+                .unwrap()
+                .total,
+            0
+        );
+        // 繰り返しの走査・綴りの往復でも、行は増えず同じIDを保つ。
+        library.scan().unwrap();
+        fs::rename(source.join("ALPHA"), source.join("tmp-alpha")).unwrap();
+        fs::rename(source.join("tmp-alpha"), source.join("Alpha")).unwrap();
+        library.scan().unwrap();
+        let all = rows(&library);
+        assert_eq!(all.len(), 1);
+        assert_eq!(
+            (all[0].id.as_str(), all[0].relative_path.as_str()),
+            (original.id.as_str(), "Alpha/SKILL.md")
+        );
+        assert!(!all[0].published);
+        // 旧データに大小違いの行が両方ある場合も、行は増えず、割り当ては安定する。
+        let db = rusqlite::Connection::open(base.join("data/library.sqlite3")).unwrap();
+        db.execute(
+            "INSERT INTO skills(id,source,relative_path,name,description,content,revision,missing,published) VALUES('legacy-row','local','alpha/SKILL.md','','','','',1,0)",
+            [],
+        )
+        .unwrap();
+        drop(db);
+        library.scan().unwrap();
+        let first: Vec<_> = rows(&library)
+            .into_iter()
+            .map(|s| (s.id, s.relative_path, s.missing))
+            .collect();
+        library.scan().unwrap();
+        let second: Vec<_> = rows(&library)
+            .into_iter()
+            .map(|s| (s.id, s.relative_path, s.missing))
+            .collect();
+        assert_eq!(first.len(), 2);
+        assert_eq!(first.iter().filter(|r| !r.2).count(), 1);
+        assert_eq!(first, second);
+        // 消失した行を作り直したとき、返るIDは走査が再利用した行のIDと一致する。
+        fs::remove_dir_all(source.join("Alpha")).unwrap();
+        library.scan().unwrap();
+        let created = library
+            .create_skill("local", "ALPHA", &skill("again", "again"))
+            .unwrap();
+        let live = rows(&library)
+            .into_iter()
+            .find(|s| !s.missing)
+            .expect("one live row");
+        assert_eq!(created, live.id);
+        assert!(library.detail(&created, false).is_ok());
+    } else {
+        assert_eq!(report.missing, 1);
+        let all = rows(&library);
+        assert_eq!(all.len(), 2);
+        let old = all.iter().find(|s| s.id == original.id).unwrap();
+        assert!(old.missing && !old.published);
+        let new = all.iter().find(|s| s.id != original.id).unwrap();
+        assert_eq!(new.relative_path, "ALPHA/SKILL.md");
+        assert!(new.published && !new.missing);
+    }
+}

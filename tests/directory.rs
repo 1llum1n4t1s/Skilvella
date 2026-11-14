@@ -1095,3 +1095,42 @@ fn explicit_alias_reregistration_compares_canonical_paths() {
             .contains("Alias already belongs")
     );
 }
+
+/// 参照先を別の場所へ移し、旧位置がリンクとして残っても、同じ識別子の保存パスが新しい参照先へ追随する。
+/// （リンクを辿る正規化で旧行が一致しても、保存パスを更新しないと走査は旧位置のリンクで全件失敗する。）
+#[test]
+fn moving_the_directory_behind_a_left_over_link_updates_the_stored_path() {
+    let b = base();
+    let old = b.join("old-place");
+    let new = b.join("new-place");
+    skill(&old.join("one"), "Moved");
+    let l = Library::open(&b.join("data")).unwrap();
+    l.set_directory("custom", old.to_str().unwrap()).unwrap();
+    let alias = l.directory_settings().unwrap().source_alias;
+    let id = all(&l).into_iter().find(|s| s.name == "Moved").unwrap().id;
+    publish(&l, &id);
+    // 利用者がフォルダーを移し、旧位置へ新位置を指すリンクを残す。
+    fs::rename(&old, &new).unwrap();
+    link_directory(&new, &old);
+    let report = l.set_directory("custom", new.to_str().unwrap()).unwrap();
+    assert_eq!(report.errors, 0);
+    let settings = l.directory_settings().unwrap();
+    assert_eq!(settings.source_alias, alias);
+    let canonical = new.canonicalize().unwrap();
+    assert_eq!(Path::new(&settings.path), canonical);
+    let sources = l.sources().unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(Path::new(&sources[0].path), canonical);
+    // 識別子・公開状態は引き継がれ、走査は新しい参照先で通る。
+    let moved = l.detail(&id, false).unwrap();
+    assert!(moved.summary.published && moved.summary.error.is_none() && !moved.summary.missing);
+    assert_eq!(l.scan().unwrap().errors, 0);
+    // 再起動後の初期化でも、同じ参照先のまま走査できる。
+    drop(l);
+    let reopened = Library::open(&b.join("data")).unwrap();
+    reopened
+        .initialize_directory(&b.join("home"), None)
+        .unwrap();
+    assert_eq!(reopened.scan().unwrap().errors, 0);
+    assert!(reopened.detail(&id, false).unwrap().summary.error.is_none());
+}

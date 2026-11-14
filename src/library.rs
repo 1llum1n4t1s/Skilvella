@@ -2010,7 +2010,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use saphyr::LoadableYamlNode;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
@@ -2398,7 +2398,10 @@ impl Library {
             alias
         });
         Self::deactivate_directory_source(c, &settings.source_alias)?;
-        c.execute("INSERT INTO sources(alias,path,active) VALUES(?1,?2,1) ON CONFLICT(alias) DO UPDATE SET active=1", params![alias,root_text])?;
+        // 旧行の一致はリンクを辿った正規化で判定するため、旧位置が移動後のリンクとして残る場合も
+        // 同じ識別子を再利用する。その場合も保存パスは現在の参照先へ更新し、走査が旧位置のリンクで
+        // 失敗し続けないようにする（`register_source` の再登録と同じ更新対象）。
+        c.execute("INSERT INTO sources(alias,path,active) VALUES(?1,?2,1) ON CONFLICT(alias) DO UPDATE SET active=1,path=excluded.path", params![alias,root_text])?;
         if new_alias {
             Self::set_source_ownership(c, &alias, true)?;
         }
@@ -2720,6 +2723,33 @@ impl Library {
                         .execute(params![source.alias, key, prefix, message])?;
                 }
             }
+            // 大文字小文字を区別しないファイルシステムでは、フォルダー名の大文字小文字だけの変更で
+            // 実パスは同じままなのに綴りの違うIDが作られ、非公開の行が消えて公開の新規行が増える。
+            // 同じソースの既存行を綴りの小文字化で引けるようにし、綴りだけ違う行はIDを再利用する。
+            let mut by_spelling: HashMap<String, Vec<(String, String, bool)>> = HashMap::new();
+            let mut live: HashSet<String> = HashSet::new();
+            if path_collation() == "NOCASE" {
+                live = found
+                    .iter()
+                    .filter_map(|path| relative_key(&root, path).ok())
+                    .collect();
+                let mut statement = tx.prepare_cached(
+                    "SELECT id,relative_path,published FROM skills WHERE source=?1",
+                )?;
+                for row in statement.query_map([&source.alias], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, bool>(2)?,
+                    ))
+                })? {
+                    let (id, relative, published) = row?;
+                    by_spelling
+                        .entry(relative.to_ascii_lowercase())
+                        .or_default()
+                        .push((id, relative, published));
+                }
+            }
             for path in found {
                 let relative = match relative_key(&root, &path) {
                     Ok(relative) => relative,
@@ -2728,8 +2758,16 @@ impl Library {
                         continue;
                     }
                 };
-                let id = skill_id(&source.alias, &relative);
-                let read = read_text(&path, CONTENT_LIMIT);
+                // IDは最初に登録したときの綴りのハッシュで、綴りだけが変わっても行の識別子として保たれる。
+                let computed = skill_id(&source.alias, &relative);
+                let id = by_spelling
+                    .get(&relative.to_ascii_lowercase())
+                    .and_then(|rows| choose_existing_id(rows, &live, &computed, &relative))
+                    .unwrap_or(computed);
+                // `safe_join` が拒否する名前（Windowsの末尾 `.`・空白など）は、後から読めず非公開にも
+                // 戻せなくなるため、公開せず未公開のエラー行として登録する。
+                let read =
+                    validate_relative(&relative).and_then(|_| read_text(&path, CONTENT_LIMIT));
                 let (content, name, description, error) = match read {
                     Ok(content) => match parse(&content) {
                         Ok((name, description)) => (content, name, description, None),
@@ -2750,7 +2788,7 @@ impl Library {
                 // 新規行だけ、読み取りエラーがなければ公開状態で登録する（published は ?8 が NULL のとき1）。
                 // 既存行は ON CONFLICT の更新対象に published を含めず、利用者が選んだ公開状態を保つ。
                 // 不在・読み取りエラー・不正なfrontmatterの行は、公開しない（MCP検索側も同じ条件で除外する）。
-                tx.prepare_cached("INSERT INTO skills(id,source,relative_path,name,description,content,revision,error,missing,published) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,CASE WHEN ?8 IS NULL THEN 1 ELSE 0 END) ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,content=excluded.content,revision=excluded.revision,error=excluded.error,missing=0,updated_at=CASE WHEN skills.revision<>excluded.revision THEN CURRENT_TIMESTAMP ELSE skills.updated_at END")?
+                tx.prepare_cached("INSERT INTO skills(id,source,relative_path,name,description,content,revision,error,missing,published) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,CASE WHEN ?8 IS NULL THEN 1 ELSE 0 END) ON CONFLICT(id) DO UPDATE SET relative_path=excluded.relative_path,name=excluded.name,description=excluded.description,content=excluded.content,revision=excluded.revision,error=excluded.error,missing=0,updated_at=CASE WHEN skills.revision<>excluded.revision THEN CURRENT_TIMESTAMP ELSE skills.updated_at END")?
                     .execute(params![id, source.alias, relative, name, description, content, revision(&content), error])?;
             }
         }
@@ -3144,6 +3182,12 @@ impl Library {
             indexed_at,
         })
     }
+    /// 有効なソースに行があることだけをDBで確かめる（実パスは検査しない）。
+    fn ensure_listed(c: &Connection, id: &str) -> Result<()> {
+        c.prepare_cached("SELECT 1 FROM skills k JOIN sources s ON s.alias=k.source WHERE k.id=?1 AND s.active=1")
+            .and_then(|mut st| st.query_row([id], |_| Ok(())))
+            .context("Skill not found")
+    }
     fn locate(&self, c: &Connection, id: &str) -> Result<(PathBuf, PathBuf)> {
         // 一括操作・不在削除のループから呼ばれるため prepare_cached で再利用する。
         // 準備の失敗も従来の query_row と同じく "Skill not found" の文脈で返す。
@@ -3332,7 +3376,12 @@ impl Library {
         let _guard = self.write_guard()?;
         self.ensure_no_pending_migration()?;
         let c = self.connection()?;
-        self.locate(&c, id)?;
+        if metadata.published {
+            self.locate(&c, id)?;
+        } else {
+            // 非公開化は実パスを検査せず、行の存在だけをDBで確かめる（読めない名前の行も戻せる）。
+            Self::ensure_listed(&c, id)?;
+        }
         let tags = normalize_tags(&metadata.tags)?;
         ensure!(metadata.category.len() <= 200, "Category is too long");
         let tx = c.unchecked_transaction()?;
@@ -3363,9 +3412,12 @@ impl Library {
         self.ensure_no_pending_migration()?;
         let c = self.connection()?;
         let tx = c.unchecked_transaction()?;
-        let (_, path) = self.locate(&tx, id)?;
         if published {
+            let (_, path) = self.locate(&tx, id)?;
             refresh_valid(&tx, id, &path)?;
+        } else {
+            // 非公開化は実パスの検査を必須にしない（読めない名前の行も非公開へ戻せる）。
+            Self::ensure_listed(&tx, id)?;
         }
         tx.execute(
             "UPDATE skills SET published=?2 WHERE id=?1",
@@ -3470,9 +3522,13 @@ impl Library {
         codex: Option<&CodexSkillPolicy>,
     ) -> Result<()> {
         for id in ids {
-            let (_, path) = self.locate(c, id)?;
             if published == Some(true) {
+                let (_, path) = self.locate(c, id)?;
                 refresh_valid(c, id, &path)?;
+            } else if published == Some(false) {
+                Self::ensure_listed(c, id)?;
+            } else {
+                self.locate(c, id)?;
             }
             // ループ内の固定SQLは prepare_cached で再利用する（実行順・トランザクションは呼び出し元のまま）。
             let (raw, old): (String, bool) = c
@@ -3630,7 +3686,20 @@ impl Library {
         file.sync_all()?;
         self.scan_locked(&c)?;
         let relative = relative_key(&root, &path)?;
-        Ok(skill_id(source, &relative))
+        // 大文字小文字を区別しないファイルシステムでは、走査が綴りだけ違う既存行のIDを再利用する。
+        // 返すIDも走査と同じ規則（`choose_existing_id`）で選ぶ。
+        let computed = skill_id(source, &relative);
+        let existing: Option<String> = c
+            .query_row(
+                &format!(
+                    "SELECT id FROM skills WHERE source=?1 AND relative_path=?2 COLLATE {} ORDER BY id=?3 DESC, relative_path=?2 DESC, published DESC, id LIMIT 1",
+                    path_collation()
+                ),
+                params![source, relative, computed],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(existing.unwrap_or(computed))
     }
     fn nested_skill_roots(c: &Connection, id: &str, root: &Path) -> Result<HashSet<PathBuf>> {
         // 消失扱いの子も境界として残す。マーカーを移動しただけでは親の公開範囲を広げない。
@@ -3642,8 +3711,8 @@ impl Library {
             let (source, relative) = row?;
             let skill = Path::new(&source).join(relative);
             if let Some(directory) = skill.parent()
-                && directory != root
-                && directory.starts_with(root)
+                && !same_path(directory, root)
+                && path_within(directory, root)
             {
                 boundaries.insert(directory.to_path_buf());
             }
@@ -3655,7 +3724,7 @@ impl Library {
         ensure!(
             !boundaries
                 .iter()
-                .any(|boundary| target.starts_with(boundary)),
+                .any(|boundary| path_within(target, boundary)),
             "File belongs to a nested skill; use its skill id"
         );
         let mut ancestor = target.parent().context("Invalid file path")?;
@@ -3842,6 +3911,26 @@ fn folder_alias_base(root: &Path) -> String {
 fn skill_id(alias: &str, path: &str) -> String {
     revision(&format!("{alias}\0{path}"))
 }
+/// 綴りの大文字小文字だけが違う既存行の中から、実パスに対応づける行のIDを決める。
+///
+/// 優先順位は、(1) 実パスの綴りから計算したIDの行、(2) 綴りが完全に一致する行、(3) 公開中の行、
+/// (4) IDの昇順。割り当て後は選んだ行の綴りが実パスに揃うため、再スキャンで同じ行が選ばれ続ける。
+/// 保存済みの綴りが今回の走査で別に見つかった行（`live`）は候補にしない。候補がなければ `None`。
+fn choose_existing_id(
+    rows: &[(String, String, bool)],
+    live: &HashSet<String>,
+    computed: &str,
+    relative: &str,
+) -> Option<String> {
+    // 保存済みの綴りが今回の走査で別に実在するパスの行は、綴りの違う実在する別のスキル
+    // （大文字小文字を区別するフォルダー）なので、再利用の候補にしない。
+    rows.iter()
+        .filter(|(_, spelled, _)| spelled == relative || !live.contains(spelled))
+        .min_by_key(|(id, spelled, published)| {
+            (id != computed, spelled != relative, !published, id.clone())
+        })
+        .map(|(id, ..)| id.clone())
+}
 fn normalize_tags(tags: &[String]) -> Result<Vec<String>> {
     ensure!(tags.len() <= 100, "Too many tags");
     let mut result = Vec::new();
@@ -3853,6 +3942,67 @@ fn normalize_tags(tags: &[String]) -> Result<Vec<String>> {
         }
     }
     Ok(result)
+}
+/// frontmatter の入れ子の上限（解析後の木の深さ。数え方は `yaml_exceeds_nesting_limit` を参照）。
+///
+/// 根拠: 通常のfrontmatter（name・description・metadata・allowed-tools のマップやリスト）は
+/// 実質10段に届かない。一方、saphyr 0.3.3 は2 MiB スレッド（`spawn_blocking` の既定）で、
+/// ブロック列を深さ約8000まで入れ子にすると解析または木の解放でスタックあふれを起こす
+/// （深さ3000は通る）。上限64は通常の利用の数倍で、あふれる深さの100分の1以下に収まる。
+const YAML_NESTING_LIMIT: usize = 64;
+/// 解析後のYAMLの木の深さが上限を超えるかを、パーサーのイベント列を数えて判定する。
+///
+/// saphyr のローダーは入れ子をそのまま再帰で組み立て、木の解放も再帰する。上限のない深い入れ子は
+/// 2 MiB のスレッドでスタックあふれになる。イベント列を作る `saphyr_parser::Parser` は状態を自前の
+/// スタックで持つ反復処理で、深さに関わらずスタックを使わないため、組み立ての前に深さを数えられる。
+/// 構文を文字列で見積もる方式と違い、実際のイベント（コンテナの開始と終了）を数えるので、改行の種類
+/// （CR単独）・`: ` や `? ` の後ろの列・タグやアンカーつきの流れ形式・複合キーなど、書き方に左右されず
+/// 過小評価しない。エイリアスはローダーが参照先を複製して組み立てるため、参照先の高さを足す。
+/// アンカーごとの部分木の高さを記録して、その分を深さに加える。
+///
+/// 構文エラーは数えずに打ち切る（通常のエラーは `load_from_str` が返す）。
+fn yaml_exceeds_nesting_limit(yaml: &str) -> bool {
+    // 開いているコンテナごとの (アンカーID, 子の最大の高さ)。アンカーIDは0が「なし」。
+    let mut open: Vec<(usize, usize)> = Vec::new();
+    // アンカーID → 部分木の高さ（コンテナ1段で1、スカラーは0）。
+    let mut heights: HashMap<usize, usize> = HashMap::new();
+    for event in saphyr_parser::Parser::new_from_str(yaml) {
+        let Ok((event, _)) = event else {
+            return false;
+        };
+        match event {
+            saphyr_parser::Event::SequenceStart(anchor, _)
+            | saphyr_parser::Event::MappingStart(anchor, _) => {
+                open.push((anchor, 0));
+                if open.len() > YAML_NESTING_LIMIT {
+                    return true;
+                }
+            }
+            saphyr_parser::Event::SequenceEnd | saphyr_parser::Event::MappingEnd => {
+                let Some((anchor, child)) = open.pop() else {
+                    return false;
+                };
+                let height = child + 1;
+                if anchor != 0 {
+                    heights.insert(anchor, height);
+                }
+                if let Some(parent) = open.last_mut() {
+                    parent.1 = parent.1.max(height);
+                }
+            }
+            saphyr_parser::Event::Alias(anchor) => {
+                let height = heights.get(&anchor).copied().unwrap_or(0);
+                if open.len() + height > YAML_NESTING_LIMIT {
+                    return true;
+                }
+                if let Some(parent) = open.last_mut() {
+                    parent.1 = parent.1.max(height);
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 fn parse(content: &str) -> Result<(String, String)> {
     let mut lines = content.lines();
@@ -3871,6 +4021,12 @@ fn parse(content: &str) -> Result<(String, String)> {
         yaml.push('\n');
     }
     ensure!(closed, "Unclosed YAML frontmatter");
+    // saphyr はブロック形式の入れ子と木の解放に深さ制限を持たない。解析の前に入れ子を見積もり、
+    // 上限を超える入力は通常の不正frontmatterとして扱う（スタックあふれによる異常終了を防ぐ）。
+    ensure!(
+        !yaml_exceeds_nesting_limit(&yaml),
+        "YAMLヘッダーの入れ子が深すぎます（上限{YAML_NESTING_LIMIT}段）。項目の階層を浅くしてください"
+    );
     let docs = saphyr::Yaml::load_from_str(&yaml).map_err(|error| {
         // YAMLから除いた先頭の「---」を補い、SKILL.md上の位置を表示する。
         let line = error.marker().line() + 1;
@@ -3899,13 +4055,21 @@ fn parse(content: &str) -> Result<(String, String)> {
     })?;
     ensure!(docs.len() == 1, "Expected one YAML document");
     let doc = &docs[0];
-    let name = doc["name"]
-        .as_str()
+    // 添字参照（`doc["name"]`）はキー欠落・非マッピングでpanicするため、非panicの参照で
+    // 「空でない文字列」の検査へ落とす。
+    ensure!(
+        doc.as_mapping().is_some(),
+        "Frontmatter must be a YAML mapping with name and description"
+    );
+    let name = doc
+        .as_mapping_get("name")
+        .and_then(|v| v.as_str())
         .filter(|v| !v.trim().is_empty())
         .context("Frontmatter name must be a nonempty string")?
         .to_owned();
-    let description = doc["description"]
-        .as_str()
+    let description = doc
+        .as_mapping_get("description")
+        .and_then(|v| v.as_str())
         .filter(|v| !v.trim().is_empty())
         .context("Frontmatter description must be a nonempty string")?
         .to_owned();
@@ -3964,7 +4128,9 @@ fn reject_links(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn safe_join(root: &Path, relative: &str) -> Result<PathBuf> {
+/// 相対パスの名前だけを検査する（実パスは見ない）。`safe_join` と走査が同じ検査を共有し、
+/// 後から読めない名前を公開のまま登録しないようにする。
+fn validate_relative(relative: &str) -> Result<()> {
     ensure!(
         !relative.is_empty() && !relative.contains('\0'),
         "Invalid relative path"
@@ -3987,6 +4153,11 @@ fn safe_join(root: &Path, relative: &str) -> Result<PathBuf> {
             "Windows path aliases are forbidden"
         );
     }
+    Ok(())
+}
+fn safe_join(root: &Path, relative: &str) -> Result<PathBuf> {
+    validate_relative(relative)?;
+    let p = Path::new(relative);
     let mut target = root.to_owned();
     for part in p.components() {
         target.push(part);
@@ -4117,6 +4288,30 @@ fn path_key(path: &Path) -> String {
         path.into_owned()
     }
 }
+/// 2つのパスを、ファイルシステムと同じ大文字小文字の扱いで比べる。
+///
+/// 境界はDBの相対パスの表記、対象はクライアントが指定した表記から作るため、大文字小文字を
+/// 区別しないファイルシステム（Windows・macOS）では `path_key` で正規化して比べる。
+/// Linuxでは従来どおり区別する。
+fn same_path(a: &Path, b: &Path) -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        path_key(a) == path_key(b)
+    } else {
+        a == b
+    }
+}
+/// `path` が `boundary` と同じか、その配下にあるか（コンポーネント単位の前方一致）。
+fn path_within(path: &Path, boundary: &Path) -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        let (path, boundary) = (path_key(path), path_key(boundary));
+        path == boundary
+            || path
+                .strip_prefix(boundary.trim_end_matches('/'))
+                .is_some_and(|rest| rest.starts_with('/'))
+    } else {
+        path.starts_with(boundary)
+    }
+}
 fn auxiliary(
     root: &Path,
     dir: &Path,
@@ -4130,14 +4325,19 @@ fn auxiliary(
             continue;
         }
         if meta.is_dir() {
-            if boundaries.contains(&entry.path())
+            if boundaries
+                .iter()
+                .any(|boundary| same_path(boundary, &entry.path()))
                 || fs::symlink_metadata(entry.path().join("SKILL.md")).is_ok()
             {
                 continue;
             }
             auxiliary(root, &entry.path(), files, boundaries)?;
         } else if meta.is_file() {
-            files.push(relative_key(root, &entry.path())?);
+            // 非UTF-8名などで相対キーにできないファイルは、その1件だけ飛ばして一覧を続ける。
+            if let Ok(key) = relative_key(root, &entry.path()) {
+                files.push(key);
+            }
         }
     }
     Ok(())
@@ -4228,4 +4428,192 @@ fn atomic_write(path: &Path, content: &str, expected: Option<&str>) -> Result<()
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod yaml_nesting_tests {
+    use super::{YAML_NESTING_LIMIT, parse, yaml_exceeds_nesting_limit};
+
+    fn frontmatter(body: &str) -> String {
+        format!("---\nname: n\ndescription: d\n{body}---\nbody\n")
+    }
+    fn rejected_as_too_deep(body: &str) -> bool {
+        parse(&frontmatter(body))
+            .err()
+            .is_some_and(|e| e.to_string().contains("入れ子が深すぎます"))
+    }
+
+    /// 通常のスキルが使う形（マップ・リスト・流れ形式・ブロックスカラー・引用符内の括弧・エイリアス）は
+    /// 拒否しない。
+    #[test]
+    fn ordinary_frontmatter_is_accepted() {
+        let content = frontmatter(
+            "metadata:\n  author: me\n  tags:\n    - a\n    - b\n  nested:\n    deeper:\n      deepest: [1, 2, {k: v}]\nallowed-tools:\n- Read\n- Bash\nnote: \"a [ b { c\"\nother: it's fine [x\nblock: |\n  [unclosed {\n    indented text\n  - not a marker nest\nlist:\n  - - inner\n    - pair\n  - {a: [b, [c]]}\nbase: &base {k: [v]}\nuse: *base\n",
+        );
+        let (name, description) = parse(&content).unwrap();
+        assert_eq!((name.as_str(), description.as_str()), ("n", "d"));
+    }
+
+    /// 深さ10000の入れ子は、書き方（インデント型・インライン型・流れ型・CR単独の改行・
+    /// `: ` の後ろの列）に関わらず解析の前に拒否し、テストスレッド（既定2 MiB のスタック）でもあふれない。
+    #[test]
+    fn deeply_nested_frontmatter_is_rejected_before_parsing() {
+        const DEPTH: usize = 10_000;
+        // 字下げ型は1行ごとに字下げが増えて入力が大きくなるため、上限を十分に超える段数に絞る
+        // （1行で列とマップの2段、字下げは2桁ずつ）。
+        let mut indented = String::from("list:\n");
+        for level in 0..300 {
+            indented.push_str(&"  ".repeat(level));
+            indented.push_str("- a:\n");
+        }
+        let inline_list = format!("list:\n{}x\n", "- ".repeat(DEPTH));
+        let flow_seq = format!("x: {}{}\n", "[".repeat(DEPTH), "]".repeat(DEPTH));
+        let flow_map = format!("x: {}{}\n", "{{a: ".repeat(DEPTH), "}".repeat(DEPTH));
+        let multi_line_flow = format!("x: {}\n", "[\n".repeat(DEPTH));
+        // CR単独は `str::lines()` では改行にならないが、YAMLパーサーは改行として扱う。
+        let cr_separated = format!("list:\r{}x\n", "- ".repeat(DEPTH));
+        let cr_indented = format!(
+            "list:\r{}\n",
+            (0..300)
+                .map(|level| format!("{}- a:\r", "  ".repeat(level)))
+                .collect::<String>()
+        );
+        // 複合キーの `? ` と値の `: ` の後ろに、行内で列を連ねる。
+        let value_marker = format!("? k\n{}x\n", ": - ".repeat(DEPTH));
+        let alternating = format!("? k\n{}x\n", ": - : - ".repeat(DEPTH));
+        // タグ・アンカーつきの流れ形式。
+        let tagged_flow = format!("x: {}{}\n", "&a !!seq [".repeat(DEPTH), "]".repeat(DEPTH));
+        for (kind, body) in [
+            ("indent", indented),
+            ("inline-list", inline_list),
+            ("flow-sequence", flow_seq),
+            ("flow-mapping", flow_map),
+            ("multi-line-flow", multi_line_flow),
+            ("cr-separated", cr_separated),
+            ("cr-indented", cr_indented),
+            ("value-marker", value_marker),
+            ("alternating-markers", alternating),
+            ("tagged-flow", tagged_flow),
+        ] {
+            // 構文として不正な形は構文エラーで拒否されてもよい。いずれも、エラーを返して落ちないこと。
+            let error = parse(&frontmatter(&body)).expect_err(kind).to_string();
+            if matches!(
+                kind,
+                "indent" | "inline-list" | "cr-separated" | "cr-indented"
+            ) {
+                assert!(error.contains("入れ子が深すぎます"), "{kind}: {error}");
+            }
+        }
+        // 流れ形式は saphyr のパーサー自身が深さ255で止める（スタックを使わずエラーにする）。
+        // それより浅く上限64を超える範囲は、入れ子の検査で拒否する。
+        for body in [
+            format!("x: {}{}\n", "[".repeat(100), "]".repeat(100)),
+            format!("x: {}{}\n", "{a: ".repeat(100), "}".repeat(100)),
+            format!("x: {}\n", "[\n ".repeat(100)),
+        ] {
+            assert!(
+                rejected_as_too_deep(&body),
+                "{:?}: {:?}",
+                body.chars().take(24).collect::<String>(),
+                parse(&frontmatter(&body)).err().map(|e| e.to_string())
+            );
+        }
+    }
+
+    /// エイリアスは参照先の部分木の複製として深さに加わる。連鎖で深さを稼ぐ入力を拒否し、
+    /// 浅い連鎖は受理する。
+    #[test]
+    fn alias_chains_count_the_referenced_depth() {
+        let chain = |links: usize| -> String {
+            let mut body = String::from("a0: &a0 [v]\n");
+            for index in 1..links {
+                body.push_str(&format!("a{index}: &a{index} [*a{}]\n", index - 1));
+            }
+            body
+        };
+        assert!(!rejected_as_too_deep(&chain(10)));
+        assert!(parse(&frontmatter(&chain(10))).is_ok());
+        assert!(rejected_as_too_deep(&chain(YAML_NESTING_LIMIT + 10)));
+        // 参照先の高さが同じでも、浅い位置の参照は受理され、深い位置の参照は拒否される。
+        let wide = "base: &b [[[[[[[[[[x]]]]]]]]]]\nuse: [*b, *b, *b]\n";
+        assert!(parse(&frontmatter(wide)).is_ok());
+    }
+
+    /// 上限の直前までは受理し、超えた入れ子だけを拒否する（境界の両側）。
+    #[test]
+    fn nesting_limit_boundary_is_exact() {
+        let make =
+            |depth: usize| frontmatter(&format!("x: {}{}\n", "[".repeat(depth), "]".repeat(depth)));
+        // 最上位のマップが1段を使うので、流れ形式に使えるのは残りの段数。
+        let allowed = YAML_NESTING_LIMIT - 1;
+        assert!(parse(&make(allowed)).is_ok());
+        assert!(parse(&make(allowed + 1)).is_err());
+        assert!(!yaml_exceeds_nesting_limit(&format!(
+            "x: {}{}\n",
+            "[".repeat(allowed),
+            "]".repeat(allowed)
+        )));
+        assert!(yaml_exceeds_nesting_limit(&format!(
+            "x: {}{}\n",
+            "[".repeat(allowed + 1),
+            "]".repeat(allowed + 1)
+        )));
+    }
+
+    /// 構文エラーは入れ子の検査では拒否せず、通常の構文エラーとして報告される。
+    #[test]
+    fn syntax_errors_are_reported_as_syntax_errors() {
+        let error = parse(&frontmatter("x: [unclosed\n"))
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("入れ子が深すぎます"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod id_reuse_tests {
+    use super::choose_existing_id;
+    use std::collections::HashSet;
+
+    fn row(id: &str, spelled: &str, published: bool) -> (String, String, bool) {
+        (id.to_owned(), spelled.to_owned(), published)
+    }
+
+    /// 綴りだけ違う既存行を再利用するときの優先順位と、実在する別パスの行を乗っ取らない保証。
+    #[test]
+    fn reuse_prefers_computed_then_exact_then_published_and_skips_live_rows() {
+        let none = HashSet::new();
+        let rows = [
+            row("b", "Alpha/SKILL.md", false),
+            row("a", "alpha/SKILL.md", true),
+        ];
+        // 計算したIDの行が最優先。
+        assert_eq!(
+            choose_existing_id(&rows, &none, "b", "ALPHA/SKILL.md").as_deref(),
+            Some("b")
+        );
+        // 綴りが完全に一致する行が次（公開状態・IDより優先）。
+        assert_eq!(
+            choose_existing_id(&rows, &none, "zzz", "Alpha/SKILL.md").as_deref(),
+            Some("b")
+        );
+        // それ以外は公開中の行、同じなら ID の昇順。
+        assert_eq!(
+            choose_existing_id(&rows, &none, "zzz", "ALPHA/SKILL.md").as_deref(),
+            Some("a")
+        );
+        // 保存済みの綴りが今回の走査でも別に見つかった行は、実在する別のスキルなので再利用しない。
+        let live: HashSet<String> = ["alpha/SKILL.md".to_owned()].into();
+        assert_eq!(
+            choose_existing_id(&rows, &live, "zzz", "ALPHA/SKILL.md").as_deref(),
+            Some("b")
+        );
+        let live: HashSet<String> =
+            ["alpha/SKILL.md".to_owned(), "Alpha/SKILL.md".to_owned()].into();
+        assert_eq!(
+            choose_existing_id(&rows, &live, "zzz", "ALPHA/SKILL.md"),
+            None
+        );
+        assert_eq!(choose_existing_id(&[], &none, "zzz", "x"), None);
+    }
 }

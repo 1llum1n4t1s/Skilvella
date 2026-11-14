@@ -1892,6 +1892,7 @@ dependencies = [
  "rusqlite",
  "rustls",
  "saphyr",
+ "saphyr-parser",
  "serde",
  "serde_json",
  "sha2",
