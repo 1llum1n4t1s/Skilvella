@@ -967,6 +967,10 @@ fn install(directory: &Path, plan: &Plan) -> anyhow::Result<()> {
             eprintln!("Could not fully restore the launcher after a failed update: {error:#}");
         }
         if progress.parent_stopped && (plan.managed.is_none() || progress.launcher_lock.is_some()) {
+            // 復旧にも失敗すると戻り値は復旧側のエラーだけになるため、元の失敗原因を先にログへ残す。
+            if let Err(error) = &result {
+                eprintln!("Update failed before recovery: {error:#}");
+            }
             let mut child = recover_previous(directory, plan)
                 .context("Could not restart the previous version after a failed update")?;
             drop(progress.file_lock.take());
