@@ -206,7 +206,7 @@
   "SKILL.md を保存しました。": "SKILL.md a été enregistré.",
   "管理情報を保存しました。": "Les métadonnées ont été enregistrées.",
   "履歴から復元しました。": "Restauration depuis l’historique effectuée.",
-  "スキルを作成しました。公開するには管理情報で公開を有効にしてください。": "Compétence créée. Activez la publication dans les métadonnées pour la publier.",
+  "スキルを作成しました。公開状態は一覧または管理情報で確認・変更できます。": "Compétence créée. Vous pouvez vérifier ou modifier son état de publication dans la liste ou dans les métadonnées.",
   "本文は2 MiB以内にしてください。": "Le contenu ne doit pas dépasser 2 Mio.",
   "登録を解除しました。元のフォルダーとファイルは保持されています。": "Dossier désenregistré. Le dossier et les fichiers d’origine sont conservés.",
   "管理対象フォルダーの設定を保存しました。": "Les réglages du dossier géré ont été enregistrés.",
@@ -263,5 +263,7 @@
   "クライアントの入力欄でこのコマンドを入力すると、このスキルを呼び出せます。": "Saisissez cette commande dans la zone de saisie du client pour appeler cette compétence.",
   "「検索のみ」のため、コマンドはありません。コマンドで呼び出すには、下の使い方で「コマンド候補のみ」か「自動選択＋コマンド候補」を選んでください。": "Aucune commande, car le mode est « Recherche seule ». Pour l’appeler par commande, choisissez ci-dessous « Suggestions de commandes seules » ou « Sélection automatique + suggestions de commandes ».",
   "同期先が選ばれていないため、コマンドはありません。": "Aucune commande, car aucune cible de synchronisation n’est sélectionnée.",
-  "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Seules les compétences publiées et lisibles deviennent des commandes. Publiez-la via MCP et vérifiez qu’il n’y a pas d’erreur de lecture."
+  "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Seules les compétences publiées et lisibles deviennent des commandes. Publiez-la via MCP et vérifiez qu’il n’y a pas d’erreur de lecture.",
+  "編集": "Modification",
+  "復元": "Restauration"
 }

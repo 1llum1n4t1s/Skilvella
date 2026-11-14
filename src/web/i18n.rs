@@ -287,3 +287,28 @@ fn browser_language(headers: &HeaderMap) -> usize {
         |(index, _)| index,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ブラウザーへ渡す文言は、すべての辞書に訳があり、プレースホルダーが原文と揃っている。
+    #[test]
+    fn client_keys_exist_in_every_catalog() {
+        fn names(text: &str) -> Vec<&str> {
+            text.split('{')
+                .skip(1)
+                .filter_map(|part| part.split_once('}').map(|(name, _)| name))
+                .collect()
+        }
+        for (index, source) in CATALOGS.iter().enumerate() {
+            let catalog: Catalog = serde_json::from_str(source).unwrap();
+            for (id, key) in CLIENT_KEYS {
+                let translated = catalog
+                    .get(*key)
+                    .unwrap_or_else(|| panic!("辞書 {index} に {id} の訳がない: {key}"));
+                assert_eq!(names(key), names(translated), "{id}");
+            }
+        }
+    }
+}

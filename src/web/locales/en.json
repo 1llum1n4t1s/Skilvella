@@ -206,7 +206,7 @@
   "SKILL.md を保存しました。": "Saved SKILL.md.",
   "管理情報を保存しました。": "Saved metadata.",
   "履歴から復元しました。": "Restored from history.",
-  "スキルを作成しました。公開するには管理情報で公開を有効にしてください。": "Skill created. Enable publication in metadata to publish it.",
+  "スキルを作成しました。公開状態は一覧または管理情報で確認・変更できます。": "Skill created. You can check or change its publication status in the list or in metadata.",
   "本文は2 MiB以内にしてください。": "Content must not exceed 2 MiB.",
   "登録を解除しました。元のフォルダーとファイルは保持されています。": "Folder unregistered. The original folder and files remain.",
   "管理対象フォルダーの設定を保存しました。": "Managed folder settings saved.",
@@ -263,5 +263,7 @@
   "クライアントの入力欄でこのコマンドを入力すると、このスキルを呼び出せます。": "Type this command in the client's input box to invoke this skill.",
   "「検索のみ」のため、コマンドはありません。コマンドで呼び出すには、下の使い方で「コマンド候補のみ」か「自動選択＋コマンド候補」を選んでください。": "No command because the mode is “Search only”. To invoke it by command, choose “Command suggestions only” or “Automatic selection + command suggestions” below.",
   "同期先が選ばれていないため、コマンドはありません。": "No command because no sync target is selected.",
-  "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Only published, readable skills become commands. Publish it to MCP and make sure there are no read errors."
+  "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Only published, readable skills become commands. Publish it to MCP and make sure there are no read errors.",
+  "編集": "Edit",
+  "復元": "Restore"
 }

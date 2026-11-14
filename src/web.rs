@@ -563,7 +563,10 @@ fn failure(locale: Locale, e: anyhow::Error) -> Response {
     )
 }
 fn with_detail(locale: Locale, key: &str, error: anyhow::Error) -> String {
-    locale.format(key, &[("detail", &format!("{error:#}"))])
+    let detail = format!("{error:#}");
+    // ライブラリが返す定型文は辞書に訳がある。辞書にない技術的な詳細は原文のまま入れる。
+    let detail = locale.text(&detail);
+    locale.format(key, &[("detail", detail)])
 }
 fn encoded(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -586,7 +589,8 @@ fn redirect(path: &str, message: &str) -> Response {
     Redirect::to(&format!("{path}{separator}message={message}")).into_response()
 }
 fn tags(s: &str) -> Vec<String> {
-    s.split([',', '、', '\n'])
+    // 中国語IMEの既定の全角カンマ（U+FF0C）も区切りとして扱う。
+    s.split([',', '，', '、', '\n'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
@@ -615,8 +619,9 @@ impl Notice {
             "content-saved" => "SKILL.md を保存しました。",
             "metadata-saved" => "管理情報を保存しました。",
             "history-restored" => "履歴から復元しました。",
+            // 同じパスの再作成では以前の公開状態が保たれるため、公開済みとも未公開とも断定しない。
             "skill-created" => {
-                "スキルを作成しました。公開するには管理情報で公開を有効にしてください。"
+                "スキルを作成しました。公開状態は一覧または管理情報で確認・変更できます。"
             }
             "scan" | "directory-saved" | "folder-added" => {
                 let summary = locale.format(
@@ -1525,6 +1530,16 @@ struct DetailPage {
     message: String,
     dirty: bool,
 }
+impl DetailPage {
+    /// 履歴の理由IDを表示名にする。未知の値は保存された文字列をそのまま表示する。
+    fn history_reason<'a>(&self, reason: &'a str) -> &'a str {
+        match reason {
+            "edit" => self.locale.text("編集"),
+            "restore" => self.locale.text("復元"),
+            other => other,
+        }
+    }
+}
 async fn detail(
     Extension(locale): Extension<Locale>,
     State(state): State<AppState>,
@@ -1900,6 +1915,29 @@ async fn favicon() -> Response {
 
 #[cfg(test)]
 mod tests {
+    /// 区切りは半角カンマ・全角カンマ・読点・改行で同じ結果になる。
+    #[test]
+    fn tags_split_on_all_separators() {
+        let expected = vec!["a", "b", "c", "d"];
+        assert_eq!(super::tags("a,b，c、d"), expected);
+        assert_eq!(
+            super::tags(
+                " a ,，b
+ c、、d
+"
+            ),
+            expected
+        );
+        assert_eq!(super::tags("a，b，c，d"), expected);
+        assert!(
+            super::tags(
+                " ，、,
+"
+            )
+            .is_empty()
+        );
+    }
+
     #[test]
     fn encodes_query_bytes() {
         assert_eq!(super::encoded(""), "");

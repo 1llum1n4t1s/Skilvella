@@ -219,3 +219,152 @@ async fn language_cookie_requires_csrf_and_is_scoped_to_the_port() {
         }
     }
 }
+
+const LOCALES: [&str; 8] = ["en", "de", "es", "fr", "ko", "pt-BR", "zh-CN", "zh-TW"];
+
+fn catalog(language: &str) -> std::collections::BTreeMap<String, String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/web/locales")
+        .join(format!("{language}.json"));
+    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+}
+
+/// `{name}` 形式のプレースホルダー名の集合を取り出す。
+fn placeholders(text: &str) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    let mut rest = text;
+    while let Some((_, token)) = rest.split_once('{') {
+        let Some((name, suffix)) = token.split_once('}') else {
+            break;
+        };
+        names.insert(name.to_owned());
+        rest = suffix;
+    }
+    names
+}
+
+/// テンプレートが `locale.text("…")` / `locale.format("…")` へ直接渡す文字列リテラルを集める。
+fn template_keys() -> std::collections::BTreeSet<String> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+    let mut keys = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|extension| extension != "html") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).unwrap();
+        for call in ["locale.text(\"", "locale.format(\""] {
+            let mut rest = source.as_str();
+            while let Some((_, after)) = rest.split_once(call) {
+                // Rust の文字列リテラルと同じく、バックスラッシュのエスケープを解いてキーにする。
+                let mut key = String::new();
+                let mut chars = after.char_indices();
+                let end = loop {
+                    let (offset, c) = chars.next().expect("文字列リテラルが閉じている");
+                    match c {
+                        '"' => break offset,
+                        '\\' => key.push(chars.next().expect("エスケープが完結している").1),
+                        c => key.push(c),
+                    }
+                };
+                keys.insert(key);
+                rest = &after[end..];
+            }
+        }
+    }
+    keys
+}
+
+/// 辞書は全言語で同じキー・同じプレースホルダーを持ち、空の訳を含まない。
+#[test]
+fn catalogs_share_keys_and_placeholders() {
+    let reference = catalog(LOCALES[0]);
+    assert!(!reference.is_empty());
+    for language in LOCALES {
+        let entries = catalog(language);
+        assert!(
+            entries.keys().eq(reference.keys()),
+            "{language}: キー集合が en と一致しない"
+        );
+        for (key, value) in &entries {
+            assert!(!value.trim().is_empty(), "{language}: 空の訳 {key}");
+            assert_eq!(
+                placeholders(key),
+                placeholders(value),
+                "{language}: プレースホルダーが原文と一致しない {key}"
+            );
+        }
+    }
+}
+
+/// テンプレートが直接参照する日本語の原文は、すべての辞書に訳がある。
+#[test]
+fn template_keys_exist_in_every_catalog() {
+    let keys = template_keys();
+    assert!(keys.len() > 50, "テンプレートのキーを抽出できていない");
+    for language in LOCALES {
+        let entries = catalog(language);
+        for key in &keys {
+            assert!(
+                entries.contains_key(key),
+                "{language}: テンプレートのキーが辞書にない {key}"
+            );
+        }
+    }
+}
+
+/// 履歴の理由IDと作成後の通知は、表示言語に合わせた文言で出る。
+#[tokio::test]
+async fn history_reasons_and_created_notice_are_localized() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(".work/test-http")
+        .join(uuid::Uuid::new_v4().to_string());
+    let source = root.join("skills");
+    std::fs::create_dir_all(&source).unwrap();
+    let library = Library::open(&root.join("data")).unwrap();
+    library.add_source("local", &source).unwrap();
+    let id = library
+        .create_skill(
+            "local",
+            "history-skill",
+            "---\nname: history\ndescription: d\n---\n\nfirst\n",
+        )
+        .unwrap();
+    let revision = library.detail(&id, false).unwrap().revision;
+    library
+        .save_content(
+            &id,
+            &revision,
+            "---\nname: history\ndescription: d\n---\n\nsecond\n",
+        )
+        .unwrap();
+    let state = AppState::new(library);
+    let server = common::HttpServer::start(state.clone()).await;
+    let client = Client::new();
+    let fetch = |language: &'static str| {
+        let url = format!("{}/skills/{id}?message=skill-created", server.base);
+        let client = client.clone();
+        async move {
+            client
+                .get(url)
+                .header(header::ACCEPT_LANGUAGE, language)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        }
+    };
+    let ja = fetch("ja").await;
+    assert!(ja.contains("<p>編集</p>"));
+    assert!(ja.contains("公開状態は一覧または管理情報で確認・変更できます。"));
+    assert!(!ja.contains("<p>edit</p>"));
+    let en = fetch("en").await;
+    assert!(en.contains("<p>Edit</p>"));
+    assert!(en.contains("check or change its publication status"));
+    let zh = fetch("zh-TW").await;
+    assert!(zh.contains("<p>編輯</p>"));
+}
