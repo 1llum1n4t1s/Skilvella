@@ -62,13 +62,14 @@ $expectedNames = @($assets + $sumsName | Sort-Object)
 $actualNames = @(Get-ChildItem -LiteralPath $directory.FullName -File -Force | ForEach-Object Name | Sort-Object)
 if (Compare-Object $expectedNames $actualNames) { throw "unexpected distribution contents: $($actualNames -join ', ')" }
 
-# SHA256SUMS.txt は `<hash>  <名前>` の2行（アプリ内更新の checksum() と同じ形式）。実ファイルのハッシュと一致させる。
+# SHA256SUMS.txt は `<hash>  <名前>` の2行（アプリ内更新の checksum() と同じ形式）。skilvella-release checksums は名前順で出力するので、
+# 期待値も名前順に組み立てて実ファイルのハッシュと一致させる（1.1.9 の初回 run で並びの違いにより失敗した）。
 $sumsText = [IO.File]::ReadAllText((Join-Path $directory.FullName $sumsName), [Text.UTF8Encoding]::new($false, $true))
 $hashes = @{}
 foreach ($asset in $assets) {
     $hashes[$asset] = (Get-FileHash -LiteralPath (Join-Path $directory.FullName $asset) -Algorithm SHA256).Hash.ToLowerInvariant()
 }
-$expectedSums = ($assets | ForEach-Object { "$($hashes[$_])  $_" }) -join "`n"
+$expectedSums = ($assets | Sort-Object | ForEach-Object { "$($hashes[$_])  $_" }) -join "`n"
 if ($sumsText.Replace("`r`n", "`n").Trim() -cne $expectedSums) { throw "$sumsName does not match the archives" }
 
 $contentTypes = @{
