@@ -714,19 +714,32 @@ fn replace(source: &Path, target: &Path) -> anyhow::Result<()> {
         use std::os::windows::ffi::OsStrExt;
         let src: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
         let dst: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-        let ok = unsafe {
-            windows_sys::Win32::Storage::FileSystem::MoveFileExW(
-                src.as_ptr(),
-                dst.as_ptr(),
-                windows_sys::Win32::Storage::FileSystem::MOVEFILE_REPLACE_EXISTING
-                    | windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
-            )
-        };
-        ensure!(
-            ok != 0,
-            "Could not replace file: {}",
-            std::io::Error::last_os_error()
-        );
+        // 親プロセスの終了を検知した直後は、実行ファイルの image がまだ解放されていなかったり、
+        // ウイルス対策ソフトが終了時の検査で一時的に掴んでいたりして、置換が ERROR_ACCESS_DENIED(5)
+        // や ERROR_SHARING_VIOLATION(32) で失敗することがある（2026-11-15 に実機で2回発生し、
+        // アプリを止めた後の手作業の置換は1回で成功した）。この2つだけ、短い間隔で約10秒まで再試行する。
+        // それ以外の失敗や、時間内に解放されない場合は、従来どおり失敗として旧版の再起動へ回す。
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let ok = unsafe {
+                windows_sys::Win32::Storage::FileSystem::MoveFileExW(
+                    src.as_ptr(),
+                    dst.as_ptr(),
+                    windows_sys::Win32::Storage::FileSystem::MOVEFILE_REPLACE_EXISTING
+                        | windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
+                )
+            };
+            if ok != 0 {
+                break;
+            }
+            let error = std::io::Error::last_os_error();
+            let transient = matches!(error.raw_os_error(), Some(5) | Some(32));
+            ensure!(
+                transient && Instant::now() < deadline,
+                "Could not replace file: {error}"
+            );
+            std::thread::sleep(Duration::from_millis(250));
+        }
     }
     #[cfg(not(windows))]
     fs::rename(source, target)?;
