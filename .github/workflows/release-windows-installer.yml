@@ -1,21 +1,25 @@
 name: Release Windows installer
 
-# Windows インストーラー (SkilvellaApp-win-Setup.exe) を GitHub Actions でビルド・署名する。
+# Windows インストーラー (SkilvellaApp-win-Setup.exe) と自動更新用の更新元ファイル
+# (releases.win.json・full nupkg) を GitHub Actions でビルド・署名し、Cloudflare R2 (skilvella.kagayoi.com) へ配信する。
 # - 署名: Sigilune (https://github.com/1llum1n4t1s/Sigilune) が Certum SimplySign のクラウド鍵で行う。
 #   本人の PC や SimplySign Desktop は不要。Secrets は Environment "release" の
 #   SIGILUNE_EMAIL / SIGILUNE_TOTP_URI を、梱包・署名の step だけへ渡す。
+# - R2 への配信: Taskmetry 等と同じ方式（同梱の R2 転送スクリプト）。Environment "release" の
+#   CLOUDFLARE_API_TOKEN を、配信の step だけへ渡す。
 # - 手順の本体は tools/pack-windows-installer.ps1 -Sign で、ローカル実行と同じ処理を通す。
 # - 起動: 手動 (workflow_dispatch)。main から実行し、release_tag に公開済みのタグ (vX.Y.Z) を指定する
 #   （Environment "release" は main と v* タグだけ許可）。push / tag では自動起動しない。
 #   ビルドするソースは release_tag のタグをチェックアウトし、ワークフロー自体は main の最新版を使う。
 #   こうしておくと、ワークフローの不具合を main で直して公開済みの版へ Setup を付け直せる（タグは動かさない）。
-# - 配布: release_tag を指定したときだけ、そのタグの既存 GitHub Release へ Setup を追加で添付する
-#   （既存 asset は上書きしない）。ZIP 版・macOS 版・SHA256SUMS.txt は従来の手順のまま扱い、ここでは作らない。
+# - 配布: release_tag を指定したときだけ R2 へ配信する。版付きの成果物 (nupkg・版付き Setup) は
+#   新規作成のみで既存オブジェクトを上書きせず、固定名 (Setup・releases.win.json) は最新を指すため置き換える
+#   (manifest は最後)。ZIP 版・macOS 版・SHA256SUMS.txt は従来どおり GitHub Release で扱い、ここでは作らない。
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Setup を添付する既存 GitHub Release のタグ (vX.Y.Z、--ref と同じ)。空なら Actions の成果物だけ
+        description: R2 へ配信する公開済みタグ (vX.Y.Z、--ref と同じ)。空なら Actions の成果物だけ
         required: false
         type: string
         default: ''
@@ -34,7 +38,7 @@ jobs:
     timeout-minutes: 60
     environment: release
     permissions:
-      contents: write
+      contents: read
     env:
       # vpk 1.2.161 は .NET 9 ランタイム向け。ランナーに無い場合でも新しい版のランタイムで動かす
       # （無いと vpk が起動できず、梱包スクリプトの版確認で止まる）。
@@ -73,10 +77,9 @@ jobs:
           sparse-checkout: tools
           persist-credentials: false
 
-      - name: 添付先を確認
+      - name: 配信するタグを確認
         if: inputs.release_tag != ''
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -92,9 +95,7 @@ jobs:
           $package = [regex]::Match((Get-Content -LiteralPath Cargo.toml -Raw), '(?ms)^\[package\]\s*\r?\n(?<body>.*?)(?=^\[|\z)')
           $version = [regex]::Match($package.Groups['body'].Value, '(?m)^version\s*=\s*"([^"]+)"\s*$').Groups[1].Value
           if ("v$version" -cne $env:RELEASE_TAG) { throw "Cargo version v$version differs from $env:RELEASE_TAG." }
-          $assets = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
-          if ($LASTEXITCODE -ne 0) { throw "Release $env:RELEASE_TAG was not found. Create it with the ZIP/macOS assets first." }
-          if ($assets -contains 'SkilvellaApp-win-Setup.exe') { throw 'The release already has SkilvellaApp-win-Setup.exe; existing assets are not overwritten.' }
+          # 版付きの成果物が R2 に既にある場合は、配信 step が内容のハッシュを照合し、不一致なら失敗する（上書きしない）。
 
       - name: Rust と Velopack CLI を準備
         run: |
@@ -144,21 +145,18 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: skilvella-windows-installer
-          path: ${{ env.WORK_DIR }}/packages/SkilvellaApp-win-Setup.exe
+          path: ${{ env.WORK_DIR }}/packages/*
           if-no-files-found: error
           retention-days: 30
 
-      - name: GitHub Release へ Setup を添付
+      - name: R2 へ配信
         if: inputs.release_tag != ''
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
           $setup = Join-Path $env:WORK_DIR 'packages/SkilvellaApp-win-Setup.exe'
           $signature = Get-AuthenticodeSignature -LiteralPath $setup
           if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike 'CN=Open Source Developer Yuichiro Shinozaki*' -or !$signature.TimeStamperCertificate) { throw 'Setup signature verification failed.' }
           "SHA256 $((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash)"
-          # --clobber を付けず、既存 asset を上書きしない。
-          gh release upload $env:RELEASE_TAG $setup --repo $env:GITHUB_REPOSITORY
-          if ($LASTEXITCODE -ne 0) { throw 'Setup upload failed.' }
+          & ./tools/publish-windows-installer-r2.ps1 -PackagesDirectory (Join-Path $env:WORK_DIR 'packages')

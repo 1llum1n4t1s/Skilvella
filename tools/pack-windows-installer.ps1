@@ -1,5 +1,8 @@
 # Windows SDKとVelopackをつなぐ開発用の梱包入口。
 #
+# 出力（packages\）は自動更新の更新元として R2 へ置く一式（Setup・releases.win.json・full nupkg など）。
+# 配信は tools/publish-windows-installer-r2.ps1 が行う。
+#
 # -Sign は Sigilune (https://github.com/1llum1n4t1s/Sigilune) で Certum SimplySign のクラウド鍵を使って署名する。
 # SimplySign Desktop は不要。手元は `sigilune setup` で登録済みであること、GitHub Actions
 # (.github/workflows/release-windows-installer.yml) は Environment "release" の Secrets を
@@ -39,7 +42,7 @@ if ($vpkHelp -notmatch '\bVelopack CLI 1\.2\.161\b') {
 }
 
 $signing = @()
-# Taskmetryと同じコード署名証明書。thumbprintは証明書の年次更新で変わるため、署名者はCNで照合する。
+# 本人の他アプリと共通のコード署名証明書（Certum）。thumbprintは証明書の年次更新で変わるため、署名者はCNで照合する。
 $signerCommonName = 'Open Source Developer Yuichiro Shinozaki'
 if ($Sign) {
     . (Join-Path $PSScriptRoot 'Sigilune.Common.ps1')
@@ -100,6 +103,13 @@ try {
     vpk pack @packOptions @signing
     $setup = Join-Path $packages 'SkilvellaApp-win-Setup.exe'
     if (!(Test-Path -LiteralPath $setup -PathType Leaf)) { throw 'Setup executable was not generated.' }
+    # 自動更新の更新元（R2）には、Setup のほか releases.win.json と full nupkg が必要。
+    # Setup だけでは、アプリ側から新版を見つけられない。
+    foreach ($required in @('releases.win.json', "SkilvellaApp-$version-win-full.nupkg")) {
+        if (!(Test-Path -LiteralPath (Join-Path $packages $required) -PathType Leaf)) { throw "Update feed file was not generated: $required" }
+    }
+    # 版付きの不変名の Setup も置く（固定名 Setup は最新版を指す URL として毎回置き換える）。
+    Copy-Item -LiteralPath $setup -Destination (Join-Path $packages "SkilvellaApp-$version-win-Setup.exe")
     if ($Sign) {
         $signature = Get-AuthenticodeSignature -LiteralPath $setup
         if ($signature.Status -ne 'Valid' -or

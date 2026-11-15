@@ -125,7 +125,22 @@ fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     windows_startup::attach_parent_console();
     #[cfg(all(windows, feature = "windows-installer"))]
-    velopack::VelopackApp::build().run();
+    velopack::VelopackApp::build()
+        // インストール直後: サインイン時の自動起動をSetup版へ向ける（ZIP版の登録を引き継ぐ。
+        // windows_startup::take_over_at_logon を参照）。高速フックはVelopackに時間制限があり、
+        // 失敗してもインストールを止めないため、結果は無視する。
+        .on_after_install_fast_callback(|_| {
+            if let Ok(executable) = env::current_exe() {
+                let _ = windows_startup::take_over_at_logon(&executable);
+            }
+        })
+        // アンインストール直前: Setup版自身を指す自動起動だけを外す。
+        .on_before_uninstall_fast_callback(|_| {
+            if let Ok(executable) = env::current_exe() {
+                let _ = windows_startup::remove_at_logon_if_ours(&executable);
+            }
+        })
+        .run();
     // 更新ヘルパーは同期処理だけで置換・再起動を行うため、Tokioランタイムを作る前に分岐する。
     // ヘルパーとして起動された場合に不要なワーカースレッドを生成しない。
     // インストーラー版は配置をセットアップ側が管理するため、ヘルパー分岐を持たない。
@@ -143,9 +158,17 @@ fn main() -> anyhow::Result<()> {
 #[tokio::main(worker_threads = 2)]
 async fn run(options: Options) -> anyhow::Result<()> {
     // 稼働中インスタンスと競合する場合は、保存済みの設定に触れる前に終了する。
-    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, options.port))
-        .await
-        .context("Could not bind localhost port; another instance may be running")?;
+    let listener = match tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, options.port)).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            // Setup版はコンソールを持たないため、ZIP版など別のSkilvellaがポートを使っていて起動できないことを
+            // 画面で知らせる（何も表示されずに終わると、初心者には原因が分からない）。
+            #[cfg(all(windows, feature = "windows-installer"))]
+            windows_startup::show_port_in_use(options.port);
+            return Err(error)
+                .context("Could not bind localhost port; another instance may be running");
+        }
+    };
     let home = user_home()?;
     let codex_home = env::var_os("CODEX_HOME").map(PathBuf::from);
     let state = AppState::new(Library::open_for_user(
@@ -177,6 +200,10 @@ async fn run(options: Options) -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION"),
         options.data_dir.display()
     );
+    // Setup版だけ、起動時と常駐中に更新を確認・取得する（適用は次回起動時にVelopackが行う）。
+    // サービス再起動のループの外で1回だけ開始する。専用スレッドなのでTokioのワーカーは塞がない。
+    #[cfg(all(windows, feature = "windows-installer"))]
+    skilvella::update::auto::spawn_background(state.library.data_dir().to_path_buf());
     let (control, commands) = service::Control::new();
     let server = tokio::spawn(service::run(
         listener.into_std()?,

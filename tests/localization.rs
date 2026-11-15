@@ -49,6 +49,64 @@ async fn settings_are_read_only_and_update_actions_require_csrf() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+/// 自動更新の設定保存はCSRFを要求し、Setup版以外では受け付けない。
+/// 設定画面のチェックボックスはSetup版（`windows-installer`）のときだけ表示する。
+#[tokio::test]
+async fn auto_update_setting_requires_csrf_and_is_installer_only() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(".work/test-http")
+        .join(uuid::Uuid::new_v4().to_string());
+    let state = AppState::new(Library::open(&root).unwrap());
+    let server = common::HttpServer::start(state.clone()).await;
+    let client = Client::new();
+    let base = server.base.clone();
+    let url = format!("{base}/settings/updates/auto");
+    assert_eq!(
+        client.get(&url).send().await.unwrap().status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    let response = common::form_post(&client, &url)
+        .body("csrf=wrong&auto_update=true")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = client
+        .get(format!("{base}/settings"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let installer = skilvella::update::auto::INSTALLER_BUILD;
+    assert_eq!(body.contains("name=\"auto_update\""), installer);
+    let response = common::form_post(&client, &url)
+        .body(format!("csrf={}", state.csrf))
+        .send()
+        .await
+        .unwrap();
+    if installer {
+        // 欠落したチェックボックスはOFF。Libraryとは別のJSONに保存され、再表示へ反映される。
+        assert!(response.status().is_redirection() || response.status().is_success());
+        let settings = skilvella::update::auto::load_settings(state.library.data_dir());
+        assert!(!settings.auto_update);
+        let body = client
+            .get(format!("{base}/settings"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(body.contains("name=\"auto_update\""));
+        assert!(!body.contains("name=\"auto_update\" value=\"true\" checked"));
+    } else {
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(!state.library.data_dir().join("app-update.json").exists());
+    }
+}
+
 #[tokio::test]
 async fn initial_html_is_localized_without_javascript() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

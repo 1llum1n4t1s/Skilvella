@@ -20,6 +20,8 @@ const MAC_ASSET: &str = "Skilvella-macos-aarch64.tar.gz";
 const BUILD_INFO: &str = "BUILD-INFO.txt";
 static INSTALLING: AtomicBool = AtomicBool::new(false);
 
+/// Setup版（Velopack）の自動更新。設定・間引きの判定は全ビルドで共通、Velopack呼び出しはSetup版のみ。
+pub mod auto;
 #[cfg(feature = "release-tools")]
 pub mod release;
 

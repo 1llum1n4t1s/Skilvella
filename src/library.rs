@@ -2053,6 +2053,11 @@ pub struct Library {
 }
 
 impl Library {
+    /// データフォルダー（SQLiteファイルの置き場）。Library本体とは別に保存する
+    /// 小さな設定ファイル（アプリの自動更新設定など）の置き場所として使う。
+    pub fn data_dir(&self) -> &Path {
+        self.db.parent().unwrap_or(&self.db)
+    }
     pub fn open(data_dir: &Path) -> Result<Self> {
         Self::open_inner(data_dir, None)
     }

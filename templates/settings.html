@@ -38,6 +38,10 @@
 <section class="panel stack" id="updates" data-updates data-csrf="{{ csrf }}" data-version="{{ version }}"><h2>{{ locale.text("アプリの更新") }}</h2>
 <p>{{ locale.text("現在のバージョン:") }} <strong>{{ version }}</strong></p>
 <p data-update-status role="status" aria-live="polite">{{ locale.text("更新を確認できます。") }}</p>
+{% if installer %}<form method="post" action="/settings/updates/auto" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}">
+<label class="checkbox"><input type="checkbox" name="auto_update" value="true" {% if auto_update %}checked{% endif %}> {{ locale.text("起動時に自動で更新する") }}</label>
+<p class="note">{{ locale.text("新しい版を自動で確認してダウンロードします。適用は次回の起動時です。確認は24時間に1回までです。") }}</p>
+<button type="submit" data-busy="{{ locale.text("保存中…") }}">{{ locale.text("保存") }}</button></form>{% endif %}
 <div class="actions"><button type="button" data-update-check>{{ locale.text("更新を確認") }}</button><button type="button" class="primary" data-update-install hidden>{{ locale.text("更新をインストール") }}</button><a class="button" href="https://github.com/1llum1n4t1s/Skilvella/releases" target="_blank" rel="noreferrer" data-update-release hidden>{{ locale.text("リリースを開く") }}</a></div>
 <p class="note">{{ locale.text("更新をインストールするとアプリを再起動します。編集中の内容を保存してから実行してください。") }}</p>
 </section>

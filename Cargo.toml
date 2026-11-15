@@ -11,6 +11,8 @@ default-run = "skilvella"
 [features]
 launcher = []
 windows-installer = ["dep:velopack"]
+# 隔離したE2E検証専用。環境変数 SKILVELLA_UPDATE_FEED_DIR のローカルフォルダーを更新元にできる。公開用ビルドでは指定しない。
+update-feed-test = ["windows-installer"]
 release-tools = []
 release-update-test = ["release-tools", "dep:rcgen", "dep:rustls"]
 

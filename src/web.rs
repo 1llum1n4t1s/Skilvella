@@ -91,6 +91,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/settings/updates/check", post(check_update))
         .route("/settings/updates/install", post(install_update))
+        .route("/settings/updates/auto", post(set_auto_update))
         .route("/sources/add", post(add_source))
         .route("/sources/name", post(set_source_name))
         .route("/sources/remove", post(remove_source))
@@ -119,6 +120,10 @@ struct SettingsPage {
     locale: Locale,
     csrf: String,
     version: &'static str,
+    /// Setup版（Velopack）のときだけ自動更新の設定を表示する。
+    installer: bool,
+    /// 自動更新の設定（既定ON）。`installer` が偽のときは使わない。
+    auto_update: bool,
     /// 同期先クライアントごとの状態（Codex・Claude Code・Grokの順）。
     clients: Vec<ClientSyncView>,
 }
@@ -148,6 +153,8 @@ async fn settings(Extension(locale): Extension<Locale>, State(state): State<AppS
                 .collect::<anyhow::Result<Vec<_>>>()
         })
         .await;
+    // Libraryとは別のJSONから読む。読めない場合も既定値（ON）で表示する。
+    let auto_update = crate::update::auto::load_settings(state.library.data_dir()).auto_update;
     match result {
         Ok(clients) => render(
             locale,
@@ -155,6 +162,8 @@ async fn settings(Extension(locale): Extension<Locale>, State(state): State<AppS
                 locale,
                 csrf: state.csrf.to_string(),
                 version: env!("CARGO_PKG_VERSION"),
+                installer: crate::update::auto::INSTALLER_BUILD,
+                auto_update,
                 clients,
             },
         ),
@@ -462,7 +471,12 @@ async fn check_update(
     if let Some(response) = update_csrf_error(locale, &state, &form.csrf) {
         return response;
     }
-    match tokio::task::spawn_blocking(crate::update::check).await {
+    // Setup版はVelopackの更新元で確認する（間引きは無視）。ZIP版・macOS版は従来のGitHub確認。
+    #[cfg(all(windows, feature = "windows-installer"))]
+    let task = crate::update::auto::manual_check;
+    #[cfg(not(all(windows, feature = "windows-installer")))]
+    let task = crate::update::check;
+    match tokio::task::spawn_blocking(task).await {
         Ok(Ok(info)) => axum::Json(info).into_response(),
         Ok(Err(error)) => update_failure(error.to_string()),
         Err(error) => update_failure(error.to_string()),
@@ -500,6 +514,10 @@ async fn install_update(
     if let Some(response) = update_csrf_error(locale, &state, &form.csrf) {
         return response;
     }
+    // Setup版は取得後にVelopackへ適用を依頼する。応答を返してから通常の終了処理へ進む。
+    #[cfg(all(windows, feature = "windows-installer"))]
+    let result = tokio::task::spawn_blocking(crate::update::auto::restart_to_apply).await;
+    #[cfg(not(all(windows, feature = "windows-installer")))]
     let result = tokio::task::spawn_blocking(|| {
         let prepared = crate::update::prepare_install()?;
         crate::update::spawn_installer(prepared)
@@ -512,6 +530,41 @@ async fn install_update(
         }
         Ok(Err(error)) => update_failure(error.to_string()),
         Err(error) => update_failure(error.to_string()),
+    }
+}
+#[derive(Deserialize)]
+struct AutoUpdateForm {
+    csrf: String,
+    /// チェックボックス。未チェックだと項目ごと送られないため、欠落はOFFを意味する。
+    #[serde(default)]
+    auto_update: bool,
+}
+/// 「起動時に自動で更新する」の保存。Setup版だけが対象で、設定はLibraryではなく
+/// データフォルダーの別JSONに保存する。通常のフォームPOSTなのでJavaScriptなしでも動く。
+async fn set_auto_update(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(form): Form<AutoUpdateForm>,
+) -> Response {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
+        return response;
+    }
+    if !crate::update::auto::INSTALLER_BUILD {
+        return error(
+            locale,
+            StatusCode::NOT_FOUND,
+            "この環境では自動更新の設定を利用できません。",
+        );
+    }
+    let data_dir = state.library.data_dir().to_path_buf();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::update::auto::set_auto_update(&data_dir, form.auto_update)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => Redirect::to("/settings#updates").into_response(),
+        Ok(Err(e)) => failure(locale, e),
+        Err(e) => failure(locale, e.into()),
     }
 }
 fn render(locale: Locale, t: impl Template) -> Response {

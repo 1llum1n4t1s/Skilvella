@@ -21,7 +21,12 @@ use windows_sys::Win32::{
 
 pub const NO_AUTOSTART: &str = "--no-autostart";
 const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+// 検証用の `update-feed-test` ビルドは、Setupのフックが利用者の実際の自動起動（ZIP版の登録など）を
+// 置き換えないよう、別の値名を使う。取り込み・置き換えの判定そのものは隔離ハイブの単体テストで確かめる。
+#[cfg(not(feature = "update-feed-test"))]
 const NAME: &str = "Skilvella";
+#[cfg(feature = "update-feed-test")]
+const NAME: &str = "Skilvella update-feed-test";
 
 pub fn attach_parent_console() {
     // Explorerからの起動ではコンソールを作らない。CLIの既存の出力先も保持する。
@@ -127,11 +132,151 @@ fn ensure_run_value(root: HKEY, executable: &Path) -> Result<()> {
         ERROR_FILE_NOT_FOUND => {}
         error => return Err(io::Error::from_raw_os_error(error as i32)).context("Read Run value"),
     }
+    write_run_value(key.0, executable)
+}
 
+/// Setup版（Velopack）のインストール直後に、サインイン時の自動起動をSetup版へ向ける。
+///
+/// 目的は単体版（ZIP版）からの移行。ZIP版は同じ値名 `Skilvella` で自分を登録しており、
+/// 残したままだとサインイン時に旧版が先に起動して既定のポートを取り、Setup版が起動できなくなる。
+/// - 値が無い: Setup版を登録する（Setup版もPC再起動後にMCPを提供できるようにする）。
+/// - 値が `skilvella.exe` を指す（ZIP版・旧Setup版・Toolport経由など、同じアプリの別配置）: Setup版へ置き換える。
+/// - それ以外のプログラムを指す: 利用者の設定として残す。
+///
+/// 利用者がタスクマネージャー等で自動起動を無効にした状態は `StartupApproved` 側に値名で記録されるため、
+/// ここで Run 値を置き換えても無効のまま保たれる。
+#[cfg_attr(not(feature = "windows-installer"), allow(dead_code))]
+pub fn take_over_at_logon(executable: &Path) -> Result<()> {
+    take_over_run_value(HKEY_CURRENT_USER, executable)
+}
+
+/// Setup版のアンインストール直前に、サインイン時の自動起動を外す。Setup版自身を指す場合だけ削除し、
+/// 利用者が別の配置（ZIP版など）へ戻した登録は残す。
+#[cfg_attr(not(feature = "windows-installer"), allow(dead_code))]
+pub fn remove_at_logon_if_ours(executable: &Path) -> Result<()> {
+    remove_run_value_if_ours(HKEY_CURRENT_USER, executable)
+}
+
+/// Setup版がポートを使えずに起動できなかったことを、メッセージボックスで知らせる。
+/// 多くは単体版（ZIP版）が動いたままの場合なので、旧版の終了を案内する。
+#[cfg(feature = "windows-installer")]
+pub fn show_port_in_use(port: u16) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW};
+    let text = wide(&format!(
+        "Skilvella could not start because port {port} is already in use.\n\
+         Another copy of Skilvella (for example the ZIP version) may still be running. \
+         Quit it from its tray icon, then start Skilvella again.\n\n\
+         ポート {port} が使用中のため、Skilvella を起動できませんでした。\n\
+         別の Skilvella（ZIP版など）が動いている可能性があります。\
+         タスクトレイのアイコンから終了してから、もう一度起動してください。"
+    ));
+    let title = wide("Skilvella");
+    unsafe {
+        MessageBoxW(
+            null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONWARNING,
+        )
+    };
+}
+
+/// Run 値（REG_SZ）を読む。値が無ければ `None`。
+fn read_run_value(key: HKEY) -> Result<Option<String>> {
+    let name = wide(NAME);
+    let mut kind = 0;
+    let mut bytes = 0_u32;
+    match unsafe {
+        RegQueryValueExW(
+            key,
+            name.as_ptr(),
+            std::ptr::null(),
+            &mut kind,
+            null_mut(),
+            &mut bytes,
+        )
+    } {
+        ERROR_SUCCESS | ERROR_MORE_DATA => {}
+        ERROR_FILE_NOT_FOUND => return Ok(None),
+        error => return Err(io::Error::from_raw_os_error(error as i32)).context("Read Run value"),
+    }
+    // 文字列以外（REG_EXPAND_SZ を含む）は自分の書いた形式ではないため、中身を解釈しない。
+    if kind != REG_SZ {
+        return Ok(Some(String::new()));
+    }
+    let mut buffer = vec![0_u16; (bytes as usize).div_ceil(2) + 1];
+    let mut size = size_of_val(buffer.as_slice()) as u32;
+    check(unsafe {
+        RegQueryValueExW(
+            key,
+            name.as_ptr(),
+            std::ptr::null(),
+            null_mut(),
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+        )
+    })
+    .context("Read Run value")?;
+    let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+    Ok(Some(String::from_utf16_lossy(&buffer[..end])))
+}
+
+/// 起動コマンドの先頭にある実行ファイルのパスを取り出す（引用符付き・無しの両方）。
+fn command_executable(command: &str) -> Option<PathBuf> {
+    let command = command.trim_start();
+    let path = if let Some(rest) = command.strip_prefix('"') {
+        &rest[..rest.find('"')?]
+    } else {
+        // 引用符が無い場合は、最初の空白までを実行ファイルとみなす（Windowsの解釈と同じく曖昧なため最小限）。
+        command.split_whitespace().next()?
+    };
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
+/// Windowsのパスとして同じか（大文字小文字・区切り文字の違いを無視する）。
+fn same_path(left: &Path, right: &Path) -> bool {
+    let normalize = |path: &Path| path.to_string_lossy().replace('/', "\\").to_lowercase();
+    normalize(left) == normalize(right)
+}
+
+fn take_over_run_value(root: HKEY, executable: &Path) -> Result<()> {
+    let key = RunKey::open(root)?;
+    if let Some(current) = read_run_value(key.0)? {
+        match command_executable(&current) {
+            // 既にこの実行ファイルを指していれば何もしない（引数を含め書き直さない）。
+            Some(path) if same_path(&path, executable) => return Ok(()),
+            // 同じアプリの別配置だけを引き継ぐ。
+            Some(path)
+                if path
+                    .file_name()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("skilvella.exe")) => {}
+            _ => return Ok(()),
+        }
+    }
+    write_run_value(key.0, executable)
+}
+
+fn remove_run_value_if_ours(root: HKEY, executable: &Path) -> Result<()> {
+    use windows_sys::Win32::System::Registry::RegDeleteValueW;
+    let key = RunKey::open(root)?;
+    let Some(current) = read_run_value(key.0)? else {
+        return Ok(());
+    };
+    if !command_executable(&current).is_some_and(|path| same_path(&path, executable)) {
+        return Ok(());
+    }
+    match unsafe { RegDeleteValueW(key.0, wide(NAME).as_ptr()) } {
+        ERROR_SUCCESS | ERROR_FILE_NOT_FOUND => Ok(()),
+        error => Err(io::Error::from_raw_os_error(error as i32)).context("Delete Run value"),
+    }
+}
+
+fn write_run_value(key: HKEY, executable: &Path) -> Result<()> {
+    let name = wide(NAME);
     let command = startup_command(executable)?;
     check(unsafe {
         RegSetValueExW(
-            key.0,
+            key,
             name.as_ptr(),
             0,
             REG_SZ,
@@ -222,6 +367,108 @@ mod tests {
     use windows_sys::Win32::System::Registry::{
         KEY_ALL_ACCESS, REG_PROCESS_APPKEY, RegLoadAppKeyW,
     };
+
+    /// ファイルに閉じた専用ハイブを開く。実際のユーザーのRunキーには触れない。
+    fn private_hive(label: &str) -> Result<RunKey> {
+        let directory = env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir)
+            .join(format!("{label}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory)?;
+        let file: Vec<_> = directory
+            .join("user.hiv")
+            .as_os_str()
+            .encode_wide()
+            .chain([0])
+            .collect();
+        let mut root = null_mut();
+        check(unsafe {
+            RegLoadAppKeyW(
+                file.as_ptr(),
+                &mut root,
+                KEY_ALL_ACCESS,
+                REG_PROCESS_APPKEY,
+                0,
+            )
+        })?;
+        Ok(RunKey(root))
+    }
+
+    fn set_raw(root: HKEY, command: &str) -> Result<()> {
+        let key = RunKey::open(root)?;
+        let value = wide(command);
+        check(unsafe {
+            RegSetValueExW(
+                key.0,
+                wide(NAME).as_ptr(),
+                0,
+                REG_SZ,
+                value.as_ptr().cast(),
+                size_of_val(value.as_slice()) as u32,
+            )
+        })?;
+        Ok(())
+    }
+
+    fn get_raw(root: HKEY) -> Result<Option<String>> {
+        read_run_value(RunKey::open(root)?.0)
+    }
+
+    #[test]
+    fn setup_takes_over_the_zip_edition_and_keeps_other_programs() -> Result<()> {
+        let setup = Path::new(r"C:\Users\利用者\AppData\Local\SkilvellaApp\current\skilvella.exe");
+        let expected =
+            r#""C:\Users\利用者\AppData\Local\SkilvellaApp\current\skilvella.exe" --no-autostart"#;
+
+        // 値が無ければ登録する（Setup版も再起動後に起動する）。
+        let root = private_hive("takeover-empty")?;
+        take_over_run_value(root.0, setup)?;
+        assert_eq!(get_raw(root.0)?.as_deref(), Some(expected));
+
+        // ZIP版（引用符付き・無しの両方）の登録はSetup版へ置き換える。
+        for zip in [
+            r#""C:\Users\利用者\AppData\Local\Skilvella\bin\skilvella.exe" --no-autostart"#,
+            r"D:\Tools\SKILVELLA.EXE --no-autostart",
+        ] {
+            let root = private_hive("takeover-zip")?;
+            set_raw(root.0, zip)?;
+            take_over_run_value(root.0, setup)?;
+            assert_eq!(get_raw(root.0)?.as_deref(), Some(expected));
+        }
+
+        // 同名でも別のプログラムを指す登録と、既に自分を指す登録（引数違いも含む）は書き換えない。
+        for kept in [
+            r#""D:\Other\launcher.exe" skilvella"#,
+            r#""c:/users/利用者/appdata/local/skilvellaapp/current/SKILVELLA.exe" --custom"#,
+            "",
+        ] {
+            let root = private_hive("takeover-keep")?;
+            set_raw(root.0, kept)?;
+            take_over_run_value(root.0, setup)?;
+            assert_eq!(get_raw(root.0)?.as_deref(), Some(kept));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn uninstall_removes_only_its_own_logon_entry() -> Result<()> {
+        let setup = Path::new(r"C:\Users\利用者\AppData\Local\SkilvellaApp\current\skilvella.exe");
+
+        let root = private_hive("uninstall-ours")?;
+        take_over_run_value(root.0, setup)?;
+        remove_run_value_if_ours(root.0, setup)?;
+        assert_eq!(get_raw(root.0)?, None);
+        // 値が無い状態での再実行も成功する。
+        remove_run_value_if_ours(root.0, setup)?;
+
+        // 利用者がZIP版へ戻した登録は残す。
+        let zip = r#""C:\Users\利用者\AppData\Local\Skilvella\bin\skilvella.exe" --no-autostart"#;
+        let root = private_hive("uninstall-zip")?;
+        set_raw(root.0, zip)?;
+        remove_run_value_if_ours(root.0, setup)?;
+        assert_eq!(get_raw(root.0)?.as_deref(), Some(zip));
+        Ok(())
+    }
 
     #[test]
     fn logon_runs_the_same_executable_without_registering_again() {
