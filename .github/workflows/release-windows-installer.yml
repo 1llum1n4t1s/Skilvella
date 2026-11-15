@@ -123,7 +123,7 @@ jobs:
 
       - name: Sigilune を導入
         id: sigilune
-        uses: 1llum1n4t1s/Sigilune@v1
+        uses: 1llum1n4t1s/Sigilune@c12f5c92398c3648cf19651f5b80796efdfdd06a # v1.1.2
 
       - name: 梱包・署名
         env:
