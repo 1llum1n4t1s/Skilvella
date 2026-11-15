@@ -105,7 +105,7 @@ try {
     if (!(Test-Path -LiteralPath $setup -PathType Leaf)) { throw 'Setup executable was not generated.' }
     # 自動更新の更新元（R2）には、Setup のほか releases.win.json と full nupkg が必要。
     # Setup だけでは、アプリ側から新版を見つけられない。
-    foreach ($required in @('releases.win.json', "SkilvellaApp-$version-win-full.nupkg")) {
+    foreach ($required in @('releases.win.json', "SkilvellaApp-$version-full.nupkg")) {
         if (!(Test-Path -LiteralPath (Join-Path $packages $required) -PathType Leaf)) { throw "Update feed file was not generated: $required" }
     }
     # 版付きの不変名の Setup も置く（固定名 Setup は最新版を指す URL として毎回置き換える）。

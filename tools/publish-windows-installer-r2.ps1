@@ -36,7 +36,7 @@ $files = @(Get-ChildItem -LiteralPath $packagesRoot.FullName -File -Force)
 foreach ($required in 'releases.win.json', 'SkilvellaApp-win-Setup.exe') {
     if ($files.Name -notcontains $required) { throw "Missing required file: $required" }
 }
-if (!($files | Where-Object { $_.Name -like 'SkilvellaApp-*-win-full.nupkg' })) { throw 'Missing the full nupkg.' }
+if (!($files | Where-Object { $_.Name -like 'SkilvellaApp-*-full.nupkg' })) { throw 'Missing the full nupkg.' }
 
 # 固定名のメタデータ。manifest (releases.*.json) は最後に置く。
 function Get-Order([IO.FileInfo]$File) {
