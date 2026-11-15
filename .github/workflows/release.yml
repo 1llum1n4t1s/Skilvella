@@ -152,7 +152,10 @@ jobs:
           EXPECTED_VERSION: ${{ needs.guard.outputs.version }}
           SKILVELLA_LANGUAGE: en
         run: |
-          ./target/release/skilvella --help | grep -qx "Skilvella $EXPECTED_VERSION" || { echo "unexpected version" >&2; exit 1; }
+          # 出力を一度変数に受けてから照合する。`--help | grep -q` は grep が先に閉じたパイプへ書き込もうとして
+          # 本体が Broken pipe で異常終了し、pipefail で失敗扱いになる(1.1.9 の初回 run で発生)。
+          help_text="$(./target/release/skilvella --help)"
+          printf '%s\n' "$help_text" | grep -qx "Skilvella $EXPECTED_VERSION" || { echo "unexpected version" >&2; exit 1; }
           # リンカーが付ける ad-hoc 署名の状態（BUILD-INFO.txt の signing=adhoc）を確かめる。
           codesign --verify --verbose ./target/release/skilvella
 
