@@ -13,11 +13,11 @@ A local app that organizes large collections of `SKILL.md` files in your browser
 
 On Windows, run [SkilvellaApp-win-Setup.exe](https://skilvella.kagayoi.com/SkilvellaApp-win-Setup.exe) and launch "Skilvella" from the Start menu. The installer (Setup) version registers itself at install time to start when the current user signs in. When switching from an existing standalone (ZIP) version, first quit the old version from its task tray icon (if the old version is still running, the default port (7465) is unavailable, and the installer (Setup) version shows a message to that effect and does not start). The ZIP version's sign-in autostart registration is switched over to the installer (Setup) version automatically at install time, and the Start menu "Skilvella" shortcut then points to the installer (Setup) version as well. If you had disabled autostart, it stays disabled. Uninstalling also removes the autostart registration that points to the installer (Setup) version. The old version's folder is not deleted automatically, so remove it by hand if you no longer need it. If you are using an old installer (Setup) version without an auto-update mechanism (1.1.4 to 1.1.6), reinstall with the new Setup once. The standard data folder `%LOCALAPPDATA%\Skilvella` is shared and remains after uninstalling. The installer version updates automatically ([App updates](#app-updates)).
 
-To use the ZIP version or the macOS version, download the matching package from [GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest) and extract it.
+To use the ZIP version or the macOS version, download the matching package from [Windows x64](https://skilvella.kagayoi.com/portable/Skilvella-windows-x86_64.zip) or [Mac Apple Silicon](https://skilvella.kagayoi.com/portable/Skilvella-macos-aarch64.tar.gz) (hosted at skilvella.kagayoi.com) and extract it. ZIP and macOS builds up to 1.1.8 checked GitHub for updates, which is no longer used, so if you are on one of them, download the new package manually once.
 
 - Windows x64: Extract `Skilvella-windows-x86_64.zip` to the folder you will keep using, then launch `skilvella.exe`. It runs in the task tray without opening a terminal, and the first normal launch adds "Skilvella" to the current user's Start menu.
 - Mac Apple Silicon: Extract `Skilvella-macos-aarch64.tar.gz` and run `./skilvella` in a terminal.
-- Before extracting, you can verify the package's SHA-256 against `SHA256SUMS.txt`.
+- Before extracting, you can verify the package's SHA-256 against [`SHA256SUMS.txt`](https://skilvella.kagayoi.com/portable/SHA256SUMS.txt).
 
 For Linux or building from source, see the [development guide](docs/DEVELOPMENT.md).
 
@@ -57,7 +57,7 @@ When there are read errors, open the cross-folder error list from the library's 
 
 The following applies to the standalone (ZIP) version and to Mac.
 
-You can check for the latest stable release on GitHub from the update section in "Settings" or from the tray menu's "Check for updates". Choosing "Install update" downloads the package for Windows x64 / Mac Apple Silicon and `SHA256SUMS.txt` over HTTPS, verifies the SHA-256, and then applies it. This requires the OS-bundled `curl` and write permission to the executable's location. In-app updating is not supported on Linux or other CPUs.
+You can check for the latest stable release at skilvella.kagayoi.com from the update section in "Settings" or from the tray menu's "Check for updates". Choosing "Install update" downloads the package for Windows x64 / Mac Apple Silicon and `SHA256SUMS.txt` over HTTPS, verifies the SHA-256, and then applies it. This requires the OS-bundled `curl` and write permission to the executable's location. In-app updating is not supported on Linux or other CPUs.
 
 The update waits for in-flight HTTP operations to finish before exiting, then restarts with the same launch arguments and working folder. Reconnect your MCP clients. If package verification fails, the current version is kept. If the new process cannot be started after applying the update, it tries to restore the old executable or the Toolport reference target. The settings page that started the update reloads automatically once the new version responds. If you perform an update operation on an old settings page that was already open before the app restarted, you are asked to reload the page.
 

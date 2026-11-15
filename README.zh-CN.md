@@ -13,11 +13,11 @@
 
 在 Windows 上，运行 [SkilvellaApp-win-Setup.exe](https://skilvella.kagayoi.com/SkilvellaApp-win-Setup.exe)，然后从开始菜单启动“Skilvella”。安装程序（Setup）版会在安装时自行注册，使其在当前用户登录时启动。从已有的独立版（ZIP）切换时，请先从任务栏托盘图标退出旧版本（如果旧版本仍在运行，默认端口（7465）将无法使用，安装程序（Setup）版会显示相应提示并且不会启动）。ZIP 版的登录自启动注册会在安装时自动切换为安装程序（Setup）版，开始菜单中的“Skilvella”快捷方式也会随之指向安装程序（Setup）版。如果你曾禁用自启动，它仍保持禁用。卸载时也会移除指向安装程序（Setup）版的自启动注册。旧版本的文件夹不会被自动删除，如不再需要，请手动删除。如果你正在使用没有自动更新机制的旧版安装程序（Setup）（1.1.4 至 1.1.6），请用新的 Setup 重新安装一次。标准数据文件夹 `%LOCALAPPDATA%\Skilvella` 是共用的，卸载后仍会保留。安装程序版会自动更新（[应用更新](#app-updates)）。
 
-如需使用 ZIP 版或 macOS 版，请从 [GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest) 下载对应的软件包并解压。
+如需使用 ZIP 版或 macOS 版，请下载对应的软件包（[Windows x64](https://skilvella.kagayoi.com/portable/Skilvella-windows-x86_64.zip) 或 [Mac Apple Silicon](https://skilvella.kagayoi.com/portable/Skilvella-macos-aarch64.tar.gz)，由 skilvella.kagayoi.com 提供）并解压。1.1.8 及更早的 ZIP 版和 macOS 版通过 GitHub 检查更新，该方式已不再使用，因此如果你正在使用这些版本，请手动重新安装一次新的软件包。
 
 - Windows x64：将 `Skilvella-windows-x86_64.zip` 解压到你要长期使用的文件夹，然后启动 `skilvella.exe`。它在任务栏托盘中运行，不会打开终端，首次正常启动时会将“Skilvella”添加到当前用户的开始菜单。
 - Mac Apple Silicon：解压 `Skilvella-macos-aarch64.tar.gz`，然后在终端中运行 `./skilvella`。
-- 解压前，可以对照 `SHA256SUMS.txt` 校验软件包的 SHA-256。
+- 解压前，可以对照 [`SHA256SUMS.txt`](https://skilvella.kagayoi.com/portable/SHA256SUMS.txt) 校验软件包的 SHA-256。
 
 Linux 或从源代码构建，请参阅[开发指南](docs/DEVELOPMENT.md)。
 
@@ -57,7 +57,7 @@ Skilvella **不限深度、递归地**搜索已注册文件夹中的 `SKILL.md` 
 
 以下内容适用于独立版（ZIP）和 Mac。
 
-你可以在“设置”的更新部分或托盘菜单的“检查更新”中，查看 GitHub 上最新的稳定版本。选择“安装更新”会通过 HTTPS 下载适用于 Windows x64 / Mac Apple Silicon 的软件包和 `SHA256SUMS.txt`，校验 SHA-256 后再应用。这需要操作系统自带的 `curl`，以及对可执行文件所在位置的写入权限。Linux 或其他 CPU 不支持应用内更新。
+你可以在“设置”的更新部分或托盘菜单的“检查更新”中，查看 skilvella.kagayoi.com 上最新的稳定版本。选择“安装更新”会通过 HTTPS 下载适用于 Windows x64 / Mac Apple Silicon 的软件包和 `SHA256SUMS.txt`，校验 SHA-256 后再应用。这需要操作系统自带的 `curl`，以及对可执行文件所在位置的写入权限。Linux 或其他 CPU 不支持应用内更新。
 
 更新会等待正在处理的 HTTP 操作完成后再退出，然后以相同的启动参数和工作文件夹重新启动。请重新连接你的 MCP 客户端。如果软件包校验失败，则保留当前版本。如果应用更新后无法启动新进程，它会尝试恢复旧的可执行文件或 Toolport 的引用目标。发起更新的设置页面会在新版本响应后自动重新加载。如果你在应用重启前就已打开的旧设置页面上执行更新操作，系统会请你重新加载页面。
 

@@ -13,11 +13,11 @@
 
 Windowsでは [SkilvellaApp-win-Setup.exe](https://skilvella.kagayoi.com/SkilvellaApp-win-Setup.exe) を実行し、スタートメニューの「Skilvella」から起動できます。Setup版はインストール時に、現在のユーザーのサインイン時に起動するよう登録します。既存の単体版（ZIP版）から切り替えるときは、先に旧版をタスクトレイのアイコンから終了してください（旧版が動いたままだと既定のポート（7465）が使えず、Setup版はその旨を表示して起動しません）。ZIP版のサインイン時の自動起動の登録は、インストール時にSetup版へ自動で切り替わり、スタートメニューの「Skilvella」もSetup版を指すようになります。自動起動を無効にしていた場合は無効のまま引き継がれます。アンインストールすると、Setup版を指す自動起動の登録も外れます。旧版のフォルダーは自動では削除しないため、不要なら手で削除してください。自動更新の仕組みを持たない旧Setup版（1.1.4〜1.1.6）を使っている場合は、一度だけ新しいSetupを入れ直してください。標準のデータフォルダー `%LOCALAPPDATA%\Skilvella` は共用され、アンインストール後も残ります。インストーラー版は自動で更新されます（[アプリの更新](#app-updates)）。
 
-ZIP版またはmacOS版を使う場合は、[GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest)から対応する配布物を取得して展開してください。
+ZIP版またはmacOS版を使う場合は、[Windows x64](https://skilvella.kagayoi.com/portable/Skilvella-windows-x86_64.zip)または[Mac Apple Silicon](https://skilvella.kagayoi.com/portable/Skilvella-macos-aarch64.tar.gz)の配布物（skilvella.kagayoi.comで配信）を取得して展開してください。1.1.8以前のZIP版・macOS版はGitHubで更新を確認しており、現在は使われないため、該当する場合は新しい配布物を一度だけ手動で入れ直してください。
 
 - Windows x64: `Skilvella-windows-x86_64.zip` を使い続けるフォルダーに展開し、`skilvella.exe` を起動します。ターミナルを開かずタスクトレイに常駐し、初回の通常起動で現在のユーザーのスタートメニューに「Skilvella」が追加されます。
 - Mac Apple Silicon: `Skilvella-macos-aarch64.tar.gz` を展開し、ターミナルで `./skilvella` を起動します。
-- 展開前に、配布物のSHA-256を `SHA256SUMS.txt` と照合できます。
+- 展開前に、配布物のSHA-256を [`SHA256SUMS.txt`](https://skilvella.kagayoi.com/portable/SHA256SUMS.txt) と照合できます。
 
 Linuxで利用する場合やソースからビルドする場合は[開発手順](docs/DEVELOPMENT.md)を参照してください。
 
@@ -57,7 +57,7 @@ Windowsの単体配置では、引数なしで起動すると、現在のユー�
 
 以下は単体版（ZIP版）とMac向けの更新です。
 
-「設定」の更新欄、またはトレイメニューの「更新を確認」からGitHubの最新安定版を確認できます。「更新をインストール」を選ぶと、Windows x64 / Mac Apple Silicon向けの配布物と `SHA256SUMS.txt` をHTTPSで取得し、SHA-256を照合してから適用します。OS同梱の `curl` と実行ファイルの保存先への書込み権限が必要です。Linuxとその他のCPUではアプリ内適用に対応しません。
+「設定」の更新欄、またはトレイメニューの「更新を確認」からskilvella.kagayoi.comの最新安定版を確認できます。「更新をインストール」を選ぶと、Windows x64 / Mac Apple Silicon向けの配布物と `SHA256SUMS.txt` をHTTPSで取得し、SHA-256を照合してから適用します。OS同梱の `curl` と実行ファイルの保存先への書込み権限が必要です。Linuxとその他のCPUではアプリ内適用に対応しません。
 
 更新は処理中のHTTP操作の完了を待って終了し、同じ起動引数・作業フォルダーで再起動します。MCPクライアントは再接続してください。配布物の照合に失敗した場合は現在の版を維持します。適用後に新しいプロセスを起動できない場合は、旧実行ファイルまたはToolportの参照先の復元を試みます。更新を開始した設定画面は、新しい版が応答すると自動で再読み込みします。アプリの再起動前から開いていた古い設定画面で更新操作をすると、画面の再読み込みを案内します。
 

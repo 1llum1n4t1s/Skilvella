@@ -13,11 +13,11 @@
 
 在 Windows 上，請執行 [SkilvellaApp-win-Setup.exe](https://skilvella.kagayoi.com/SkilvellaApp-win-Setup.exe)，然後從開始功能表啟動「Skilvella」。安裝程式（Setup）版會在安裝時自行註冊，於目前使用者登入時自動啟動。從既有的獨立版（ZIP）切換時，請先從工作列通知區域的圖示結束舊版（若舊版仍在執行，預設連接埠（7465）將無法使用，安裝程式（Setup）版會顯示相關訊息且不會啟動）。ZIP 版的登入自動啟動註冊，會在安裝時自動切換為安裝程式（Setup）版，開始功能表中的「Skilvella」捷徑也會隨之指向安裝程式（Setup）版。如果你原本已停用自動啟動，則會維持停用。解除安裝時，也會一併移除指向安裝程式（Setup）版的自動啟動註冊。舊版的資料夾不會自動刪除，若不再需要，請自行移除。如果你使用的是沒有自動更新機制的舊版安裝程式（Setup）版（1.1.4 至 1.1.6），請使用新的 Setup 重新安裝一次。標準資料資料夾 `%LOCALAPPDATA%\Skilvella` 為共用，解除安裝後仍會保留。安裝程式版會自動更新（[應用程式更新](#app-updates)）。
 
-若要使用 ZIP 版或 macOS 版，請從 [GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest) 下載對應的套件並解壓縮。
+若要使用 ZIP 版或 macOS 版，請下載對應的套件（[Windows x64](https://skilvella.kagayoi.com/portable/Skilvella-windows-x86_64.zip) 或 [Mac Apple Silicon](https://skilvella.kagayoi.com/portable/Skilvella-macos-aarch64.tar.gz)，由 skilvella.kagayoi.com 提供）並解壓縮。1.1.8 及更早的 ZIP 版與 macOS 版是透過 GitHub 檢查更新，此方式已不再使用，因此若你正在使用這些版本，請手動重新安裝一次新的套件。
 
 - Windows x64：將 `Skilvella-windows-x86_64.zip` 解壓縮到你要長期使用的資料夾，然後啟動 `skilvella.exe`。它會在工作列通知區域執行，不會開啟終端機，第一次正常啟動時會將「Skilvella」新增到目前使用者的開始功能表。
 - Mac Apple Silicon：解壓縮 `Skilvella-macos-aarch64.tar.gz`，並在終端機中執行 `./skilvella`。
-- 解壓縮之前，你可以依據 `SHA256SUMS.txt` 驗證套件的 SHA-256。
+- 解壓縮之前，你可以依據 [`SHA256SUMS.txt`](https://skilvella.kagayoi.com/portable/SHA256SUMS.txt) 驗證套件的 SHA-256。
 
 若要在 Linux 上使用或從原始碼建置，請參閱[開發指南](docs/DEVELOPMENT.md)。
 
@@ -57,7 +57,7 @@ Skilvella 會**不限深度地遞迴**搜尋已註冊資料夾中的 `SKILL.md` 
 
 以下適用於獨立版（ZIP）與 Mac。
 
-你可以從「設定」中的更新區段，或從系統匣選單的「檢查更新」，查看 GitHub 上最新的穩定版。選擇「安裝更新」會透過 HTTPS 下載適用於 Windows x64 / Mac Apple Silicon 的套件與 `SHA256SUMS.txt`，驗證 SHA-256 後再套用。這需要作業系統內建的 `curl`，以及可執行檔所在位置的寫入權限。Linux 或其他 CPU 不支援應用程式內更新。
+你可以從「設定」中的更新區段，或從系統匣選單的「檢查更新」，查看 skilvella.kagayoi.com 上最新的穩定版。選擇「安裝更新」會透過 HTTPS 下載適用於 Windows x64 / Mac Apple Silicon 的套件與 `SHA256SUMS.txt`，驗證 SHA-256 後再套用。這需要作業系統內建的 `curl`，以及可執行檔所在位置的寫入權限。Linux 或其他 CPU 不支援應用程式內更新。
 
 更新會等待進行中的 HTTP 操作完成後才結束，然後以相同的啟動引數與工作資料夾重新啟動。請重新連線你的 MCP 用戶端。如果套件驗證失敗，則會保留目前的版本。若套用更新後無法啟動新的處理程序，它會嘗試還原舊的可執行檔或 Toolport 的參照目標。發起更新的設定頁面會在新版本回應後自動重新載入。如果你在應用程式重新啟動之前就已開啟的舊設定頁面上進行更新操作，系統會要求你重新載入頁面。
 

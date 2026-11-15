@@ -13,11 +13,11 @@
 
 Windows에서는 [SkilvellaApp-win-Setup.exe](https://skilvella.kagayoi.com/SkilvellaApp-win-Setup.exe)를 실행한 뒤 시작 메뉴에서 "Skilvella"를 실행하세요. 설치 프로그램(Setup) 버전은 설치할 때 현재 사용자가 로그인하면 시작되도록 자신을 등록합니다. 기존 독립 실행형(ZIP) 버전에서 전환할 때는 먼저 작업 표시줄 트레이 아이콘에서 이전 버전을 종료하세요(이전 버전이 실행 중이면 기본 포트(7465)를 사용할 수 없으므로, 설치 프로그램(Setup) 버전은 그 내용을 안내하는 메시지를 표시하고 시작하지 않습니다). ZIP 버전의 로그인 시 자동 시작 등록은 설치할 때 설치 프로그램(Setup) 버전으로 자동 전환되며, 시작 메뉴의 "Skilvella" 바로 가기도 설치 프로그램(Setup) 버전을 가리키게 됩니다. 자동 시작을 꺼 두었다면 꺼진 상태로 유지됩니다. 제거할 때는 설치 프로그램(Setup) 버전을 가리키는 자동 시작 등록도 함께 삭제됩니다. 이전 버전의 폴더는 자동으로 삭제되지 않으므로 필요 없으면 직접 삭제하세요. 자동 업데이트 기능이 없는 이전 설치 프로그램(Setup) 버전(1.1.4~1.1.6)을 사용 중이라면 새 Setup으로 한 번 다시 설치하세요. 표준 데이터 폴더 `%LOCALAPPDATA%\Skilvella`는 공유되며 제거 후에도 남습니다. 설치 프로그램 버전은 자동으로 업데이트됩니다([앱 업데이트](#app-updates)).
 
-ZIP 버전이나 macOS 버전을 사용하려면 [GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest)에서 해당하는 패키지를 내려받아 압축을 풀어 주세요.
+ZIP 버전이나 macOS 버전을 사용하려면 해당하는 패키지([Windows x64](https://skilvella.kagayoi.com/portable/Skilvella-windows-x86_64.zip) 또는 [Mac Apple Silicon](https://skilvella.kagayoi.com/portable/Skilvella-macos-aarch64.tar.gz), skilvella.kagayoi.com에서 제공)를 내려받아 압축을 풀어 주세요. 1.1.8 이하의 ZIP 버전과 macOS 버전은 GitHub에서 업데이트를 확인했으며 이 방식은 더 이상 사용되지 않으므로, 해당 버전을 사용 중이라면 새 패키지를 한 번 직접 설치해 주세요.
 
 - Windows x64: `Skilvella-windows-x86_64.zip`을 계속 사용할 폴더에 압축 해제한 뒤 `skilvella.exe`를 실행하세요. 터미널을 열지 않고 작업 표시줄 트레이에서 실행되며, 처음 일반 실행할 때 현재 사용자의 시작 메뉴에 "Skilvella"가 추가됩니다.
 - Mac Apple Silicon: `Skilvella-macos-aarch64.tar.gz`의 압축을 풀고 터미널에서 `./skilvella`를 실행하세요.
-- 압축을 풀기 전에 패키지의 SHA-256을 `SHA256SUMS.txt`와 대조해 확인할 수 있습니다.
+- 압축을 풀기 전에 패키지의 SHA-256을 [`SHA256SUMS.txt`](https://skilvella.kagayoi.com/portable/SHA256SUMS.txt)와 대조해 확인할 수 있습니다.
 
 Linux나 소스에서 빌드하는 방법은 [개발 가이드](docs/DEVELOPMENT.md)를 참고하세요.
 
@@ -57,7 +57,7 @@ Skilvella는 등록된 폴더의 `SKILL.md`를 **깊이 제한 없이 재귀적�
 
 다음은 독립 실행형(ZIP) 버전과 Mac에 해당합니다.
 
-"설정"의 업데이트 영역이나 트레이 메뉴의 "업데이트 확인"에서 GitHub의 최신 안정 릴리스를 확인할 수 있습니다. "업데이트 설치"를 선택하면 Windows x64 / Mac Apple Silicon용 패키지와 `SHA256SUMS.txt`를 HTTPS로 내려받아 SHA-256을 검증한 뒤 적용합니다. 이를 위해서는 OS에 포함된 `curl`과 실행 파일 위치에 대한 쓰기 권한이 필요합니다. Linux나 다른 CPU에서는 앱 내 업데이트를 지원하지 않습니다.
+"설정"의 업데이트 영역이나 트레이 메뉴의 "업데이트 확인"에서 skilvella.kagayoi.com의 최신 안정 릴리스를 확인할 수 있습니다. "업데이트 설치"를 선택하면 Windows x64 / Mac Apple Silicon용 패키지와 `SHA256SUMS.txt`를 HTTPS로 내려받아 SHA-256을 검증한 뒤 적용합니다. 이를 위해서는 OS에 포함된 `curl`과 실행 파일 위치에 대한 쓰기 권한이 필요합니다. Linux나 다른 CPU에서는 앱 내 업데이트를 지원하지 않습니다.
 
 업데이트는 처리 중인 HTTP 작업이 끝나기를 기다린 뒤 종료하고, 같은 실행 인수와 작업 폴더로 다시 시작합니다. MCP 클라이언트를 다시 연결하세요. 패키지 검증에 실패하면 현재 버전이 유지됩니다. 업데이트를 적용한 뒤 새 프로세스를 시작할 수 없으면 이전 실행 파일이나 Toolport 참조 대상을 복원하려고 시도합니다. 업데이트를 시작한 설정 페이지는 새 버전이 응답하면 자동으로 새로 고쳐집니다. 앱이 다시 시작되기 전에 이미 열려 있던 오래된 설정 페이지에서 업데이트 작업을 하면 페이지를 새로 고치라는 안내가 표시됩니다.
 

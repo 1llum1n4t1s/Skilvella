@@ -15,7 +15,7 @@ cargo test --locked --features launcher
 ```
 
 - 修正の途中は、変更に対応するテスト（`cargo test --locked --features launcher --test <名前>` や対象のテスト名）だけを実行し、上の一式は作業の最後に1回実行してください。
-- `cargo build --release --locked`（thin LTO・`codegen-units = 1`）は時間がかかるため、CIでは `release/` ブランチとタグでだけ実行します。手元では `Cargo.toml`・`Cargo.lock`・ビルド設定・機能（features）を変更した場合に実行してください。公開前の release ビルドは [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) の手順で両OSとも行います。
+- `cargo build --release --locked`（thin LTO・`codegen-units = 1`）は時間がかかるため、CIでは `release/` ブランチでだけ実行します（タグは使いません）。手元では `Cargo.toml`・`Cargo.lock`・ビルド設定・機能（features）を変更した場合に実行してください。公開前の release ビルドは [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) の手順で両OSとも行います。
 
 - 文書だけの変更では、記載したコマンド・パス・挙動を実装と照合し、リンク先と差分を確認してください。
 - `tests/localization.rs` は初回HTMLとリダイレクト後の通知・履歴の理由の翻訳、全辞書のキー・プレースホルダーとテンプレート参照キーの整合、言語Cookieのポート分離、言語設定と更新操作のHTTP/CSRF境界に加え、管理画面の外の辞書（`src/locales/`）のキー・プレースホルダー・コードの参照キーの整合と、`SKILVELLA_LANGUAGE` による `--help`・引数エラーの言語切替を検証します。出力の文言を確かめる統合テストは、実行環境の言語に左右されないよう `SKILVELLA_LANGUAGE=en` を指定してください。
@@ -39,7 +39,7 @@ cargo test --locked --features launcher
 - READMEを変えたら、英語の `README.md`（正本）と `README.ja.md`・`README.zh-CN.md`・`README.zh-TW.md`・`README.ko.md`・`README.es.md`・`README.fr.md`・`README.de.md`・`README.pt-BR.md` の全言語版を同時に直してください。各ファイルの先頭に9言語の切替行を置き、コマンド・パス・設定キー・製品名・URLは訳さず、見出しへのリンクは言語で変わらない明示アンカー（`<a id="app-updates"></a>` など）を使ってください。
 - HTTP境界・CSRF・プレビューの安全設定を維持してください。`Referrer-Policy: same-origin` は通常のフォームPOSTのOriginを保持するために必要です。
 - アプリ更新は `src/update.rs` の検証・ロック・ヘルパー経路を通し、Libraryや利用者スキルを変更しないでください。信頼境界とToolport連携は [更新の設計](DESIGN.md#アプリの更新) を参照してください。
-- GitHub配布物は `release-tools` 機能の `skilvella-release` で梱包してください。梱包とアプリ内更新では `src/update.rs` の `verify_archive` を共用してください。公開前に `verify` で両OSのアーカイブとチェックサムを検証し、Windows x64・Apple Silicon Mac の両方で `release-update-test` 機能の `release_update` を実行して、前の公開版から最終配布物への更新と再起動を確認してください。コマンドと手順は [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) を参照してください。
-- Windowsインストーラー（Setup）は `tools/pack-windows-installer.ps1` で梱包し、公開用の署名は `-Sign`（Sigilune）で行ってください。公開用は手動起動の `.github/workflows/release-windows-installer.yml` で作り、署名用Secretsを梱包・署名のstep、R2用の `CLOUDFLARE_API_TOKEN` を配信のstep以外へ渡さないでください。Setup版の自動更新は `src/update/auto.rs`（更新元は `update_source` の1か所、設定は `app-update.json` でLibraryに入れない）で行い、配信は `tools/publish-windows-installer-r2.ps1` でR2へ行います。版付きの成果物は既存オブジェクトを上書きしないでください。手順は [Windowsインストーラーの追加配布](docs/DEVELOPMENT.md#windowsインストーラーの追加配布) を参照してください。
+- ZIP版・macOS版の配布物は `release-tools` 機能の `skilvella-release` で梱包し、R2（`skilvella.kagayoi.com/portable/`）へ配信してください。配信元は `.github/workflows/release.yml` と `tools/publish-portable-r2.ps1` の1経路で、GitHub Release・タグは使いません。梱包とアプリ内更新では `src/update.rs` の `verify_archive` を共用してください。公開前に `verify` で両OSのアーカイブとチェックサムを検証し、Windows x64・Apple Silicon Mac の両方で `release-update-test` 機能の `release_update` を実行して、前の公開版から最終配布物への更新と再起動を確認してください。コマンドと手順は [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) を参照してください。
+- Windowsインストーラー（Setup）は `tools/pack-windows-installer.ps1` で梱包し、公開用の署名は `-Sign`（Sigilune）で行ってください。公開用は `.github/workflows/release.yml`（`release/<版>` ブランチへの push で起動）で作り、署名用Secretsを梱包・署名のstep、R2用の `CLOUDFLARE_API_TOKEN` を配信のstep以外へ渡さないでください。Setup版の自動更新は `src/update/auto.rs`（更新元は `update_source` の1か所、設定は `app-update.json` でLibraryに入れない）で行い、配信は `tools/publish-windows-installer-r2.ps1` でR2へ行います。版付きの成果物は既存オブジェクトを上書きしないでください。手順は [Windowsインストーラーの追加配布](docs/DEVELOPMENT.md#windowsインストーラーの追加配布) を参照してください。
 - アイコンの再生成は通常ビルドから独立した `tools/export-icons/Cargo.toml` の開発用パッケージで行い、生成済みの素材を追跡してください。再生成手順は [アイコン素材](docs/DEVELOPMENT.md#アイコン素材) を参照してください。
 - 利用者向けの説明はREADME、設計はDESIGN、作業規約は本書に置き、開発環境・素材生成の詳細は `docs/DEVELOPMENT.md` へ集約してください。

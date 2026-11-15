@@ -61,7 +61,7 @@ MCPの固定3ツールと検索拡張の制約は [採用した構成の理由�
 
 Host / Origin・CSRF・プレビュー・`Referrer-Policy` の制約は [重要な不変条件](../DESIGN.md#重要な不変条件)、監視と手動再スキャンの役割は [採用した構成の理由とトレードオフ](../DESIGN.md#採用した構成の理由とトレードオフ) を参照してください。
 
-GitHub ActionsはWindows / macOS / Linuxでformat・Clippy・テストを確認します。リリースビルド（`cargo build --release --locked`）は時間がかかるため、`release/` ブランチとタグでだけ実行します。フォークからのプルリクエストでは検証ジョブをスキップします。ZIP版・macOS版の配布・公証・自動更新のワークフローはまだ含めていません。Windowsインストーラーのビルド・署名・R2への配信だけは手動起動の専用ワークフローで行います（[Windowsインストーラーの追加配布](#windowsインストーラーの追加配布)）。
+GitHub ActionsはWindows / macOS / Linuxでformat・Clippy・テストを確認します。リリースビルド（`cargo build --release --locked`）は時間がかかるため、`release/` ブランチでだけ実行します（タグは使いません）。フォークからのプルリクエストでは検証ジョブをスキップします。配布物のビルド・検証・署名・R2への配信は、`release/<版>` ブランチへのpushで始まる `.github/workflows/release.yml` が行います（[配布物の作成と検証](#配布物の作成と検証)・[Windowsインストーラーの追加配布](#windowsインストーラーの追加配布)）。
 
 ## 配布物の作成と検証
 
@@ -75,13 +75,13 @@ cargo build --locked --release --features release-tools --bin skilvella --bin sk
 
 両方のアーカイブを同じ配布ディレクトリに集め、配布ツールの `checksums <配布ディレクトリ>` で `SHA256SUMS.txt` を作成します。`verify <配布ディレクトリ>` は自動更新と同じ実装で、両アーカイブのSHA-256、ファイル構成、版、実行形式とアーキテクチャを確認します。
 
-**公開前に `verify` と、次の更新回帰テストを Windows x64・Apple Silicon Mac の両方で通します。** リリース候補と同じソースツリーで、3つの配布ファイルを置いた絶対パスと、Git作業ツリー外に作成した書き込み可能な作業用ディレクトリの絶対パスを指定します。起点のタグには、これから置き換える公開済み安定版を指定します（例: v1.0.12 の候補なら `v1.0.11`）。
+**公開前に `verify` と、次の更新回帰テストを Windows x64・Apple Silicon Mac の両方で通します。** リリース候補と同じソースツリーで、3つの配布ファイルを置いた絶対パスと、Git作業ツリー外に作成した書き込み可能な作業用ディレクトリの絶対パスを指定します。起点には、これから置き換える公開済み安定版の `X.Y.Z`（R2の `portable/X.Y.Z/` から取得。例: 1.0.12 の候補なら `1.0.11`）か、起点のアーカイブと `SHA256SUMS.txt` を置いた絶対パスのフォルダー（版は同梱の `BUILD-INFO.txt`）を指定します。後者は、公開版を起点にできない最初の移行版（1.1.8以前は旧方式でGitHubしか見ないため）や、リポジトリの複製の版を下げて梱包した起点で試すときに使います。
 
 ```sh
-cargo test --locked --features release-update-test --test release_update -- <前の公開タグ> <配布ディレクトリの絶対パス> <作業ディレクトリの絶対パス>
+cargo test --locked --features release-update-test --test release_update -- <起点（X.Y.Z または絶対パスのフォルダー）> <配布ディレクトリの絶対パス> <作業ディレクトリの絶対パス>
 ```
 
-テストは GitHub から前の公開版を取得してチェックサムを照合し、専用のホーム、データ、実行ファイルで起動します。候補版の配布応答は子プロセスだけが使うループバックの HTTPS フィクスチャが返すため、候補の事前公開や OS の証明書ストアの変更は不要です。設定画面が使う確認・適用の HTTP 操作を実行し、旧プロセスの正常終了、候補実行ファイルへの置き換え、別プロセスへの再起動、同じ URL の管理画面と設定画面が開き、新しい版が表示されることを確認します。
+テストは起点の実体（R2の公開版、またはフォルダー）を用意してチェックサムを照合し、専用のホーム、データ、実行ファイルで起動します。候補版の配布応答（`latest.json`・`SHA256SUMS.txt`・アーカイブ）は、偽の `skilvella.kagayoi.com` として子プロセスだけが使うループバックの HTTPS フィクスチャが返すため、候補の事前公開や OS の証明書ストアの変更は不要です。設定画面が使う確認・適用の HTTP 操作を実行し、旧プロセスの正常終了、候補実行ファイルへの置き換え、別プロセスへの再起動、同じ URL の管理画面と設定画面が開き、新しい版が表示されることを確認します。
 
 両方の環境で `PASS:` と終了コード 0 を確認し、検証した3ファイルをそのままアップロードします。失敗時は、出力された作業場所にある `startup.log` と `bin/.skilvella-update-*/update.log` を確認します。テストは隔離プロセスを停止します。ログや試験用の実行ファイルは作業場所に残るため、確認後に今回分を清掃してください。再梱包した場合はチェックサムを作り直し、`verify` と両 OS の更新回帰テストを再実行します。
 
@@ -95,13 +95,15 @@ pwsh -NoProfile -File ./tools/pack-windows-installer.ps1 -WorkDirectory D:\work\
 
 このコマンドは動作確認用の未署名Setupを生成します。公開用は `-Sign` を追加し、[Sigilune](https://github.com/1llum1n4t1s/Sigilune)（Certum SimplySignのクラウド鍵をsigntoolの `/dlib` で使うCLI）で署名します。SimplySign Desktopは不要で、手元では事前に `sigilune setup` でCertumアカウントを登録します（実行ファイルは `SIGILUNE_EXE` → PATH → `%USERPROFILE%\.local\Sigilune\bin` の順に探します）。Taskmetryと同じコード署名証明書とCertumのタイムスタンプを使い、SHA-256で署名します。スクリプトはSetupのAuthenticode署名・署名者（CN）・タイムスタンプを検証してからSHA-256を表示します。
 
-公開用Setupは通常GitHub Actionsの「Release Windows installer」（`.github/workflows/release-windows-installer.yml`）で作ります。公開済みのタグを指定してmainから手動実行すると、そのタグのソースをビルドし、同じスクリプトで署名した一式をCloudflare R2（`skilvella.kagayoi.com`、バケット `skilvella-updates`）へ配信します（`tools/publish-windows-installer-r2.ps1`。Taskmetry・Shisui・Lumin4tiと同じ方式で、同梱の `R2Distribution.Common.ps1` と `R2Transfer.Core.cs` は同一のコピーです）。版付きの成果物（nupkg・版付きSetup）は新規作成のみで既存オブジェクトを上書きせず、同名がある場合は内容のハッシュを照合して不一致なら失敗します。固定名（Setup・`releases.win.json`・`assets.win.json`・`RELEASES`）は最新を指すため置き換え、manifestは最後に置きます。固定名のURLはキャッシュを破棄します。承認待ちはありません。ワークフローはmainの最新版が使われるため、ワークフローの不具合をmainで直してから公開済みの版へSetupを付け直せます。
+公開用Setupは通常GitHub Actionsの「Release」（`.github/workflows/release.yml`）の `installer` ジョブで作ります。`release/<Cargo.tomlの版>` ブランチをpushすると始まり（手動実行は同じブランチを指定した再実行にだけ使います）、そのブランチのソースをビルドし、同じスクリプトで署名した一式を、ZIP版・macOS版と合わせて `publish` ジョブがCloudflare R2（`skilvella.kagayoi.com`、バケット `skilvella-updates`）へ配信します（`tools/publish-windows-installer-r2.ps1`。Taskmetry・Shisui・Lumin4tiと同じ方式で、同梱の `R2Distribution.Common.ps1` と `R2Transfer.Core.cs` は同一のコピーです）。版付きの成果物（nupkg・版付きSetup）は新規作成のみで既存オブジェクトを上書きせず、同名がある場合は内容のハッシュを照合して不一致なら失敗します。固定名（Setup・`releases.win.json`・`assets.win.json`・`RELEASES`）は最新を指すため置き換え、manifestは最後に置きます。固定名のURLはキャッシュを破棄します。承認待ちはありません。配信の順序は、不変物（`portable/<版>/*`・nupkg・版付きSetup）→ 公開URLでのハッシュ照合 → 固定名（Setup・`assets.win.json`・`RELEASES`・`portable/` の固定名3つ）→ `releases.win.json` → `portable/latest.json` → 固定名だけのpurgeです。`tools/publish-windows-installer-r2.ps1` と `tools/publish-portable-r2.ps1` は `-Stage`（Immutable・Fixed・Manifest／Latest）で段階ごとに呼びます。公開中の `portable/latest.json` がより新しい版なら、固定名と `latest.json` は更新しません（後退防止）。更新回帰の起点は公開中の `portable/latest.json` の版で、未公開（最初の移行版）または候補以上（再実行）なら明示的にスキップします（`tools/resolve-update-origin.sh`）。
 
 ```powershell
-gh workflow run release-windows-installer.yml --ref main -f release_tag=v1.2.3
+# 配信のやり直し（R2に同じ版があれば内容が同一のときだけ成功し、違えば上書きせず失敗します）
+gh workflow run release.yml --ref release/1.2.3
+# 署名・検証だけを行い、R2へ配信しない場合は -f skip_upload=true を付けます
 ```
 
-`release_tag` を空にするとActionsの成果物だけを作ります。署名用Secrets（`SIGILUNE_EMAIL`・`SIGILUNE_TOTP_URI`）はEnvironment `release` に置き、梱包・署名のstepだけへ渡します。R2用の `CLOUDFLARE_API_TOKEN`（同じEnvironmentのSecret）は配信のstepだけへ渡します。事前にR2バケット `skilvella-updates` と `skilvella.kagayoi.com` の割り当て（カスタムドメイン）を用意してください。未作成の場合は配信scriptが最初の確認で失敗します。配信せずに置き先と分類だけ確認するには `tools/publish-windows-installer-r2.ps1 -PackagesDirectory <絶対パス> -DryRun` を使います。
+署名用Secrets（`SIGILUNE_EMAIL`・`SIGILUNE_TOTP_URI`）はEnvironment `release` に置き、梱包・署名のstepだけへ渡します。R2用の `CLOUDFLARE_API_TOKEN`（同じEnvironmentのSecret）は配信のstepだけへ渡します。事前にR2バケット `skilvella-updates` と `skilvella.kagayoi.com` の割り当て（カスタムドメイン）を用意してください。未作成の場合は配信scriptが最初の確認で失敗します。配信せずに置き先と分類だけ確認するには `tools/publish-windows-installer-r2.ps1 -PackagesDirectory <絶対パス> -DryRun`（段階ごとの確認は `-Stage` を併用）と、`tools/publish-portable-r2.ps1 -Version <版> -DistributionDirectory <絶対パス> -ValidateOnly` を使います。Environment `release` の許可refは `release/*` です。
 
 `packages/` の出力は、Setup（`SkilvellaApp-win-Setup.exe` と版付きの `SkilvellaApp-<版>-win-Setup.exe`）に加えて、アプリの自動更新が読む `releases.win.json` と `SkilvellaApp-<版>-full.nupkg`（既定のチャネル `win` では名前にチャネルが入らない）（ほか `assets.win.json`・`RELEASES`）です。Setupだけでは更新を見つけられません。ZIP版とmacOS版の3ファイルには既存の `checksums`、`verify`、自動更新回帰テストを引き続き使います。Setupは別にSHA-256を確認します。`windows-installer` 機能はSetup向けです。通常のZIP版はこの機能を指定せずビルドしてください。
 
