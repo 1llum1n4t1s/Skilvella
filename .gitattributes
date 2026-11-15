@@ -1,0 +1,2 @@
+# シェルスクリプトは Windows ランナーの autocrlf でも LF のまま使う（CR が付くと bash が失敗する）。
+*.sh text eol=lf

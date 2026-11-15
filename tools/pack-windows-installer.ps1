@@ -5,7 +5,7 @@
 #
 # -Sign は Sigilune (https://github.com/1llum1n4t1s/Sigilune) で Certum SimplySign のクラウド鍵を使って署名する。
 # SimplySign Desktop は不要。手元は `sigilune setup` で登録済みであること、GitHub Actions
-# (.github/workflows/release-windows-installer.yml) は Environment "release" の Secrets を
+# (.github/workflows/release.yml の installer ジョブ) は Environment "release" の Secrets を
 # SIGILUNE_EMAIL / SIGILUNE_TOTP_URI で渡す。
 [CmdletBinding()]
 param(

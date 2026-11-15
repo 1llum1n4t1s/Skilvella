@@ -1,0 +1,428 @@
+name: Release
+
+# Skilvella の配布物（ZIP版・macOS版・Windows インストーラー）を GitHub Actions でビルド・検証・署名し、
+# Cloudflare R2 (https://skilvella.kagayoi.com) へ配信する。タグも GitHub Release も使わない。
+# 配布の入口は R2 だけで、アプリ内更新も README の導線もここを読む。
+#
+# - 起動: release/<Cargo.toml の版> ブランチへの push（/vava が push すると始まる）。
+#   手動実行 (workflow_dispatch) は、同じ release/<版> ブランチを指定した再実行にだけ使う
+#   （R2 に同じ版があれば内容が同一のときだけ成功し、違えば上書きせず失敗する）。
+#   skip_upload を付けると、ビルド・署名・検証だけ行い R2 へ配信しない（成果物は Actions に残る）。
+#   GitHub のブランチフィルタは glob（正規表現ではない）。release/1.1.9 のような名前に一致する。
+# - 構成: guard → (portable-windows / portable-macos / installer) → verify → update-test-macos → publish。
+#     portable-*  ZIP版・macOS版のアーカイブを作る。macOS は自前 Mac (m3mb14)。Secrets も Environment も渡さない。
+#     installer   Windows Setup を署名して作る（Sigilune・Certum のクラウド鍵）。署名用 Secrets は梱包・署名の step だけ。
+#     verify      両アーカイブから SHA256SUMS.txt を作り、自動更新と同じ実装で検証し、Windows で更新回帰を通す。
+#     update-test-macos  同じ3ファイルで Apple Silicon Mac の更新回帰を通す。
+#     publish     何もビルドせず、ここまでの成果物だけを R2 へ配信する。CLOUDFLARE_API_TOKEN は配信の step だけ。
+# - 配信の順序（公開物の整合を保つ）: 入力・bucket・zone の確認 → 不変物（portable/<版>/*、nupkg、版付き Setup）
+#   → 公開 URL でハッシュ照合 → 固定名（Setup・assets.win.json・RELEASES・portable の固定名3つ）
+#   → releases.win.json → portable/latest.json（最後）→ 固定名だけ purge。
+# - 更新回帰の起点: 公開中の portable/latest.json の版。無ければ（初回の移行版）::notice を出してスキップ、
+#   候補以上なら（再実行）スキップ。1.1.8 以前は GitHub しか見ないため、公開版を起点にできない。
+# - Secrets（SIGILUNE_EMAIL / SIGILUNE_TOTP_URI / CLOUDFLARE_API_TOKEN）は Environment "release" にだけ置く
+#   （release/* ブランチだけ許可）。
+on:
+  push:
+    branches: ['release/**']
+  workflow_dispatch:
+    inputs:
+      skip_upload:
+        description: 'ビルド・署名・検証だけ行い、R2 へ配信しない (成果物は Actions に残る)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # R2 の固定名を取り合わないよう、リリースは同時に走らせない。
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    # release/<版> ブランチと Cargo.toml の版が一致しなければ止める（別の版を誤って配信しない）。
+    if: github.repository == '1llum1n4t1s/Skilvella'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: リポジトリをチェックアウト
+        # actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: ブランチと版を確認
+        id: version
+        shell: bash
+        run: |
+          # [package] の version を直接読む（toolchain の導入前）。
+          version="$(sed -n '/^\[package\]/,/^\[/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p}' Cargo.toml | head -n 1)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "could not read the Cargo version: $version" >&2; exit 1; }
+          if [[ "$GITHUB_REF_TYPE" != "branch" || "$GITHUB_REF_NAME" != "release/$version" ]]; then
+            echo "ref $GITHUB_REF_NAME does not match release/$version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  portable-windows:
+    needs: guard
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: リポジトリをチェックアウト
+        # actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Rust を準備
+        # rust-toolchain.toml の版を使う。配布物はキャッシュを使わず、毎回まっさらな target/ から作る。
+        run: |
+          rustup toolchain install --no-self-update
+          if ($LASTEXITCODE -ne 0) { throw "rustup toolchain install failed ($LASTEXITCODE)" }
+
+      - name: 本体と配布ツールをビルド
+        run: |
+          cargo build --locked --release --features release-tools --bin skilvella --bin skilvella-release
+          if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
+
+      - name: 本体の版を確認
+        env:
+          EXPECTED_VERSION: ${{ needs.guard.outputs.version }}
+          SKILVELLA_LANGUAGE: en
+        run: |
+          $help = (& ./target/release/skilvella.exe --help | Out-String)
+          if ($help -notmatch "(?m)^Skilvella $([regex]::Escape($env:EXPECTED_VERSION))\s*$") { throw "unexpected version: $help" }
+
+      - name: 梱包
+        run: |
+          $dist = Join-Path $env:RUNNER_TEMP 'portable-windows'
+          New-Item -ItemType Directory -Path $dist | Out-Null
+          "PORTABLE_DIR=$dist" >> $env:GITHUB_ENV
+          & ./target/release/skilvella-release.exe pack $env:GITHUB_SHA ./target/release/skilvella.exe $dist
+          if ($LASTEXITCODE -ne 0) { throw "pack failed ($LASTEXITCODE)" }
+
+      - name: 成果物をアップロード
+        # actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: portable-windows
+          path: ${{ env.PORTABLE_DIR }}/*
+          if-no-files-found: error
+          retention-days: 30
+
+  portable-macos:
+    # 自前の Apple Silicon Mac。Secrets と Environment は渡さない（ビルド・梱包だけ）。
+    needs: guard
+    runs-on: [self-hosted, macOS, ARM64, m3mb14]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: リポジトリをチェックアウト
+        # actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - run: rustup show
+
+      # 依存クレートのビルド結果を GitHub のキャッシュへ保存する（ci.yml と同じ設定）。
+      # cache-bin は必ず無効にする。有効だと後処理の「Cleaning cargo/bin」が、セルフホストランナーで
+      # 共有している CARGO_HOME/bin の rustup 本体を消し、以後のジョブが rustup・cargo を実行できなくなる。
+      - name: ビルドキャッシュ
+        # Swatinem/rust-cache@v2.9.3
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          cache-bin: "false"
+
+      - name: 本体と配布ツールをビルド
+        run: cargo build --locked --release --features release-tools --bin skilvella --bin skilvella-release
+
+      - name: 本体の版と署名状態を確認
+        env:
+          EXPECTED_VERSION: ${{ needs.guard.outputs.version }}
+          SKILVELLA_LANGUAGE: en
+        run: |
+          ./target/release/skilvella --help | grep -qx "Skilvella $EXPECTED_VERSION" || { echo "unexpected version" >&2; exit 1; }
+          # リンカーが付ける ad-hoc 署名の状態（BUILD-INFO.txt の signing=adhoc）を確かめる。
+          codesign --verify --verbose ./target/release/skilvella
+
+      - name: 梱包
+        run: |
+          dist="$RUNNER_TEMP/portable-macos"
+          rm -rf "$dist"
+          mkdir -p "$dist"
+          echo "PORTABLE_DIR=$dist" >> "$GITHUB_ENV"
+          ./target/release/skilvella-release pack "$GITHUB_SHA" ./target/release/skilvella "$dist"
+
+      - name: 成果物をアップロード
+        # actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: portable-macos
+          path: ${{ env.PORTABLE_DIR }}/*
+          if-no-files-found: error
+          retention-days: 30
+
+  installer:
+    needs: guard
+    runs-on: windows-latest
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: read
+    env:
+      # vpk 1.2.161 は .NET 9 ランタイム向け。ランナーに無い場合でも新しい版のランタイムで動かす
+      # （無いと vpk が起動できず、梱包スクリプトの版確認で止まる）。
+      DOTNET_ROLL_FORWARD: Major
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: リポジトリをチェックアウト
+        # actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Rust と Velopack CLI を準備
+        run: |
+          # rust-toolchain.toml の版を使う。
+          rustup toolchain install --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup target add x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # tools/pack-windows-installer.ps1 が要求する固定版。
+          dotnet tool install --global vpk --version 1.2.161
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # 起動できることをここで確かめる（失敗時は vpk 自身のエラーをログに残す）。
+          # 色付け用のエスケープシーケンスを取り除いてから版を照合する。
+          $help = (vpk --help 2>&1 | Out-String) -replace "`e\[[0-9;]*m", ''
+          if ($help -notmatch '\bVelopack CLI 1\.2\.161\b') { Write-Host $help; throw 'vpk 1.2.161 could not start.' }
+
+      - name: 本体をビルド
+        # 依存 crate の build script も動くため、この step には署名用 Secrets を渡さない。
+        # 梱包スクリプトの cargo build と同じ条件でビルドし、次の step では再コンパイルさせない。
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'skilvella-target'
+          "CARGO_TARGET_FOR_PACK=$target" >> $env:GITHUB_ENV
+          cargo build --locked --release --target x86_64-pc-windows-msvc --target-dir $target --features windows-installer --bin skilvella
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Sigilune を導入
+        id: sigilune
+        uses: 1llum1n4t1s/Sigilune@05006dcad019e5e863a08985b9208d72004f1b5f # v1.1.3
+
+      - name: 梱包・署名
+        env:
+          SIGILUNE_EMAIL: ${{ secrets.SIGILUNE_EMAIL }}
+          SIGILUNE_TOTP_URI: ${{ secrets.SIGILUNE_TOTP_URI }}
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'skilvella-installer'
+          New-Item -ItemType Directory -Path $work | Out-Null
+          "WORK_DIR=$work" >> $env:GITHUB_ENV
+          & ./tools/pack-windows-installer.ps1 -WorkDirectory $work -Sign -CargoTargetDirectory $env:CARGO_TARGET_FOR_PACK
+
+      - name: Sigilune からログアウト
+        # ランナー上の Certum セッションを残さない。
+        if: always() && steps.sigilune.outcome == 'success'
+        run: sigilune logout | Out-Null
+
+      - name: 成果物をアップロード
+        # actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: skilvella-windows-installer
+          path: ${{ env.WORK_DIR }}/packages/*
+          if-no-files-found: error
+          retention-days: 30
+
+  verify:
+    # 両アーカイブを集めて SHA256SUMS.txt を作り、自動更新と同じ実装 (verify_archive) で検証する。
+    # 更新回帰（公開済みの前の版 → 今回の最終配布物への更新と再起動）は Windows でここ、Mac は update-test-macos で通す。
+    needs: [guard, portable-windows, portable-macos]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: リポジトリをチェックアウト
+        # actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Rust を準備
+        run: |
+          rustup toolchain install --no-self-update
+          if ($LASTEXITCODE -ne 0) { throw "rustup toolchain install failed ($LASTEXITCODE)" }
+
+      # 再実行で portable-dist が残っていても混ざらないよう、名前を指定して2つのアーカイブだけを集める。
+      - name: Windows のアーカイブを取得
+        # actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: portable-windows
+          path: ${{ runner.temp }}/portable-dist
+
+      - name: macOS のアーカイブを取得
+        # actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: portable-macos
+          path: ${{ runner.temp }}/portable-dist
+
+      - name: チェックサムを作成して検証
+        run: |
+          $dist = Join-Path $env:RUNNER_TEMP 'portable-dist'
+          cargo run --locked --features release-tools --bin skilvella-release -- checksums $dist
+          if ($LASTEXITCODE -ne 0) { throw "checksums failed ($LASTEXITCODE)" }
+          cargo run --locked --features release-tools --bin skilvella-release -- verify $dist
+          if ($LASTEXITCODE -ne 0) { throw "verify failed ($LASTEXITCODE)" }
+          Get-ChildItem -LiteralPath $dist -File | ForEach-Object Name
+
+      - name: 配布物をアップロード
+        # actions/upload-artifact@v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: portable-dist
+          path: |
+            ${{ runner.temp }}/portable-dist/Skilvella-windows-x86_64.zip
+            ${{ runner.temp }}/portable-dist/Skilvella-macos-aarch64.tar.gz
+            ${{ runner.temp }}/portable-dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 更新回帰の起点を決める
+        id: origin
+        shell: bash
+        env:
+          CANDIDATE: ${{ needs.guard.outputs.version }}
+        run: bash ./tools/resolve-update-origin.sh "$CANDIDATE"
+
+      - name: 更新回帰テスト (Windows x64)
+        if: steps.origin.outputs.skip != 'true'
+        env:
+          ORIGIN: ${{ steps.origin.outputs.origin }}
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'update-test'
+          New-Item -ItemType Directory -Path $work | Out-Null
+          cargo test --locked --features release-update-test --test release_update -- $env:ORIGIN (Join-Path $env:RUNNER_TEMP 'portable-dist') $work
+          if ($LASTEXITCODE -ne 0) { throw "release_update failed ($LASTEXITCODE)" }
+
+  update-test-macos:
+    # Apple Silicon Mac での更新回帰。Secrets と Environment は渡さない。
+    needs: [guard, verify]
+    runs-on: [self-hosted, macOS, ARM64, m3mb14]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: リポジトリをチェックアウト
+        # actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - run: rustup show
+
+      - name: ビルドキャッシュ
+        # Swatinem/rust-cache@v2.9.3。cache-bin を無効にする理由は portable-macos を参照。
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          cache-bin: "false"
+
+      - name: 配布物を取得
+        # actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: portable-dist
+          path: ${{ runner.temp }}/portable-dist
+
+      - name: 更新回帰の起点を決める
+        id: origin
+        env:
+          CANDIDATE: ${{ needs.guard.outputs.version }}
+        run: bash ./tools/resolve-update-origin.sh "$CANDIDATE"
+
+      - name: 更新回帰テスト (Apple Silicon Mac)
+        if: steps.origin.outputs.skip != 'true'
+        env:
+          ORIGIN: ${{ steps.origin.outputs.origin }}
+        run: |
+          work="$RUNNER_TEMP/update-test"
+          rm -rf "$work"
+          mkdir -p "$work"
+          cargo test --locked --features release-update-test --test release_update -- "$ORIGIN" "$RUNNER_TEMP/portable-dist" "$work"
+
+  publish:
+    # ここまでの成果物だけを R2 へ配信する（ビルドしない）。全ジョブが成功し、skip_upload でないときだけ動く。
+    needs: [guard, portable-windows, portable-macos, installer, verify, update-test-macos]
+    if: inputs.skip_upload != true
+    runs-on: windows-latest
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: リポジトリをチェックアウト
+        # 配信スクリプトだけを使う。ビルドはしない。
+        # actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: インストーラーの成果物を取得
+        # actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: skilvella-windows-installer
+          path: ${{ runner.temp }}/installer-packages
+
+      - name: ZIP版・macOS版の配布物を取得
+        # actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: portable-dist
+          path: ${{ runner.temp }}/portable-dist
+
+      - name: Setup の署名を確認
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'installer-packages/SkilvellaApp-win-Setup.exe'
+          $signature = Get-AuthenticodeSignature -LiteralPath $setup
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike 'CN=Open Source Developer Yuichiro Shinozaki*' -or !$signature.TimeStamperCertificate) { throw 'Setup signature verification failed.' }
+          "SHA256 $((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash)"
+
+      - name: R2 へ配信
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          # 失敗は各スクリプトが例外 (throw) で知らせる。ここで $LASTEXITCODE を見ると、配信が全部成功した後でも
+          # スクリプト内部のネイティブ呼び出しの終了コードが残っていて誤って失敗扱いになるため、確認しない。
+          $ErrorActionPreference = 'Stop'
+          $packages = Join-Path $env:RUNNER_TEMP 'installer-packages'
+          $portable = Join-Path $env:RUNNER_TEMP 'portable-dist'
+          # 1. 不変物（入力・bucket・zone の確認 → 版付きを置く → 公開 URL でハッシュ照合）
+          & ./tools/publish-windows-installer-r2.ps1 -PackagesDirectory $packages -Stage Immutable
+          & ./tools/publish-portable-r2.ps1 -Version $env:VERSION -DistributionDirectory $portable -Stage Immutable
+          # 2. 固定名（Setup・assets.win.json・RELEASES と、portable の固定名3つ）
+          & ./tools/publish-windows-installer-r2.ps1 -PackagesDirectory $packages -Stage Fixed
+          & ./tools/publish-portable-r2.ps1 -Version $env:VERSION -DistributionDirectory $portable -Stage Fixed
+          # 3. manifest（releases.win.json）→ latest.json の順。最後に固定名だけ purge する。
+          & ./tools/publish-windows-installer-r2.ps1 -PackagesDirectory $packages -Stage Manifest
+          & ./tools/publish-portable-r2.ps1 -Version $env:VERSION -DistributionDirectory $portable -Stage Latest
