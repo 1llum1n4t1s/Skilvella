@@ -242,9 +242,18 @@ mod installer {
             return;
         }
         match background_once(data_dir) {
-            Ok(message) => eprintln!("Skilvella auto-update: {message}"),
+            Ok(message) => eprintln!(
+                "{}",
+                crate::locale::format("Skilvellaの自動更新: {message}", &[("message", &message)])
+            ),
             // 失敗しても現行版で動き続ける。ログだけ残す。
-            Err(error) => eprintln!("Skilvella auto-update failed: {error:#}"),
+            Err(error) => eprintln!(
+                "{}",
+                crate::locale::format(
+                    "Skilvellaの自動更新に失敗しました: {error}",
+                    &[("error", &format!("{error:#}"))]
+                )
+            ),
         }
     }
 
@@ -263,7 +272,13 @@ mod installer {
                 }
             });
         if let Err(error) = spawned {
-            eprintln!("Could not start the auto-update thread: {error}");
+            eprintln!(
+                "{}",
+                crate::locale::format(
+                    "自動更新のスレッドを開始できませんでした: {error}",
+                    &[("error", &error.to_string())]
+                )
+            );
         }
     }
 

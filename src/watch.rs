@@ -1,4 +1,4 @@
-use crate::AppState;
+use crate::{AppState, locale};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::{collections::HashSet, path::PathBuf, time::Duration};
 
@@ -12,7 +12,13 @@ pub fn start(state: AppState) -> tokio::task::JoinHandle<()> {
                     let _ = tx.try_send(());
                 }
                 Err(error) => {
-                    eprintln!("File watcher: {error}. Use the rescan button if needed.");
+                    eprintln!(
+                        "{}",
+                        locale::format(
+                            "ファイル監視でエラーが発生しました: {error}。必要なら再スキャンを使ってください。",
+                            &[("error", &error.to_string())]
+                        )
+                    );
                     let _ = tx.try_send(());
                 }
                 _ => {}
@@ -22,7 +28,13 @@ pub fn start(state: AppState) -> tokio::task::JoinHandle<()> {
         let mut watcher = match watcher {
             Ok(watcher) => watcher,
             Err(error) => {
-                eprintln!("File watcher unavailable: {error}. Use the rescan button.");
+                eprintln!(
+                    "{}",
+                    locale::format(
+                        "ファイル監視を利用できません: {error}。再スキャンを使ってください。",
+                        &[("error", &error.to_string())]
+                    )
+                );
                 return;
             }
         };
@@ -46,21 +58,39 @@ pub fn start(state: AppState) -> tokio::task::JoinHandle<()> {
                                 next.insert(path.clone());
                             }
                             Err(error) => eprintln!(
-                                "Cannot watch {}: {error}. Use the rescan button.",
-                                path.display()
+                                "{}",
+                                locale::format(
+                                    "{path} を監視できません: {error}。再スキャンを使ってください。",
+                                    &[
+                                        ("path", &path.display().to_string()),
+                                        ("error", &error.to_string())
+                                    ]
+                                )
                             ),
                         }
                     }
                     watched = next;
                 }
-                Err(error) => eprintln!("Cannot refresh watched sources: {error}"),
+                Err(error) => eprintln!(
+                    "{}",
+                    locale::format(
+                        "監視対象のソースを更新できません: {error}",
+                        &[("error", &error.to_string())]
+                    )
+                ),
             }
             if scan_pending {
                 // 再登録後に走査する。走査中の変更通知は次の走査へ残す。
                 tokio::time::sleep(Duration::from_millis(450)).await;
                 while rx.try_recv().is_ok() {}
                 if let Err(error) = state.run_mut(|lib| lib.scan()).await {
-                    eprintln!("Automatic scan failed: {error}");
+                    eprintln!(
+                        "{}",
+                        locale::format(
+                            "自動スキャンに失敗しました: {error}",
+                            &[("error", &error.to_string())]
+                        )
+                    );
                 }
             }
             tokio::select! {

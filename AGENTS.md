@@ -18,7 +18,7 @@ cargo test --locked --features launcher
 - `cargo build --release --locked`（thin LTO・`codegen-units = 1`）は時間がかかるため、CIでは `release/` ブランチとタグでだけ実行します。手元では `Cargo.toml`・`Cargo.lock`・ビルド設定・機能（features）を変更した場合に実行してください。公開前の release ビルドは [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) の手順で両OSとも行います。
 
 - 文書だけの変更では、記載したコマンド・パス・挙動を実装と照合し、リンク先と差分を確認してください。
-- `tests/localization.rs` は初回HTMLとリダイレクト後の通知・履歴の理由の翻訳、全辞書のキー・プレースホルダーとテンプレート参照キーの整合、言語Cookieのポート分離、言語設定と更新操作のHTTP/CSRF境界を検証します。
+- `tests/localization.rs` は初回HTMLとリダイレクト後の通知・履歴の理由の翻訳、全辞書のキー・プレースホルダーとテンプレート参照キーの整合、言語Cookieのポート分離、言語設定と更新操作のHTTP/CSRF境界に加え、管理画面の外の辞書（`src/locales/`）のキー・プレースホルダー・コードの参照キーの整合と、`SKILVELLA_LANGUAGE` による `--help`・引数エラーの言語切替を検証します。出力の文言を確かめる統合テストは、実行環境の言語に左右されないよう `SKILVELLA_LANGUAGE=en` を指定してください。
 - `tests/update.rs` は隔離した実行ファイルで更新ヘルパーの置換・再起動・復元・中止、再起動先のプロセス回収、Windowsのログハンドル継承防止を検証します。サービス再起動と監視・管理情報の保持は `src/service.rs` 内のテストで検証します。
 - `tests/library.rs` は保存・検索・パス境界、`tests/directory.rs` は管理フォルダーの選択、フォルダー追加時の識別子の自動採番・同じフォルダーの再登録・重複と親子関係の拒否、親子スキルの境界、`tests/http_mcp.rs` は管理フォームとMCPの連携・分割取得・継続時の競合検出、旧フォルダー画面の転送とフォルダー選択ダイアログのCSRF境界、一覧の公開切替（公開状態だけの保存と不正ファイルの公開拒否）、`tests/watch.rs` は外部変更の反映、`tests/startup.rs` はヘッドレス起動とポート競合時の非変更、`tests/windows_icon.rs` はWindows版の本体に埋め込んだアイコンをシェルが取り出せること、`tests/migration.rs` は旧版の中断移行の起動時復旧・同一性検査・操作ロックを検証します。変更した契約に対応する検証を維持してください。
 - `tests/repositories.rs` は取得元の分類・件数・ページ分割・切断時の保持、不在登録削除のHTTP/CSRF境界と全件検証、読み取りエラーの修正経路、`tests/codex_index.rs` はCodex入口の公開判定・所有権・競合・中断復旧と、Claude Code・Grokの入口の配置・自動選択の制御・Claude Code用リンクの所有と衝突、`tests/codex_http.rs` は同期先フォーム（複数選択と旧形式）のHTTP/CSRF境界と一括変更を検証します。
@@ -35,6 +35,8 @@ cargo test --locked --features launcher
 - スキル数に比例してMCPツールを増やさず、既存の検索・本文取得・参照取得の3ツールを入口にしてください。MCPからの書込み・ファイル実行は提供しません。
 - 公開判定、親子スキルの境界、パス検査、競合検出、履歴保存を迂回する別の読書き経路を追加しないでください。変更時は [設計の不変条件](DESIGN.md#重要な不変条件) を確認してください。
 - 管理画面はAskamaテンプレートと同梱アセットを使います。通常ビルドにフロントエンドのビルド工程を加えず、実行時のCDN依存も持ち込まないでください。翻訳を変更するときは `src/web/i18n.rs` の `Locale` を使い、日本語の原文と `src/web/locales/` の辞書のキー・プレースホルダーを揃えてください。ブラウザーへ渡す翻訳文言は動的な操作に必要なものに限ります。
+- 人が読む文言（画面・コマンドライン出力・エラー・トレイやメニュー・Setup版のメッセージ）を足したときは、9言語（ja・en・zh-CN・zh-TW・ko・es・fr・de・pt-BR）の辞書と整合テストを同時に更新してください。管理画面は `src/web/locales/`、管理画面の外（`skilvella::locale`）は `src/locales/` で、どちらも日本語の原文をキーにします。`locale::text("…")` / `locale::format("…")` のキーはリテラルで渡し、エスケープは使わないでください（テストが抽出します）。起動時の `Browser:`・`MCP:`・`Data:` の行は機械が読むため訳さないでください。MCPのツール名・説明・入力スキーマ・AIへ返すエラーなどAIが読む文言は英語に統一し、訳し分けないでください。
+- READMEを変えたら、英語の `README.md`（正本）と `README.ja.md`・`README.zh-CN.md`・`README.zh-TW.md`・`README.ko.md`・`README.es.md`・`README.fr.md`・`README.de.md`・`README.pt-BR.md` の全言語版を同時に直してください。各ファイルの先頭に9言語の切替行を置き、コマンド・パス・設定キー・製品名・URLは訳さず、見出しへのリンクは言語で変わらない明示アンカー（`<a id="app-updates"></a>` など）を使ってください。
 - HTTP境界・CSRF・プレビューの安全設定を維持してください。`Referrer-Policy: same-origin` は通常のフォームPOSTのOriginを保持するために必要です。
 - アプリ更新は `src/update.rs` の検証・ロック・ヘルパー経路を通し、Libraryや利用者スキルを変更しないでください。信頼境界とToolport連携は [更新の設計](DESIGN.md#アプリの更新) を参照してください。
 - GitHub配布物は `release-tools` 機能の `skilvella-release` で梱包してください。梱包とアプリ内更新では `src/update.rs` の `verify_archive` を共用してください。公開前に `verify` で両OSのアーカイブとチェックサムを検証し、Windows x64・Apple Silicon Mac の両方で `release-update-test` 機能の `release_update` を実行して、前の公開版から最終配布物への更新と再起動を確認してください。コマンドと手順は [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) を参照してください。

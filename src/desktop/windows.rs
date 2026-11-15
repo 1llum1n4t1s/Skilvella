@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::service::Control;
 use anyhow::{Context, Result, bail};
+use skilvella::locale;
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
@@ -77,8 +78,11 @@ impl TrayState {
             unsafe { ShellExecuteW(window, null(), url.as_ptr(), null(), null(), SW_SHOWNORMAL) };
         if result as isize <= 32 {
             eprintln!(
-                "管理画面をブラウザーで開けませんでした（Windowsコード: {}）",
-                result as isize
+                "{}",
+                locale::format(
+                    "管理画面をブラウザーで開けませんでした（Windowsコード: {code}）",
+                    &[("code", &(result as isize).to_string())]
+                )
             );
         }
     }
@@ -88,34 +92,34 @@ impl TrayState {
         let menu = Menu(unsafe { CreatePopupMenu() });
         if menu.0.is_null() {
             return Err(std::io::Error::last_os_error())
-                .context("トレイメニューを作成できませんでした");
+                .with_context(|| locale::text("トレイメニューを作成できませんでした"));
         }
         let restarting = self.control.is_restarting();
         let restart_label = if restarting {
-            "サービスを再起動中…"
+            locale::text("サービスを再起動中…")
         } else {
-            "サービスを再起動"
+            locale::text("サービスを再起動")
         };
         for (id, label, flags) in [
-            (OPEN_MANAGER, "管理画面を開く", MF_STRING),
-            (CHECK_UPDATES, "更新を確認", MF_STRING),
+            (OPEN_MANAGER, locale::text("管理画面を開く"), MF_STRING),
+            (CHECK_UPDATES, locale::text("更新を確認"), MF_STRING),
             (
                 RESTART_SERVICE,
                 restart_label,
                 MF_STRING | if restarting { MF_GRAYED } else { 0 },
             ),
             (0, "", MF_SEPARATOR),
-            (QUIT, "終了", MF_STRING),
+            (QUIT, locale::text("終了"), MF_STRING),
         ] {
             if unsafe { AppendMenuW(menu.0, flags, id, wide(label).as_ptr()) } == 0 {
                 return Err(std::io::Error::last_os_error())
-                    .context("トレイメニュー項目を作成できませんでした");
+                    .with_context(|| locale::text("トレイメニュー項目を作成できませんでした"));
             }
         }
         let mut position = POINT::default();
         if unsafe { GetCursorPos(&mut position) } == 0 {
             return Err(std::io::Error::last_os_error())
-                .context("メニューの表示位置を取得できませんでした");
+                .with_context(|| locale::text("メニューの表示位置を取得できませんでした"));
         }
         // 通知アイコンのメニューは所有ウィンドウを前面にし、外側クリックで閉じられるようにする。
         let selected = unsafe {
@@ -166,7 +170,10 @@ impl TrayState {
     fn add_icon(&self, window: HWND) -> Result<()> {
         // 通知構造体とアイコンは同期API呼出しの間、有効なまま保持する。
         if unsafe { Shell_NotifyIconW(NIM_ADD, &self.notification(window)) } == 0 {
-            bail!("Windowsのタスクトレイにアイコンを登録できませんでした");
+            bail!(
+                "{}",
+                locale::text("Windowsのタスクトレイにアイコンを登録できませんでした")
+            );
         }
         Ok(())
     }
@@ -210,13 +217,20 @@ pub fn run(url: &str, control: Control) -> Result<()> {
         )
     };
     if result < 0 {
-        bail!("ブラウザー起動用のCOMを初期化できませんでした: {result:#x}");
+        bail!(
+            "{}",
+            locale::format(
+                "ブラウザー起動用のCOMを初期化できませんでした: {code}",
+                &[("code", &format!("{result:#x}"))]
+            )
+        );
     }
     let _com = ComApartment;
     // null指定は現在の実行ファイルを表し、ハンドルの解放は不要。
     let instance = unsafe { GetModuleHandleW(null()) };
     if instance.is_null() {
-        return Err(std::io::Error::last_os_error()).context("実行ファイルを取得できませんでした");
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| locale::text("実行ファイルを取得できませんでした"));
     }
     let mut class = WindowClass {
         name: wide("SkilvellaTrayWindow"),
@@ -232,7 +246,7 @@ pub fn run(url: &str, control: Control) -> Result<()> {
     // クラス名とコールバックは登録中有効で、ウィンドウ生成前には状態を参照しない。
     if unsafe { RegisterClassW(&definition) } == 0 {
         return Err(std::io::Error::last_os_error())
-            .context("タスクトレイのウィンドウクラスを登録できませんでした");
+            .with_context(|| locale::text("タスクトレイのウィンドウクラスを登録できませんでした"));
     }
     class.registered = true;
     let taskbar_message = wide("TaskbarCreated");
@@ -240,7 +254,7 @@ pub fn run(url: &str, control: Control) -> Result<()> {
     let taskbar_created = unsafe { RegisterWindowMessageW(taskbar_message.as_ptr()) };
     if taskbar_created == 0 {
         return Err(std::io::Error::last_os_error())
-            .context("タスクバーの通知を登録できませんでした");
+            .with_context(|| locale::text("タスクバーの通知を登録できませんでした"));
     }
     let state = Box::new(TrayState {
         icon: load_icon()?,
@@ -270,7 +284,7 @@ pub fn run(url: &str, control: Control) -> Result<()> {
     };
     if handle.is_null() {
         return Err(std::io::Error::last_os_error())
-            .context("タスクトレイのウィンドウを作成できませんでした");
+            .with_context(|| locale::text("タスクトレイのウィンドウを作成できませんでした"));
     }
     let window = TrayWindow {
         handle,
@@ -280,7 +294,7 @@ pub fn run(url: &str, control: Control) -> Result<()> {
     // コールバックなしのタイマーは同じスレッドのメッセージループで処理される。
     if unsafe { SetTimer(window.handle, STOP_TIMER, 200, None) } == 0 {
         return Err(std::io::Error::last_os_error())
-            .context("終了監視タイマーを開始できませんでした");
+            .with_context(|| locale::text("終了監視タイマーを開始できませんでした"));
     }
     let mut message = MSG::default();
     loop {
@@ -288,7 +302,7 @@ pub fn run(url: &str, control: Control) -> Result<()> {
         let result = unsafe { GetMessageW(&mut message, null_mut(), 0, 0) };
         if result == -1 {
             return Err(std::io::Error::last_os_error())
-                .context("タスクトレイの通知を取得できませんでした");
+                .with_context(|| locale::text("タスクトレイの通知を取得できませんでした"));
         }
         if result == 0 {
             return Ok(());
@@ -384,7 +398,7 @@ fn load_icon() -> Result<Icon> {
             };
             (size - width).abs()
         })
-        .context("同梱アイコンに画像がありません")?;
+        .with_context(|| locale::text("同梱アイコンに画像がありません"))?;
     let length = u32::from_le_bytes(entry[8..12].try_into()?) as usize;
     let offset = u32::from_le_bytes(entry[12..16].try_into()?) as usize;
     let image = bytes
@@ -392,9 +406,9 @@ fn load_icon() -> Result<Icon> {
             offset
                 ..offset
                     .checked_add(length)
-                    .context("同梱アイコンのサイズが不正です")?,
+                    .with_context(|| locale::text("同梱アイコンのサイズが不正です"))?,
         )
-        .context("同梱アイコンの画像範囲が不正です")?;
+        .with_context(|| locale::text("同梱アイコンの画像範囲が不正です"))?;
     // ICO内の検査済み画像範囲を渡す。LR_SHAREDを使わず所有権を取得する。
     let icon = unsafe {
         CreateIconFromResourceEx(
@@ -408,7 +422,8 @@ fn load_icon() -> Result<Icon> {
         )
     };
     if icon.is_null() {
-        return Err(std::io::Error::last_os_error()).context("同梱アイコンを読み込めませんでした");
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| locale::text("同梱アイコンを読み込めませんでした"));
     }
     Ok(Icon(icon))
 }

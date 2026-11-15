@@ -12,6 +12,7 @@ use objc2_foundation::{
     MainThreadMarker, NSData, NSDate, NSDefaultRunLoopMode, NSObject, NSRunLoop, NSSize, NSString,
     NSTimer, NSURL, ns_string,
 };
+use skilvella::locale;
 use std::cell::RefCell;
 
 struct TargetState {
@@ -48,7 +49,7 @@ define_class!(
         #[unsafe(method(checkUpdates:))]
         fn check_updates(&self, _sender: &AnyObject) {
             if !NSWorkspace::sharedWorkspace().openURL(&self.ivars().updates_url) {
-                eprintln!("Could not open the Skilvella update settings");
+                eprintln!("{}", locale::text("Skilvellaの更新設定を開けませんでした"));
             }
         }
 
@@ -92,7 +93,10 @@ define_class!(
 impl ManagerTarget {
     fn open(&self) {
         if !NSWorkspace::sharedWorkspace().openURL(&self.ivars().url) {
-            eprintln!("Could not open the Skilvella manager in the default browser");
+            eprintln!(
+                "{}",
+                locale::text("Skilvellaの管理画面を既定のブラウザーで開けませんでした")
+            );
         }
     }
 
@@ -117,18 +121,18 @@ impl ManagerTarget {
         menu.setAutoenablesItems(false);
         let restarting = self.ivars().control.is_restarting();
         for (title, action, enabled) in [
-            ("管理画面を開く", sel!(openManager:), true),
-            ("更新を確認", sel!(checkUpdates:), true),
+            (locale::text("管理画面を開く"), sel!(openManager:), true),
+            (locale::text("更新を確認"), sel!(checkUpdates:), true),
             (
                 if restarting {
-                    "サービスを再起動中…"
+                    locale::text("サービスを再起動中…")
                 } else {
-                    "サービスを再起動"
+                    locale::text("サービスを再起動")
                 },
                 sel!(restartService:),
                 !restarting,
             ),
-            ("終了", sel!(quitService:), true),
+            (locale::text("終了"), sel!(quitService:), true),
         ] {
             if action == sel!(quitService:) {
                 menu.addItem(&NSMenuItem::separatorItem(self.mtm()));
@@ -152,22 +156,26 @@ impl ManagerTarget {
 }
 
 pub fn run(url: &str, control: Control) -> anyhow::Result<()> {
-    let mtm = MainThreadMarker::new().context("The macOS status item needs the main thread")?;
+    let mtm = MainThreadMarker::new()
+        .with_context(|| locale::text("macOSのステータスアイテムはメインスレッドが必要です"))?;
     autoreleasepool(|_| {
         let updates_url = NSURL::URLWithString(&NSString::from_str(&format!(
             "{url}settings?check_updates=1#updates"
         )))
-        .context("Could not create the update settings URL")?;
+        .with_context(|| locale::text("更新設定のURLを作成できませんでした"))?;
         let url = NSURL::URLWithString(&NSString::from_str(url))
-            .context("Could not create the manager URL")?;
+            .with_context(|| locale::text("管理画面のURLを作成できませんでした"))?;
         let data = NSData::with_bytes(include_bytes!("../../static/icons/icon-32.png"));
         let image = NSImage::initWithData(NSImage::alloc(), &data)
-            .context("Could not decode the status item icon")?;
+            .with_context(|| locale::text("ステータスアイテムのアイコンを読み込めませんでした"))?;
         image.setSize(NSSize::new(18.0, 18.0));
 
         let app = NSApplication::sharedApplication(mtm);
         if !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) {
-            bail!("Could not configure the macOS status application");
+            bail!(
+                "{}",
+                locale::text("macOSのステータスアプリを設定できませんでした")
+            );
         }
         app.finishLaunching();
 
@@ -176,12 +184,15 @@ pub fn run(url: &str, control: Control) -> anyhow::Result<()> {
         let status_item = status_bar.statusItemWithLength(NSSquareStatusItemLength);
         let Some(button) = status_item.button(mtm) else {
             status_bar.removeStatusItem(&status_item);
-            bail!("Could not create the macOS status item button");
+            bail!(
+                "{}",
+                locale::text("macOSのステータスアイテムのボタンを作成できませんでした")
+            );
         };
         button.setImage(Some(&image));
-        button.setToolTip(Some(ns_string!(
-            "Skilvella — クリックで管理画面、右クリックでメニュー"
-        )));
+        button.setToolTip(Some(&NSString::from_str(locale::text(
+            "Skilvella — クリックで管理画面、右クリックでメニュー",
+        ))));
         button.sendActionOn(NSEventMask::LeftMouseUp | NSEventMask::RightMouseUp);
         // 安全性: target は handleClick: を実装し、イベント処理が終わるまで保持する。
         unsafe {

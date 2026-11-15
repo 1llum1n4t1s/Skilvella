@@ -1,5 +1,6 @@
 pub mod dialog;
 pub mod library;
+pub mod locale;
 pub mod mcp;
 pub mod model;
 pub mod server;

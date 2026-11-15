@@ -2294,7 +2294,11 @@ impl Library {
                 Self::save_directory(&tx, &previous_settings)?;
                 self.scan_on(&tx)?;
                 eprintln!(
-                    "Automatic directory selection unavailable; retained previous settings: {error}"
+                    "{}",
+                    crate::locale::format(
+                        "フォルダーの自動選択を利用できないため、以前の設定を維持しました: {error}",
+                        &[("error", &error.to_string())]
+                    )
                 );
             }
             Err(error) => return Err(error),

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use skilvella::{AppState, library::Library};
+use skilvella::{AppState, library::Library, locale};
 use std::{
     net::TcpListener,
     sync::{
@@ -161,7 +161,13 @@ pub async fn run(
         stop_codex_index(codex_index).await;
         result.context("The HTTP service task failed")??;
         match command {
-            Command::Restart => println!("Skilvella service restarting on port {port}"),
+            Command::Restart => println!(
+                "{}",
+                locale::format(
+                    "Skilvellaのサービスをポート {port} で再起動します",
+                    &[("port", &port.to_string())]
+                )
+            ),
             Command::Quit => return Ok(()),
         }
     }
@@ -181,7 +187,13 @@ fn start_codex_index(library: Library) -> (oneshot::Sender<()>, tokio::task::Joi
                 Err(error) => error.to_string(),
             };
             if !error.is_empty() && error != previous_error {
-                eprintln!("Skill entry synchronization failed: {error}");
+                eprintln!(
+                    "{}",
+                    locale::format(
+                        "呼び出し入口の同期に失敗しました: {error}",
+                        &[("error", &error)]
+                    )
+                );
             }
             previous_error = error;
             tokio::select! {

@@ -1,7 +1,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use anyhow::{Context, bail};
-use skilvella::{AppState, library::Library};
+use skilvella::{AppState, library::Library, locale};
 use std::{env, net::Ipv4Addr, path::PathBuf};
 
 mod desktop;
@@ -55,16 +55,17 @@ fn options() -> anyhow::Result<Option<Options>> {
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--data-dir") => {
-                data_dir = Some(PathBuf::from(
-                    args.next().context("--data-dir needs a path")?,
-                ))
+                data_dir =
+                    Some(PathBuf::from(args.next().with_context(|| {
+                        locale::text("--data-dir にはパスが必要です")
+                    })?))
             }
             Some("--port") => {
                 options.port = args
                     .next()
-                    .context("--port needs a number")?
+                    .with_context(|| locale::text("--port には番号が必要です"))?
                     .to_str()
-                    .context("Invalid port")?
+                    .with_context(|| locale::text("ポート番号が不正です"))?
                     .parse()?
             }
             Some("--no-watch") => options.watch = false,
@@ -72,22 +73,44 @@ fn options() -> anyhow::Result<Option<Options>> {
             #[cfg(windows)]
             Some(windows_startup::NO_AUTOSTART) => {}
             Some("--help" | "-h") => {
+                // オプション名・URL・パスは訳さず、説明文だけを現在の言語で出す。
+                let data_dir = data_dir
+                    .or_else(|| default_data_dir().ok())
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| {
+                        locale::text("利用できません。--data-dir PATH を指定してください")
+                            .to_owned()
+                    });
                 println!(
-                    "Skilvella {}\n\nUsage: skilvella [--data-dir PATH] [--port PORT] [--no-watch] [--no-tray]{}\n\nBrowser: http://127.0.0.1:7465/\nMCP:     http://127.0.0.1:7465/mcp\n\nWindows/macOS: left-click the tray/menu bar icon to open the browser.\nRight-click for Open manager, Check for updates, Restart service, and Quit.\nUse --no-tray for headless operation.\nThe server always binds to IPv4 loopback. Default data directory: {}",
+                    "Skilvella {}\n\n{} skilvella [--data-dir PATH] [--port PORT] [--no-watch] [--no-tray]{}\n\nBrowser: http://127.0.0.1:7465/\nMCP:     http://127.0.0.1:7465/mcp\n\n{}\n{}\n{}\n{}",
                     env!("CARGO_PKG_VERSION"),
+                    locale::text("使い方:"),
                     if cfg!(windows) {
                         " [--no-autostart]"
                     } else {
                         ""
                     },
-                    data_dir
-                        .or_else(|| default_data_dir().ok())
-                        .map(|path| path.display().to_string())
-                        .unwrap_or_else(|| "unavailable; use --data-dir PATH".into())
+                    locale::text(
+                        "Windows/macOS: トレイ／メニューバーのアイコンを左クリックすると、ブラウザーで管理画面が開きます。"
+                    ),
+                    locale::text(
+                        "右クリックで「管理画面を開く」「更新を確認」「サービスを再起動」「終了」を選べます。"
+                    ),
+                    locale::text("画面のない環境では --no-tray を指定してください。"),
+                    locale::format(
+                        "サーバーは常にIPv4ループバックだけで待ち受けます。既定のデータフォルダー: {path}",
+                        &[("path", &data_dir)]
+                    )
                 );
                 return Ok(None);
             }
-            _ => bail!("Unknown option: {} (see --help)", arg.to_string_lossy()),
+            _ => bail!(
+                "{}",
+                locale::format(
+                    "不明なオプション: {option}（--help を参照）",
+                    &[("option", &arg.to_string_lossy())]
+                )
+            ),
         }
     }
     options.data_dir = match data_dir {
@@ -99,24 +122,28 @@ fn options() -> anyhow::Result<Option<Options>> {
 fn default_data_dir() -> anyhow::Result<PathBuf> {
     #[cfg(windows)]
     {
-        Ok(PathBuf::from(
-            env::var_os("LOCALAPPDATA").context("LOCALAPPDATA missing; use --data-dir")?,
-        )
+        Ok(PathBuf::from(env::var_os("LOCALAPPDATA").with_context(|| {
+            locale::text("LOCALAPPDATA がありません。--data-dir を指定してください")
+        })?)
         .join("Skilvella"))
     }
     #[cfg(target_os = "macos")]
     {
-        Ok(
-            PathBuf::from(env::var_os("HOME").context("HOME missing; use --data-dir")?)
-                .join("Library/Application Support/Skilvella"),
+        Ok(PathBuf::from(
+            env::var_os("HOME").with_context(|| {
+                locale::text("HOME がありません。--data-dir を指定してください")
+            })?,
         )
+        .join("Library/Application Support/Skilvella"))
     }
     #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let root = match env::var_os("XDG_DATA_HOME") {
             Some(path) => PathBuf::from(path),
-            None => PathBuf::from(env::var_os("HOME").context("HOME missing; use --data-dir")?)
-                .join(".local/share"),
+            None => PathBuf::from(env::var_os("HOME").with_context(|| {
+                locale::text("HOME がありません。--data-dir を指定してください")
+            })?)
+            .join(".local/share"),
         };
         Ok(root.join("skilvella"))
     }
@@ -165,8 +192,11 @@ async fn run(options: Options) -> anyhow::Result<()> {
             // 画面で知らせる（何も表示されずに終わると、初心者には原因が分からない）。
             #[cfg(all(windows, feature = "windows-installer"))]
             windows_startup::show_port_in_use(options.port);
-            return Err(error)
-                .context("Could not bind localhost port; another instance may be running");
+            return Err(error).with_context(|| {
+                locale::text(
+                    "ローカルホストのポートを待ち受けできませんでした。別のインスタンスが動作している可能性があります",
+                )
+            });
         }
     };
     let home = user_home()?;
@@ -179,26 +209,40 @@ async fn run(options: Options) -> anyhow::Result<()> {
     state
         .run_mut(move |lib| lib.initialize_directory(&home, codex_home.as_deref()))
         .await
-        .context("Could not initialize the skill directory")?;
+        .with_context(|| locale::text("スキルフォルダーを初期化できませんでした"))?;
     #[cfg(windows)]
     if !cfg!(feature = "windows-installer")
         && options.register_at_logon
         && let Err(error) = windows_startup::register_at_logon()
     {
-        eprintln!("Could not register Skilvella for Windows sign-in: {error:#}");
+        eprintln!(
+            "{}",
+            locale::format(
+                "Windowsのサインイン時の自動起動に Skilvella を登録できませんでした: {error}",
+                &[("error", &format!("{error:#}"))]
+            )
+        );
     }
     #[cfg(windows)]
     if !cfg!(feature = "windows-installer")
         && options.register_start_menu
         && let Err(error) = windows_startup::register_start_menu()
     {
-        eprintln!("Could not add Skilvella to the Start menu: {error:#}");
+        eprintln!(
+            "{}",
+            locale::format(
+                "スタートメニューに Skilvella を追加できませんでした: {error}",
+                &[("error", &format!("{error:#}"))]
+            )
+        );
     }
     let port = listener.local_addr()?.port();
+    // "Browser:" "MCP:" "Data:" の行は、テストや配布検証が読み取る固定形式のため訳さない。
     println!(
-        "Skilvella {}\nBrowser: http://127.0.0.1:{port}/\nMCP:     http://127.0.0.1:{port}/mcp\nData:    {}\nStop: Ctrl+C",
+        "Skilvella {}\nBrowser: http://127.0.0.1:{port}/\nMCP:     http://127.0.0.1:{port}/mcp\nData:    {}\n{}",
         env!("CARGO_PKG_VERSION"),
-        options.data_dir.display()
+        options.data_dir.display(),
+        locale::text("停止: Ctrl+C")
     );
     // Setup版だけ、起動時と常駐中に更新を確認・取得する（適用は次回起動時にVelopackが行う）。
     // サービス再起動のループの外で1回だけ開始する。専用スレッドなのでTokioのワーカーは塞がない。
@@ -216,7 +260,13 @@ async fn run(options: Options) -> anyhow::Result<()> {
     if options.tray {
         // AppKitはメインスレッドで動かす。HTTPはTokioのワーカースレッドで継続する。
         if let Err(error) = desktop::run(&format!("http://127.0.0.1:{port}/"), control) {
-            eprintln!("Could not create the tray icon: {error:#}. The server is still running.");
+            eprintln!(
+                "{}",
+                locale::format(
+                    "トレイアイコンを作成できませんでした: {error}。サーバーは動作を続けます。",
+                    &[("error", &format!("{error:#}"))]
+                )
+            );
         }
     }
     let result = server.await?;
@@ -229,9 +279,14 @@ fn user_home() -> anyhow::Result<PathBuf> {
     let home = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"));
     #[cfg(not(windows))]
     let home = env::var_os("HOME");
-    let home = PathBuf::from(home.context("User home directory is unavailable")?);
+    let home = PathBuf::from(
+        home.with_context(|| locale::text("ユーザーのホームフォルダーを取得できません"))?,
+    );
     if !home.is_absolute() {
-        bail!("User home directory must be absolute");
+        bail!(
+            "{}",
+            locale::text("ユーザーのホームフォルダーは絶対パスである必要があります")
+        );
     }
     Ok(home)
 }

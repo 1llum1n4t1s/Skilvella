@@ -31,6 +31,7 @@ async fn headless_process_serves_ui_and_mcp_on_the_bound_port() {
             .env("USERPROFILE", &home)
             .env("HOME", &home)
             .env("CODEX_HOME", home.join(".codex"))
+            .env("SKILVELLA_LANGUAGE", "en")
             .env_remove("LOCALAPPDATA")
             .stdout(Stdio::piped())
             .spawn()
@@ -81,6 +82,7 @@ fn help_does_not_require_the_default_data_directory() {
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_skilvella"))
             .args(args)
+            .env("SKILVELLA_LANGUAGE", "en")
             .env_remove("LOCALAPPDATA")
             .env_remove("HOME")
             .env_remove("XDG_DATA_HOME")
@@ -96,6 +98,7 @@ fn help_does_not_require_the_default_data_directory() {
 fn help_uses_xdg_data_home_without_home() {
     let output = Command::new(env!("CARGO_BIN_EXE_skilvella"))
         .arg("--help")
+        .env("SKILVELLA_LANGUAGE", "en")
         .env_remove("HOME")
         .env("XDG_DATA_HOME", "/explicit-data")
         .output()
@@ -128,6 +131,7 @@ fn occupied_port_does_not_create_or_change_the_library() {
         .env("USERPROFILE", &home)
         .env("HOME", &home)
         .env("CODEX_HOME", home.join(".codex"))
+        .env("SKILVELLA_LANGUAGE", "en")
         .output()
         .unwrap();
     assert!(!output.status.success());

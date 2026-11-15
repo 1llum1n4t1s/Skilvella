@@ -161,14 +161,18 @@ pub fn remove_at_logon_if_ours(executable: &Path) -> Result<()> {
 /// 多くは単体版（ZIP版）が動いたままの場合なので、旧版の終了を案内する。
 #[cfg(feature = "windows-installer")]
 pub fn show_port_in_use(port: u16) {
+    use skilvella::locale;
     use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONWARNING, MB_OK, MessageBoxW};
+    // 日英併記をやめ、現在の言語（SKILVELLA_LANGUAGE → OSの表示言語など）の1言語だけで案内する。
     let text = wide(&format!(
-        "Skilvella could not start because port {port} is already in use.\n\
-         Another copy of Skilvella (for example the ZIP version) may still be running. \
-         Quit it from its tray icon, then start Skilvella again.\n\n\
-         ポート {port} が使用中のため、Skilvella を起動できませんでした。\n\
-         別の Skilvella（ZIP版など）が動いている可能性があります。\
-         タスクトレイのアイコンから終了してから、もう一度起動してください。"
+        "{}\n{}",
+        locale::format(
+            "ポート {port} が使用中のため、Skilvella を起動できませんでした。",
+            &[("port", &port.to_string())]
+        ),
+        locale::text(
+            "別の Skilvella（ZIP版など）が動いている可能性があります。タスクトレイのアイコンから終了してから、もう一度起動してください。"
+        )
     ));
     let title = wide("Skilvella");
     unsafe {

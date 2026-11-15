@@ -426,3 +426,158 @@ async fn history_reasons_and_created_notice_are_localized() {
     let zh = fetch("zh-TW").await;
     assert!(zh.contains("<p>編輯</p>"));
 }
+
+// ---- CLI・トレイ・メッセージボックスなど、管理画面の外の文言（`src/locales/`、`skilvella::locale`） ----
+
+const NATIVE_LOCALES: [&str; 8] = ["en", "de", "es", "fr", "ko", "pt-BR", "zh-CN", "zh-TW"];
+
+fn native_catalog(language: &str) -> std::collections::BTreeMap<String, String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/locales")
+        .join(format!("{language}.json"));
+    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+}
+
+fn rust_sources(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            rust_sources(&path, files);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+}
+
+/// コードが `locale::text("…")` / `locale::format("…")` へ直接渡す文字列リテラルを集める。
+/// 空白・改行を挟んだ呼び出しも拾う。キーにエスケープは使わない（使うとここで失敗する）。
+fn native_keys() -> std::collections::BTreeSet<String> {
+    let mut files = Vec::new();
+    rust_sources(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
+    let mut keys = std::collections::BTreeSet::new();
+    for path in files {
+        // 辞書の実装自身はテスト用の仮キーを使うため対象外にする。
+        if path.file_name().is_some_and(|name| name == "locale.rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).unwrap();
+        for call in ["locale::text(", "locale::format("] {
+            let mut rest = source.as_str();
+            while let Some((_, after)) = rest.split_once(call) {
+                rest = after;
+                let Some(literal) = after.trim_start().strip_prefix('"') else {
+                    continue;
+                };
+                let end = literal.find('"').expect("文字列リテラルが閉じている");
+                let key = &literal[..end];
+                assert!(
+                    !key.contains('\\'),
+                    "{}: キーにエスケープを使わない: {key}",
+                    path.display()
+                );
+                keys.insert(key.to_owned());
+            }
+        }
+    }
+    keys
+}
+
+/// 辞書は全言語で同じキー・同じプレースホルダーを持ち、空の訳を含まない。
+#[test]
+fn native_catalogs_share_keys_and_placeholders() {
+    let reference = native_catalog(NATIVE_LOCALES[0]);
+    assert!(!reference.is_empty());
+    for language in NATIVE_LOCALES {
+        let entries = native_catalog(language);
+        assert!(
+            entries.keys().eq(reference.keys()),
+            "{language}: キー集合が en と一致しない"
+        );
+        for (key, value) in &entries {
+            assert!(!value.trim().is_empty(), "{language}: 空の訳 {key}");
+            assert_eq!(
+                placeholders(key),
+                placeholders(value),
+                "{language}: プレースホルダーが原文と一致しない {key}"
+            );
+        }
+    }
+}
+
+/// コードが参照するキーはすべての辞書にあり、どこからも参照されない古いキーは残さない。
+#[test]
+fn native_keys_match_the_catalogs() {
+    let keys = native_keys();
+    assert!(keys.len() > 40, "コードのキーを抽出できていない");
+    for language in NATIVE_LOCALES {
+        let entries = native_catalog(language);
+        for key in &keys {
+            assert!(
+                entries.contains_key(key),
+                "{language}: コードのキーが辞書にない {key}"
+            );
+        }
+        for key in entries.keys() {
+            assert!(
+                keys.contains(key),
+                "{language}: コードから参照されない辞書のキー {key}"
+            );
+        }
+    }
+}
+
+/// `--help` の言語は SKILVELLA_LANGUAGE が最優先で、未対応の言語は英語になる。
+#[test]
+fn help_follows_the_language_override() {
+    let help = |language: &str, lang_var: &str| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_skilvella"))
+            .args(["--data-dir", "explicit-data", "--help"])
+            .env("SKILVELLA_LANGUAGE", language)
+            // 下位の変数より SKILVELLA_LANGUAGE が優先されることも確かめる。
+            .env("LC_ALL", lang_var)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    // 日本語は原文そのまま、他の言語は辞書の訳。
+    assert!(help("ja", "de_DE.UTF-8").contains("使い方: skilvella"));
+    assert!(help("en", "ja_JP.UTF-8").contains("Usage: skilvella"));
+    assert!(help("de", "ja_JP.UTF-8").contains("--no-tray"));
+    for (language, expected) in [
+        ("zh-CN", native_catalog("zh-CN")["使い方:"].clone()),
+        ("zh_TW.UTF-8", native_catalog("zh-TW")["使い方:"].clone()),
+        ("ko", native_catalog("ko")["使い方:"].clone()),
+        ("es", native_catalog("es")["使い方:"].clone()),
+        ("fr", native_catalog("fr")["使い方:"].clone()),
+        ("pt_PT", native_catalog("pt-BR")["使い方:"].clone()),
+    ] {
+        let text = help(language, "C");
+        assert!(
+            text.contains(&format!("{expected} skilvella")),
+            "{language}"
+        );
+        assert!(!text.contains("使い方:"), "{language}");
+    }
+    // 対応外の言語は英語。
+    assert!(help("sv_SE", "ja_JP").contains("Usage: skilvella"));
+}
+
+/// 引数のエラーも現在の言語で出る。
+#[test]
+fn unknown_option_error_is_localized() {
+    let run = |language: &str| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_skilvella"))
+            .arg("--bogus")
+            .env("SKILVELLA_LANGUAGE", language)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        String::from_utf8(output.stderr).unwrap()
+    };
+    assert!(run("en").contains("Unknown option: --bogus (see --help)"));
+    assert!(run("ja").contains("不明なオプション: --bogus（--help を参照）"));
+}
