@@ -1,0 +1,169 @@
+# Skilvella
+
+[日本語](README.ja.md) | [English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [한국어](README.ko.md) | [Español](README.es.md) | **Français** | [Deutsch](README.de.md) | [Português (Brasil)](README.pt-BR.md)
+
+Une application locale qui organise dans votre navigateur de vastes collections de fichiers `SKILL.md` et ne charge que les compétences dont vous avez besoin via MCP. Quel que soit le nombre de compétences, elle n'expose que trois outils MCP.
+
+- Recherche par mots-clés dans les noms, descriptions, contenus et étiquettes, y compris la recherche de sous-chaînes en japonais.
+- Enregistrement de dossiers, création de compétences, modification du contenu, étiquettes et catégories, opérations groupées et activation de la publication MCP compétence par compétence.
+- Historique enregistré avant chaque modification avec restauration, détection des conflits avec les modifications externes, et vérification des noms en double, des erreurs de syntaxe et des fichiers manquants.
+- Windows / macOS / Linux. Utilisez le navigateur du même PC.
+
+## Premiers pas
+
+Sous Windows, exécutez [SkilvellaApp-win-Setup.exe](https://skilvella.kagayoi.com/SkilvellaApp-win-Setup.exe) et lancez « Skilvella » depuis le menu Démarrer. La version avec installateur (Setup) s'enregistre lors de l'installation pour démarrer à l'ouverture de session de l'utilisateur actuel. Lorsque vous passez d'une version autonome (ZIP) existante, quittez d'abord l'ancienne version depuis son icône de la zone de notification (si l'ancienne version est encore en cours d'exécution, le port par défaut (7465) n'est pas disponible, et la version avec installateur (Setup) affiche un message en ce sens et ne démarre pas). L'enregistrement du démarrage automatique de la version ZIP est automatiquement transféré à la version avec installateur (Setup) lors de l'installation, et le raccourci « Skilvella » du menu Démarrer pointe alors lui aussi vers la version avec installateur (Setup). Si vous aviez désactivé le démarrage automatique, il reste désactivé. La désinstallation supprime aussi l'enregistrement de démarrage automatique qui pointe vers la version avec installateur (Setup). Le dossier de l'ancienne version n'est pas supprimé automatiquement ; supprimez-le vous-même si vous n'en avez plus besoin. Si vous utilisez une ancienne version avec installateur (Setup) sans mécanisme de mise à jour automatique (1.1.4 à 1.1.6), réinstallez une fois avec le nouveau Setup. Le dossier de données standard `%LOCALAPPDATA%\Skilvella` est partagé et subsiste après la désinstallation. La version avec installateur se met à jour automatiquement ([Mises à jour de l'application](#app-updates)).
+
+Pour utiliser la version ZIP ou la version macOS, téléchargez le paquet correspondant depuis [GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest) et extrayez-le.
+
+- Windows x64 : extrayez `Skilvella-windows-x86_64.zip` dans le dossier que vous conserverez, puis lancez `skilvella.exe`. Il s'exécute dans la zone de notification sans ouvrir de terminal, et le premier lancement normal ajoute « Skilvella » au menu Démarrer de l'utilisateur actuel.
+- Mac Apple Silicon : extrayez `Skilvella-macos-aarch64.tar.gz` et exécutez `./skilvella` dans un terminal.
+- Avant l'extraction, vous pouvez vérifier le SHA-256 du paquet avec `SHA256SUMS.txt`.
+
+Pour Linux ou la compilation depuis les sources, consultez le [guide de développement](docs/DEVELOPMENT.md).
+
+Skilvella affiche son icône dans la zone de notification sous Windows et dans la barre des menus sous Mac. Un clic gauche ouvre le gestionnaire dans votre navigateur par défaut. Un clic droit (ou Contrôle-clic sous Mac) permet de choisir « Ouvrir le gestionnaire », « Rechercher des mises à jour », « Redémarrer le service » ou « Quitter ». Sous Windows, si vous ne voyez pas l'icône, consultez aussi le menu de débordement des icônes masquées de la zone de notification.
+
+« Redémarrer le service » redémarre le serveur HTTP/MCP et la surveillance des fichiers dans le même processus et à la même URL. Les compétences et paramètres enregistrés sont conservés. Les demandes en double pendant un redémarrage sont regroupées, et le redémarrage attend la fin des opérations HTTP en cours. Les connexions MCP sont coupées ; reconnectez-vous depuis votre client. Rechargez toute page du gestionnaire déjà ouverte avant de l'utiliser. « Quitter » arrête le serveur et l'icône.
+
+Vous pouvez aussi ouvrir directement le gestionnaire à l'adresse [http://127.0.0.1:7465/](http://127.0.0.1:7465/). Le point d'accès MCP est `http://127.0.0.1:7465/mcp`. Dans un environnement sans affichage, passez `--no-tray`. Sous Linux, aucune icône n'est affichée et l'application s'exécute comme serveur HTTP/MCP.
+
+Pour la disposition autonome de Windows, un lancement sans arguments tente d'enregistrer l'application pour démarrer à l'ouverture de session de l'utilisateur actuel. Si elle est déjà enregistrée, lancer l'exécutable depuis un autre emplacement ne modifie pas le chemin enregistré. Vous pouvez activer ou désactiver le démarrage automatique dans « Paramètres » → « Applications » → « Démarrage » de Windows. Pour ignorer l'enregistrement lors de ce lancement, passez `--no-autostart`. Pour le démarrage automatique géré par Toolport, configurez-le du côté de Toolport.
+
+Aucun Rust, Node.js, Python ni serveur de base de données externe n'est nécessaire à l'exécution. Lorsqu'il est lancé depuis un terminal, vous pouvez aussi quitter avec `Ctrl+C` dans la console associée.
+
+## Gérer votre bibliothèque
+
+Au premier lancement, Skilvella détecte automatiquement le dossier géré. Il examine dans l'ordre les dossiers existants `~/.agents/skills`, `$CODEX_HOME/skills` et `~/.codex/skills`, et si aucun n'est trouvé, crée `<data-folder-name>-skills` à côté du dossier de données. Un candidat qui ne contient que des points d'appel Codex générés par Skilvella est ignoré, et les points d'appel eux-mêmes ne sont pas comptés comme des compétences gérées. Cela n'est vrai que si le dossier de données possède un enregistrement de propriété pour ces points d'appel. Si vous recréez le dossier de données ou en indiquez un autre avec `--data-dir`, les points d'appel générés auparavant qui subsistent seront enregistrés comme des compétences ordinaires. Si des sources ont été enregistrées auparavant, cette configuration est prioritaire et reprise. Si un problème de lecture de l'enregistrement de propriété des points d'appel ou des candidats empêche de finaliser la détection automatique, la cible d'enregistrement automatique sauvegardée est conservée. Vérifiez l'état de la détection dans la liste des dossiers à gauche de la bibliothèque.
+
+La bibliothèque tient sur un seul écran : la liste des dossiers gérés à gauche et la liste des compétences à droite. Appuyez sur « + Ajouter un dossier » pour ouvrir le sélecteur de dossier standard du système ; le dossier choisi est enregistré tel quel et analysé. Les fichiers ne sont pas déplacés. Vous n'avez pas à saisir de nom : le nom du dossier sert de nom affiché (vous pourrez le modifier plus tard avec « Modifier le nom affiché »). Dans les environnements où la boîte de dialogue ne peut pas s'ouvrir (comme les sessions SSH), saisissez un chemin absolu sous « Saisir un chemin ».
+
+Sélectionner un dossier à gauche affiche son emplacement, son nombre de compétences et l'avertissement sur les chemins de recherche standard, ainsi que « Modifier le nom affiché » et « Ne plus gérer ». Pour le dossier par défaut, « Changer le dossier référencé » permet de changer le dossier référencé, et « Parcourir… » permet d'en choisir un dans la boîte de dialogue. Le réglage persiste après un redémarrage, et « Ne plus gérer » ne supprime aucun fichier. Si vous choisissez un dossier déjà géré, ou un dossier ayant une relation parent/enfant avec un dossier géré, l'ajout est interrompu et le nom du dossier en chevauchement est affiché.
+
+Les nouvelles compétences découvertes par ajout, détection automatique ou modifications externes sont enregistrées avec la **publication MCP activée** si elles sont lisibles. Les compétences avec erreur de lecture ou frontmatter invalide restent non publiées, et elles ne sont pas publiées automatiquement même après correction. L'état de publication des compétences existantes ne change ni lors d'une nouvelle analyse ni au démarrage (les compétences que vous avez dépubliées ne sont jamais publiées automatiquement). Sous Windows et macOS, un dossier dont le nom ne diffère que par la casse des lettres ASCII est traité comme la même compétence, et son état de publication ne change pas. Si vous ne voulez pas qu'une compétence soit publiée, choisissez « Non publiée » dans la colonne « État » de la liste après avoir ajouté le dossier. Choisir « Publiée » ou « Non publiée » dans la colonne « État » de la liste enregistre immédiatement. Vous pouvez aussi la modifier sur la page individuelle ou avec les opérations groupées de la liste. Lors du passage à publiée, les fichiers sont revérifiés, et les compétences manquantes, avec erreur de lecture ou avec frontmatter invalide ne sont pas publiées ; la sélection est rétablie et la raison est affichée. Les étiquettes et catégories ne changent pas.
+
+La bibliothèque liste d'emblée les compétences de tous les dossiers et permet de les rechercher sur place. Un dossier qui contient directement un répertoire ou fichier `.git` est affiché imbriqué sous le dossier comme une source (dépôt), et tout le reste est regroupé sous « Compétences personnelles ». Si un dossier sans dépôt source directement à l'intérieur est lui-même un dépôt Git, le dossier entier devient une seule source. La liste normale affiche les compétences qui existent actuellement. Les anciens enregistrements, comme ceux d'avant un déplacement, sont conservés et peuvent être consultés avec l'état « Introuvable » ou « Tous » et sous « Nettoyer les entrées de compétences absentes » à gauche. Dans la liste « Introuvable », « Supprimer les entrées absentes » supprime les données d'enregistrement, les réglages et l'historique sur toutes les pages correspondant aux conditions de recherche. Cette action est irréversible. Elle ne modifie pas les fichiers réels, et elle interrompt la suppression de toutes les entrées si la source est inaccessible ou si un chemin existe. Les catégories peuvent être modifiées depuis les métadonnées de chaque compétence.
+
+Skilvella recherche les fichiers `SKILL.md` des dossiers enregistrés **récursivement, sans limite de profondeur**. Il continue d'analyser les sous-répertoires plus profonds même après avoir trouvé une compétence. Les compétences parentes et enfants sont gérées avec des identifiants et des réglages de publication distincts, et les fichiers d'un enfant ne sont pas inclus dans le périmètre de publication MCP du parent. Les liens symboliques, les jonctions Windows, `.git`, `node_modules`, `target` et `.work` sont exclus. Désenregistrer un dossier ne supprime pas les fichiers d'origine. Si vous rajoutez un dossier que vous aviez retiré de la gestion, ses données de gestion antérieures (réglages de publication, étiquettes, historique) sont restaurées. Les dossiers de même nom n'entrent pas en conflit entre eux.
+
+Enregistrer le contenu modifie le fichier réel à l'emplacement enregistré. L'aperçu désactive le HTML, le chargement d'images et les actions des liens, et n'exécute aucun script. Les modifications faites dans des éditeurs externes sont surveillées automatiquement. Si elles ne sont pas prises en compte, utilisez « Analyser à nouveau ».
+
+En cas d'erreurs de lecture, ouvrez la liste des erreurs tous dossiers confondus depuis « Examiner et corriger les erreurs de lecture » dans la bibliothèque ou depuis « Erreurs de lecture » à gauche. Ouvrez le nom ou le chemin de la compétence pour en vérifier la cause, et pour les erreurs de syntaxe, corrigez le contenu et enregistrez. Si un fichier ne peut pas être lu, vérifiez son emplacement, ses droits et son encodage, puis relancez l'analyse. L'avis disparaît une fois l'erreur résolue.
+
+<a id="app-updates"></a>
+
+## Mises à jour de l'application
+
+**Version avec installateur (Setup)** : les mises à jour automatiques sont activées par défaut. Elle recherche une nouvelle version au démarrage puis toutes les 24 heures tant qu'elle reste en cours d'exécution, et la télécharge si elle est disponible. La mise à jour est appliquée automatiquement au démarrage suivant, avec un relancement utilisant les mêmes réglages. Elle ne se connecte pas dans les 24 heures suivant la vérification précédente. Si une vérification ou un téléchargement échoue, elle continue d'exécuter la version actuelle. Vous pouvez la désactiver avec « Mettre à jour automatiquement au démarrage » sous « Mises à jour de l'application » dans « Paramètres » (le réglage est enregistré dans `app-update.json` dans le dossier de données, par exemple `%LOCALAPPDATA%\Skilvella`, et ne modifie pas la bibliothèque de compétences). « Rechercher des mises à jour » effectue la vérification sans tenir compte de l'intervalle de 24 heures, et « Installer la mise à jour » télécharge la mise à jour et redémarre immédiatement. Les informations de mise à jour sont récupérées depuis `skilvella.kagayoi.com`.
+
+Ce qui suit s'applique à la version autonome (ZIP) et à Mac.
+
+Vous pouvez rechercher la dernière version stable sur GitHub depuis la section des mises à jour dans « Paramètres » ou depuis « Rechercher des mises à jour » du menu de la zone de notification. Choisir « Installer la mise à jour » télécharge en HTTPS le paquet pour Windows x64 / Mac Apple Silicon et `SHA256SUMS.txt`, vérifie le SHA-256, puis l'applique. Cela nécessite le `curl` fourni avec le système et le droit d'écriture à l'emplacement de l'exécutable. La mise à jour intégrée n'est pas prise en charge sous Linux ni sur d'autres processeurs.
+
+La mise à jour attend la fin des opérations HTTP en cours avant de quitter, puis redémarre avec les mêmes arguments de lancement et le même dossier de travail. Reconnectez vos clients MCP. Si la vérification du paquet échoue, la version actuelle est conservée. Si le nouveau processus ne peut pas être démarré après l'application de la mise à jour, l'application tente de restaurer l'ancien exécutable ou la cible référencée par Toolport. La page de paramètres qui a lancé la mise à jour se recharge automatiquement dès que la nouvelle version répond. Si vous effectuez une opération de mise à jour sur une ancienne page de paramètres déjà ouverte avant le redémarrage de l'application, il vous est demandé de recharger la page.
+
+Un dossier `.skilvella-update-*` est créé au même emplacement que l'exécutable d'avant la mise à jour, et il conserve `update.log`. Dans la disposition normale, il stocke aussi `previous-binary` pour la récupération. Une fois que vous avez confirmé que tout fonctionne après la mise à jour et que l'assistant de mise à jour s'est arrêté, vous pouvez supprimer ce dossier.
+
+Sous la gestion `Skilvella-Latest.ps1` de Toolport, la version existante est conservée, le dossier de la nouvelle version et les informations de vérification sont ajoutés, et la cible référencée du lanceur est basculée. L'assistant de mise à jour s'exécute jusqu'à l'arrêt de l'application redémarrée ; quittez donc Skilvella avant de supprimer le dossier de mise à jour.
+
+Lorsque Skilvella est lancé par un superviseur de processus externe, il peut être nécessaire de le redémarrer depuis cet outil. Si le verrou de démarrage de Toolport ne peut pas être obtenu, la mise à jour n'est pas appliquée. S'il ne démarre pas, relancez le lanceur. Un emplacement géré par Toolport contenant des caractères non ASCII, comme du japonais, ne prend pas en charge la mise à jour intégrée. La disposition autonome normale n'est pas concernée par cette limitation.
+
+<a id="mcp-connection"></a>
+
+## Connexion MCP
+
+Enregistrez l'URL suivante auprès d'un client prenant en charge Streamable HTTP.
+
+```text
+http://127.0.0.1:7465/mcp
+```
+
+Dans Toolport, enregistrez-la comme serveur HTTP et indiquez la même URL. Laissez Skilvella en cours d'exécution.
+
+| Outil | Rôle |
+| --- | --- |
+| `search_skills` | Rechercher les compétences publiées et obtenir des résumés et des identifiants |
+| `load_skill` | Obtenir le contenu de `SKILL.md` et la liste des fichiers de référence à partir d'un identifiant |
+| `read_skill_file` | Obtenir du texte UTF-8 sous une compétence, par lignes |
+
+Pour `load_skill`, continuez à transmettre les arguments de continuation jusqu'à ce que `next` soit null, concaténez le contenu, puis suivez les instructions. La liste compte normalement 100 entrées par page et jusqu'à 8 Kio de chemins au total, mais si un seul chemin dépasse 8 Kio, ce chemin est renvoyé seul, de sorte que la réponse devient volumineuse. Récupérez les compétences et les références dont elles ont besoin une par une. Pour les références, utilisez `read_skill_file` pour récupérer `next_text_offset` sur la plage de lignes voulue jusqu'à la fin, et n'utilisez `next_start_line` que si d'autres lignes sont nécessaires. Les pages d'octets d'une même plage de lignes sont concaténées telles quelles, et des sauts de ligne sont insérés entre les plages de lignes lors de la concaténation. Pour continuer avec `next_text_offset`, conservez `start_line` et `max_lines` ; pour la plage de lignes suivante, définissez `start_line` sur `next_start_line` et remettez `text_offset` à 0. Les sauts de ligne sont normalisés comme précédemment, et le saut de ligne final est supprimé. Pour les continuations, indiquez le `revision` renvoyé comme `expected_revision`. Si le fichier a changé entre-temps, récupérez-le à nouveau depuis le début.
+
+MCP est en lecture seule. Il ne peut pas renvoyer le contenu de compétences non publiées, de compétences avec frontmatter invalide ni de compétences manquantes. Il n'existe pas non plus de fonctionnalité d'exécution des fichiers de référence. Le contenu est limité à 2 Mio et le texte de référence à 1 Mio.
+
+La publication MCP seule ne change pas le fait que les agents découvrent et chargent de manière standard les mêmes compétences. Pour éviter un double chargement, placez les compétences en dehors des chemins de recherche standard de l'agent et enregistrez cet emplacement avec « + Ajouter un dossier » de la bibliothèque. Skilvella n'a aucune fonctionnalité de déplacement de dossiers. Si des fichiers existants doivent être déplacés, faites-le vous-même et enregistrez à nouveau le nouvel emplacement. Les fichiers de configuration de Codex ne sont pas modifiés. Redémarrez Codex après avoir changé les chemins de recherche standard. Le contenu déjà chargé dans une conversation n'est pas retiré. Vérifiez séparément les paramètres de recherche personnalisés et les autres clients.
+
+## Sélection automatique et suggestions de commandes
+
+Enregistrez et vérifiez d'abord Skilvella auprès d'un client qui utilise la [Connexion MCP](#mcp-connection). Dans « Paramètres », sous « Synchronisation des points d'appel », cochez les cibles de synchronisation (Codex, Claude Code, Grok ; plusieurs peuvent être sélectionnées) et enregistrez : Skilvella synchronise alors lui-même les points d'appel de chaque client. Si vous aviez activé « Intégration Codex » dans une ancienne version, ce réglage est repris avec Codex sélectionné. Le fonctionnement est identique sous Windows, macOS et Linux et n'utilise ni le Planificateur de tâches ni aucun autre processus résident distinct. La synchronisation s'exécute au démarrage, après les opérations de gestion et lors des vérifications périodiques, et le réglage est conservé après un redémarrage du service.
+
+| Cible de synchronisation | Emplacement du point d'appel | Mode d'exposition à la découverte | Contrôle de la sélection automatique |
+| --- | --- | --- | --- |
+| Codex | `~/.agents/skills/skilvella/<name>` | Fichiers réels (Codex recherche dans les dossiers imbriqués) | `agents/openai.yaml` |
+| Claude Code | `~/.claude/skilvella/skills/<name>` | Un lien vers `~/.claude/skills/<name>` (une jonction sous Windows, un lien symbolique sous macOS et Linux) | `disable-model-invocation` |
+| Grok | `~/.grok/skills/skilvella/<name>` | Fichiers réels (Grok recherche dans les dossiers imbriqués) | `disable-model-invocation` |
+
+Claude Code ne recherche qu'un seul niveau directement sous `~/.claude/skills` ; les points d'appel sont donc placés hors du chemin de découverte et un lien est créé pour chaque compétence. Si une compétence ou un lien de même nom existe déjà dans `~/.claude/skills`, il n'est pas écrasé et le nom est signalé comme erreur de synchronisation. Un lien que vous avez créé à la main depuis `~/.claude/skills/<name>` vers `~/.agents/skills/skilvella/<name>` en suivant les indications d'une ancienne version est redirigé vers le point d'appel de Claude Code et repris en gestion, mais uniquement pour les noms qui sont des cibles de synchronisation. Les liens pour les noms qui ne sont pas des cibles de synchronisation ne sont pas touchés (si vous désactivez Codex, leur cible disparaît). Désactiver la synchronisation pour Claude Code ne supprime que les liens que Skilvella a créés ou repris. Si vous avez enregistré `~/.claude/skills` lui-même comme dossier géré, la synchronisation n'est pas effectuée.
+
+Grok lit aussi les chemins de découverte de Codex (`~/.agents/skills`) et de Claude Code (`~/.claude/skills`), et pour les compétences de même nom il donne la priorité dans l'ordre `~/.grok/skills`, `~/.agents/skills`, `~/.claude/skills`. Les points d'appel de Codex arrêtent la sélection automatique avec `agents/openai.yaml` ; dans Grok, même les compétences en « Suggestions de commandes seules » sont donc sélectionnées automatiquement. Si vous utilisez Grok, sélectionnez Grok comme cible de synchronisation.
+
+Choisissez le mode sur la page de détail de chaque compétence ou avec « Utilisation » dans la liste. Dans la liste, vous pouvez vérifier le mode actuel et le changer sur place. MCP ne renvoie pas le contenu des compétences non publiées, et après une synchronisation réussie il supprime aussi leurs points de suggestion.
+
+Si vous appuyez sur le bouton Retour du navigateur ou rechargez la page pendant qu'un enregistrement est en cours dans la liste, Skilvella vérifie le résultat de l'enregistrement avant d'afficher les derniers réglages. Une requête qui n'a pas été acceptée à cause d'une interruption de la connexion est annulée, et le résultat de la vérification est affiché à l'écran.
+
+| Mode | Nom et description transmis pour la sélection automatique | Suggestions de commandes |
+| --- | --- | --- |
+| Recherche seule (par défaut) | Non transmis | Non affichées |
+| Suggestions de commandes seules | Non transmis | Affichées |
+| Sélection automatique + suggestions de commandes | Transmis | Affichées |
+
+Pour les compétences qui affichent des suggestions de commandes, la commande d'appel pour chaque cible de synchronisation (`$name` pour Codex, `/name` pour Claude Code et Grok) est affichée sous le nom de la compétence dans la liste et sous « Utilisation » sur la page de détail. Si le nom contient autre chose que des lettres minuscules, des chiffres et `-`, il devient `skill-<first 8 characters of the id>`, et s'il existe une compétence publiée de même nom, il devient `<name>-<first 8 characters of the id>` ; utilisez donc la commande affichée. Lorsqu'il n'y a pas de commande, la page de détail en indique la raison (recherche seule, aucune cible de synchronisation sélectionnée, non publiée ou erreur de lecture). La commande d'une compétence que vous faites passer de non publiée à publiée dans la liste apparaît après un rechargement.
+
+Dans la liste, cochez des compétences, choisissez « Utilisation » sous les opérations groupées et appuyez sur « Appliquer à la sélection » pour changer le mode de plusieurs compétences à la fois. « Aucun changement » conserve le mode actuel. Vous pouvez modifier en même temps l'état de publication et les étiquettes.
+
+Ouvrir « Réglages groupés par source » sous « Toutes les compétences » permet de sélectionner plusieurs sources et de modifier ensemble l'état de publication et l'utilisation avec « Appliquer aux sources sélectionnées ». Le périmètre est constitué des compétences de toutes les pages enregistrées au moment de l'exécution et ne s'étend pas aux compétences ajoutées ultérieurement. Le nombre de la vérification préalable repose sur l'index d'analyse et exclut les entrées manquantes et en erreur. Le résultat indique le nombre de mises à jour et le nombre d'exclusions. Lors de la publication, les fichiers sont revérifiés, et s'ils ne peuvent pas être revalidés parce qu'ils sont manquants, illisibles, invalides ou autre, l'enregistrement des réglages de toutes les entrées est annulé. Les réglages sont enregistrés en une seule transaction, et les compétences d'origine ne sont pas modifiées.
+
+Codex n'offre pas de réglage distinct pour « activer la sélection automatique mais masquer des suggestions », Skilvella propose donc les trois modes correspondants. Même avec la sélection automatique, il ne conserve pas en permanence une copie complète du contenu d'origine ; le contenu est récupéré depuis MCP en cas de besoin. Les compétences non affichées dans les suggestions peuvent être recherchées avec `$skilvella-search`, réservé à l'invocation explicite. Vous pouvez aussi utiliser directement `search_skills` de MCP.
+
+Le mode d'utilisation est commun à toutes les cibles de synchronisation. Les emplacements des points d'appel sont ceux du tableau ci-dessus. Lorsque vous dépubliez une compétence ou changez son mode, les artefacts devenus inutiles sont déplacés hors des chemins de découverte (`skilvella-staging` / `skilvella-retired` directement sous `~/.agents`, `~/.claude` et `~/.grok`). Si des fichiers inconnus ou des modifications manuelles sont détectés, ils ne sont pas écrasés, et une erreur de synchronisation est affichée sur la page des paramètres. Si des fichiers temporaires incomplets subsistent à cause d'un espace disque insuffisant ou d'un arrêt forcé, la synchronisation s'arrête en protégeant l'index existant sain. Vérifiez le contenu du chemin affiché puis réessayez. Désactiver l'intégration retire des chemins de découverte les points d'appel dont elle est propriétaire. Tant que la synchronisation est arrêtée, d'anciennes suggestions et d'anciens réglages de sélection automatique peuvent subsister. Les fichiers d'origine, les états de publication et l'historique de modification ne sont pas modifiés. Si l'affichage des suggestions de Codex ne se met pas à jour, rouvrez le menu des suggestions ou redémarrez Codex. Claude Code prend en compte les changements de `~/.claude/skills` même dans une session en cours, mais si vous avez créé `~/.claude/skills` lui-même après le début de la session, exécutez `/reload-skills`. Le contenu déjà chargé dans une conversation existante ne peut pas être retiré.
+
+<a id="display-settings"></a>
+
+## Paramètres d'affichage
+
+Dans la bibliothèque, sélectionnez un dossier à gauche et ouvrez « Modifier le nom affiché » pour changer le nom du dossier affiché à l'écran. La saisie doit contenir au plus 100 caractères, espaces de début et de fin compris, et les caractères de contrôle tels que les sauts de ligne ne sont pas autorisés. Les espaces de début et de fin sont supprimés à l'enregistrement, et une valeur vide rétablit l'identifiant d'origine. Le nom affiché est enregistré dans l'application, et le nom réel du dossier, les identifiants de compétences, les réglages de publication et l'historique de modification ne changent pas. Les noms affichés en double sont autorisés, mais un nom que vous avez modifié est affiché avec son identifiant d'origine à côté.
+
+Dans « Paramètres » du gestionnaire, vous pouvez choisir la langue : automatique ou l'une des neuf langues (japonais, anglais, chinois simplifié, chinois traditionnel, coréen, espagnol, français, allemand, portugais brésilien). La valeur par défaut « Automatique » utilise le réglage de langue du navigateur. La langue est enregistrée dès que vous la sélectionnez, et si JavaScript est désactivé, appuyez sur « Enregistrer ». La sélection est enregistrée par port de connexion dans le même navigateur, et les autres onglets déjà ouverts l'appliquent à partir de leur prochain chargement de page. Un réglage de langue d'une ancienne version est repris lorsque vous ouvrez le gestionnaire à la même adresse dans le même navigateur. Cette reprise nécessite JavaScript. Les noms, descriptions, contenus et chemins des compétences ainsi que les détails techniques des erreurs conservent leur texte d'origine. Les menus de la zone de notification et de la barre des menus, la sortie en ligne de commande comme `--help`, les messages de démarrage et les erreurs, ainsi que les boîtes de message de la version avec installateur (Setup) sont aussi affichés dans ces neuf mêmes langues. Ces langues sont déterminées dans l'ordre suivant : variable d'environnement `SKILVELLA_LANGUAGE` (par exemple `ja`, `pt-BR`) → `LC_ALL` → `LC_MESSAGES` → `LANG` → langue d'affichage du système, et si elle ne peut pas être déterminée, l'anglais est utilisé. Les noms et descriptions des outils MCP sont en anglais.
+
+Vous pouvez choisir le thème entre Automatique, Clair et Sombre lorsque JavaScript est activé. La sélection est enregistrée dans le navigateur, et Automatique suit le réglage du jeu de couleurs du navigateur.
+
+## Données et sauvegardes
+
+| Système | Emplacement des données par défaut |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\Skilvella` |
+| macOS | `~/Library/Application Support/Skilvella` |
+| Linux | `$XDG_DATA_HOME/skilvella` ou `~/.local/share/skilvella` |
+
+La source de vérité pour `SKILL.md` et les fichiers de référence est constituée des dossiers enregistrés. Outre l'index de recherche, le fichier `library.sqlite3` du dossier de données stocke aussi les étiquettes, catégories, réglages de publication, emplacements enregistrés, noms affichés des dossiers et l'historique de modification. **Si vous supprimez toute la base de données, ces données de gestion sont perdues.**
+
+Pour sauvegarder, quittez d'abord Skilvella puis copiez à la fois le dossier de données et les dossiers enregistrés. La base seule ne permet pas de restaurer les fichiers de compétences actuels. Sur un autre PC, les chemins absolus des sources enregistrées diffèrent ; partager la base telle quelle pour une utilisation simultanée n'est donc pas pris en charge.
+
+## Options et dépannage
+
+```sh
+skilvella --data-dir /absolute/path/to/data --port 7465 --no-watch
+skilvella --help
+```
+
+- Si le port est utilisé, quittez le processus existant ou changez-le avec `--port`. Le gestionnaire et MCP utilisent le même port.
+- Si le gestionnaire ne revient pas après une mise à jour depuis une ancienne version de Windows, lancez une fois le `skilvella.exe` mis à jour dans la disposition normale, ou une fois le lanceur sous la gestion de Toolport.
+- Si un déplacement de dossier interrompu d'une ancienne version ne peut pas être récupéré au démarrage, le démarrage est abandonné. Les données d'origine et l'enregistrement de migration sont conservés.
+- L'emplacement des données et les emplacements d'enregistrement des compétences ne peuvent pas se chevaucher. Indiquez des dossiers distincts sur un disque local.
+- Les modifications faites dans un autre onglet sont aussi détectées comme conflits à l'enregistrement. Copiez le brouillon conservé, rechargez la page et fusionnez-le dans le dernier contenu.
+- La recherche utilise un ET séparé par des espaces et une correspondance de sous-chaînes. La recherche de compétences en anglais par le sens à partir d'une requête en japonais, les modèles d'embedding et la synchronisation cloud ne sont pas inclus.
+- Même si le dossier source passe hors ligne, les données d'enregistrement et l'historique sont conservés. Relancez l'analyse après la reconnexion.
+
+Les connexions sont limitées à `127.0.0.1`. L'application est destinée à un usage où vous faites confiance aux utilisateurs et aux processus du même PC.
+
+La licence est [MIT](LICENSE).
+
+Si vous souhaitez contribuer au développement, consultez le [guide de développement](docs/DEVELOPMENT.md), la [conception](DESIGN.md) et les [consignes pour les contributeurs](AGENTS.md).

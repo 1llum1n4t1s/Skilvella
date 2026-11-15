@@ -1,161 +1,169 @@
 # Skilvella
 
-大量の `SKILL.md` をブラウザーで整理し、必要なスキルだけMCP経由で読み込むローカルアプリです。スキルの数にかかわらず、MCPツールは3つです。
+[日本語](README.ja.md) | **English** | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Português (Brasil)](README.pt-BR.md)
 
-- 名前・説明・本文・タグのキーワード検索。日本語の部分一致にも対応。
-- フォルダー登録、新規作成、本文編集、タグ・カテゴリ、一括操作、MCP公開の切り替え。
-- 編集前の履歴保存と復元、外部編集との競合検出、重複名・構文エラー・消失ファイルの確認。
-- Windows / macOS / Linux。ブラウザーは同じPCから利用します。
+A local app that organizes large collections of `SKILL.md` files in your browser and loads only the skills you need through MCP. No matter how many skills you have, it exposes just three MCP tools.
 
-## 起動
+- Keyword search across names, descriptions, content, and tags, including Japanese substring matching.
+- Folder registration, skill creation, content editing, tags and categories, bulk operations, and per-skill MCP publication switching.
+- History saved before every edit with restore, conflict detection against external edits, and checks for duplicate names, syntax errors, and missing files.
+- Windows / macOS / Linux. Use the browser on the same PC.
 
-Windowsでは [SkilvellaApp-win-Setup.exe](https://skilvella.kagayoi.com/SkilvellaApp-win-Setup.exe) を実行し、スタートメニューの「Skilvella」から起動できます。Setup版はインストール時に、現在のユーザーのサインイン時に起動するよう登録します。既存の単体版（ZIP版）から切り替えるときは、先に旧版をタスクトレイのアイコンから終了してください（旧版が動いたままだと既定のポート（7465）が使えず、Setup版はその旨を表示して起動しません）。ZIP版のサインイン時の自動起動の登録は、インストール時にSetup版へ自動で切り替わり、スタートメニューの「Skilvella」もSetup版を指すようになります。自動起動を無効にしていた場合は無効のまま引き継がれます。アンインストールすると、Setup版を指す自動起動の登録も外れます。旧版のフォルダーは自動では削除しないため、不要なら手で削除してください。自動更新の仕組みを持たない旧Setup版（1.1.4〜1.1.6）を使っている場合は、一度だけ新しいSetupを入れ直してください。標準のデータフォルダー `%LOCALAPPDATA%\Skilvella` は共用され、アンインストール後も残ります。インストーラー版は自動で更新されます（[アプリの更新](#アプリの更新)）。
+## Getting started
 
-ZIP版またはmacOS版を使う場合は、[GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest)から対応する配布物を取得して展開してください。
+On Windows, run [SkilvellaApp-win-Setup.exe](https://skilvella.kagayoi.com/SkilvellaApp-win-Setup.exe) and launch "Skilvella" from the Start menu. The installer (Setup) version registers itself at install time to start when the current user signs in. When switching from an existing standalone (ZIP) version, first quit the old version from its task tray icon (if the old version is still running, the default port (7465) is unavailable, and the installer (Setup) version shows a message to that effect and does not start). The ZIP version's sign-in autostart registration is switched over to the installer (Setup) version automatically at install time, and the Start menu "Skilvella" shortcut then points to the installer (Setup) version as well. If you had disabled autostart, it stays disabled. Uninstalling also removes the autostart registration that points to the installer (Setup) version. The old version's folder is not deleted automatically, so remove it by hand if you no longer need it. If you are using an old installer (Setup) version without an auto-update mechanism (1.1.4 to 1.1.6), reinstall with the new Setup once. The standard data folder `%LOCALAPPDATA%\Skilvella` is shared and remains after uninstalling. The installer version updates automatically ([App updates](#app-updates)).
 
-- Windows x64: `Skilvella-windows-x86_64.zip` を使い続けるフォルダーに展開し、`skilvella.exe` を起動します。ターミナルを開かずタスクトレイに常駐し、初回の通常起動で現在のユーザーのスタートメニューに「Skilvella」が追加されます。
-- Mac Apple Silicon: `Skilvella-macos-aarch64.tar.gz` を展開し、ターミナルで `./skilvella` を起動します。
-- 展開前に、配布物のSHA-256を `SHA256SUMS.txt` と照合できます。
+To use the ZIP version or the macOS version, download the matching package from [GitHub Releases](https://github.com/1llum1n4t1s/Skilvella/releases/latest) and extract it.
 
-Linuxで利用する場合やソースからビルドする場合は[開発手順](docs/DEVELOPMENT.md)を参照してください。
+- Windows x64: Extract `Skilvella-windows-x86_64.zip` to the folder you will keep using, then launch `skilvella.exe`. It runs in the task tray without opening a terminal, and the first normal launch adds "Skilvella" to the current user's Start menu.
+- Mac Apple Silicon: Extract `Skilvella-macos-aarch64.tar.gz` and run `./skilvella` in a terminal.
+- Before extracting, you can verify the package's SHA-256 against `SHA256SUMS.txt`.
 
-Windowsではタスクトレイ、MacではメニューバーにSkilvellaのアイコンを表示します。左クリックすると、既定のブラウザーで管理画面が開きます。右クリック（MacではControl＋クリックも可）で「管理画面を開く」「更新を確認」「サービスを再起動」「終了」を選べます。Windowsでアイコンが見えない場合は、トレイの「隠れているインジケーター」も確認してください。
+For Linux or building from source, see the [development guide](docs/DEVELOPMENT.md).
 
-「サービスを再起動」は、同じプロセス・URLでHTTP/MCPサーバーとファイル監視を起動し直します。保存済みのスキルや設定は保持します。再起動中の重複要求はまとめ、処理中のHTTP操作の完了を待ちます。MCP接続は切断されるため、クライアントから再接続してください。開いている管理画面は再読み込みしてから操作してください。「終了」はサーバーとアイコンを終了します。
+Skilvella shows its icon in the task tray on Windows and in the menu bar on Mac. Left-click it to open the manager in your default browser. Right-click (or Control-click on Mac) to choose "Open manager", "Check for updates", "Restart service", or "Quit". On Windows, if you cannot see the icon, also check the tray's hidden icons overflow.
 
-管理画面は直接 [http://127.0.0.1:7465/](http://127.0.0.1:7465/) でも開けます。MCPの接続URLは `http://127.0.0.1:7465/mcp` です。画面のない環境では `--no-tray` を指定してください。Linuxではアイコンを表示せず、HTTP/MCPサーバーとして動作します。
+"Restart service" restarts the HTTP/MCP server and file watching in the same process and at the same URL. Saved skills and settings are kept. Duplicate requests during a restart are coalesced, and the restart waits for in-flight HTTP operations to finish. MCP connections are dropped, so reconnect from your client. Reload any open manager page before using it. "Quit" shuts down the server and the icon.
 
-Windowsの単体配置では、引数なしで起動すると、現在のユーザーのサインイン時に起動するよう登録を試みます。登録済みの場合は、実行ファイルを別の場所から起動しても登録先は変わりません。自動起動のオン・オフはWindowsの「設定」→「アプリ」→「スタートアップ」で切り替えられます。今回の起動で登録を省く場合は `--no-autostart` を指定してください。Toolport管理下の自動起動はToolport側で設定してください。
+You can also open the manager directly at [http://127.0.0.1:7465/](http://127.0.0.1:7465/). The MCP endpoint is `http://127.0.0.1:7465/mcp`. In an environment without a display, pass `--no-tray`. On Linux it shows no icon and runs as an HTTP/MCP server.
 
-実行時のRust・Node.js・Python・外部DBサーバーは不要です。ターミナルから起動した場合は、接続したコンソールの `Ctrl+C` でも終了できます。
+For the Windows standalone layout, launching without arguments attempts to register the app to start when the current user signs in. If it is already registered, launching the executable from a different location does not change the registered path. You can turn autostart on or off in Windows "Settings" → "Apps" → "Startup". To skip registration for this launch, pass `--no-autostart`. For autostart under Toolport management, configure it on the Toolport side.
 
-## ライブラリの管理
+No Rust, Node.js, Python, or external database server is needed at runtime. When launched from a terminal, you can also quit with `Ctrl+C` in the attached console.
 
-初回起動では、管理対象フォルダーを自動判定します。既存の `~/.agents/skills`、`$CODEX_HOME/skills`、`~/.codex/skills` の順に確認し、見つからない場合はデータフォルダーの隣に `<データフォルダー名>-skills` を作成します。Skilvellaが生成したCodexの呼び出し入口だけがある候補は飛ばし、入口自体は管理対象のスキルに含めません。ただし、これはデータフォルダーに入口の所有記録があるときだけ成り立ちます。データフォルダーを作り直した場合や `--data-dir` で別のデータフォルダーを指定した場合に、以前生成された入口が残っていると、通常のスキルとして登録されます。以前から登録済みのソースがある場合は、その設定を優先して引き継ぎます。入口の所有記録や候補の読み取りに問題があって自動判定を確定できない場合は、保存済みの自動登録先を維持します。ライブラリの左側のフォルダー一覧で検出状態を確認してください。
+## Managing your library
 
-ライブラリは1画面で、左側に管理中のフォルダーの一覧、右側にスキルの一覧を表示します。「＋ フォルダーを追加」を押すとOS標準のフォルダー選択ダイアログが開き、選んだフォルダーをそのまま登録してスキャンします。ファイルは移動しません。名前の入力は不要で、表示名にはフォルダー名を使います（後から「表示名を変更」で変更できます）。ダイアログを開けない環境（SSH接続など）では「パスを入力して追加」から絶対パスを入力してください。
+On first launch, Skilvella detects the managed folder automatically. It checks the existing `~/.agents/skills`, `$CODEX_HOME/skills`, and `~/.codex/skills` in that order, and if none is found, creates `<data-folder-name>-skills` next to the data folder. A candidate that contains only Codex invocation entries generated by Skilvella is skipped, and the entries themselves are not counted as managed skills. This holds only when the data folder has an ownership record for those entries. If you recreate the data folder or point to a different one with `--data-dir`, previously generated entries that remain will be registered as ordinary skills. If sources were registered before, that configuration takes priority and is carried over. If a problem reading the entry ownership record or the candidates prevents automatic detection from being finalized, the saved automatic registration target is kept. Check the detection status in the folder list on the left side of the library.
 
-左側のフォルダーを選ぶと、そのフォルダーの場所・件数・標準探索先の警告と、「表示名を変更」「管理から外す」を表示します。既定のフォルダーでは「参照するフォルダーを変更」で参照先を切り替えられ、「参照…」でダイアログから選べます。設定は再起動後も保持し、「管理から外す」でもファイルは削除しません。既に管理中のフォルダーや、管理中のフォルダーと親子関係にあるフォルダーを選ぶと、重なる側のフォルダー名を示して追加を止めます。
+The library is a single screen: the list of managed folders on the left and the list of skills on the right. Press "+ Add folder" to open the OS's standard folder picker; the chosen folder is registered as is and scanned. Files are not moved. You do not need to enter a name, and the folder name is used as the display name (you can change it later with "Change display name"). In environments where the dialog cannot be opened (such as SSH sessions), enter an absolute path under "Enter a path instead".
 
-追加や自動判定、外部編集で見つかった新しいスキルは、読み取れれば**MCP公開オン**で登録されます。読み取りエラー・不正なfrontmatterのスキルは非公開のままで、あとから直しても自動では公開しません。既存のスキルの公開状態は、再スキャンや起動時にも変わりません（非公開にしたスキルを自動公開しません）。Windows・macOSでは、フォルダー名の英字（ASCII）の大文字小文字だけを変えても同じスキルとして扱い、公開状態は変わりません。公開したくない場合は、フォルダーを追加したあとに一覧の「状態」列から「非公開」を選んでください。一覧の「状態」列の「公開」「非公開」を選ぶとその場で保存されます。個別画面や一覧の一括操作でも切り替えられます。公開に切り替えるときはファイルを再確認し、不在・読み取りエラー・不正なfrontmatterのスキルは公開せず、選択を元に戻して理由を表示します。タグ・カテゴリは変わりません。
+Selecting a folder on the left shows its location, count, and standard-discovery-path warning, along with "Change display name" and "Stop managing". For the default folder, "Change referenced folder" lets you switch the referenced folder, and "Browse…" lets you pick one from the dialog. The setting persists across restarts, and "Stop managing" does not delete files. If you choose a folder that is already managed, or one that has a parent/child relationship with a managed folder, the addition is stopped and the overlapping folder's name is shown.
 
-ライブラリは最初から全フォルダーのスキルを一覧し、その場で検索できます。フォルダー直下の `.git` ディレクトリまたはファイルを持つフォルダーは取得元（リポジトリ）としてフォルダーの下に入れ子で表示し、それ以外は「個人スキル」にまとめます。直下に取得元リポジトリがないフォルダー自体がGitリポジトリなら、その全体を1つの取得元にします。通常の一覧には現在存在するスキルを表示します。移動前などの古い登録は保持し、状態の「見つからない」または「すべて」、左側の「存在しないスキルの登録を整理」で確認できます。「見つからない」一覧の「不在の登録をまとめて削除」で、検索条件に一致する全ページの登録情報・設定・履歴を削除できます。操作は取り消せません。実ファイルは変更せず、ソースに接続できない場合やパスが存在する場合は全件の削除を中止します。カテゴリは各スキルの管理情報から編集できます。
+New skills found through adding, automatic detection, or external edits are registered with **MCP publication on** if they can be read. Skills with read errors or invalid frontmatter stay unpublished, and they are not published automatically even after you fix them. The publication state of existing skills does not change on rescan or at startup (skills you unpublished are never published automatically). On Windows and macOS, a folder whose name differs only in ASCII letter case is treated as the same skill, and its publication state does not change. If you do not want a skill published, choose "Unpublished" in the list's "Status" column after adding the folder. Choosing "Published" or "Unpublished" in the list's "Status" column saves immediately. You can also switch it on the individual page or with the list's bulk operations. When switching to published, the files are checked again, and skills that are missing, have read errors, or have invalid frontmatter are not published; the selection is reverted and the reason is shown. Tags and categories do not change.
 
-登録したフォルダー内の `SKILL.md` を**階層数を制限せず再帰的に検索**します。スキルが見つかった後も、さらに深いサブディレクトリを走査します。親子のスキルは別々のID・公開設定で管理し、子のファイルは親のMCP公開範囲に含めません。シンボリックリンク・Windowsのジャンクション、`.git`・`node_modules`・`target`・`.work` は対象外です。フォルダーの登録解除では元のファイルを削除しません。管理から外したフォルダーを再び追加すると、以前の管理情報（公開設定・タグ・履歴）を引き継ぎます。別のフォルダーとは名前が同じでも衝突しません。
+The library lists the skills of all folders from the start and lets you search them in place. A folder that has a `.git` directory or file directly inside it is shown nested under the folder as a source (repository), and everything else is grouped under "Personal skills". If a folder with no source repository directly inside it is itself a Git repository, the whole folder becomes one source. The normal list shows the skills that currently exist. Old registrations, such as those from before a move, are kept and can be reviewed under the status "Missing" or "All" and under "Clean up registrations for missing skills" on the left. In the "Missing" list, "Delete all missing registrations" deletes the registration data, settings, and history across all pages matching the search conditions. This cannot be undone. It does not change actual files, and it aborts the deletion of all entries if the source cannot be reached or if a path exists. Categories can be edited from each skill's metadata.
 
-本文の保存は登録先の実ファイルを変更します。プレビューではHTML・画像の読み込み・リンクの操作を無効にし、スクリプトを実行しません。外部エディターの変更は自動監視します。反映されない場合は「再スキャン」を使ってください。
+Skilvella searches the `SKILL.md` files in registered folders **recursively with no depth limit**. It keeps scanning deeper subdirectories even after finding a skill. Parent and child skills are managed with separate IDs and publication settings, and a child's files are not included in the parent's MCP publication scope. Symbolic links, Windows junctions, `.git`, `node_modules`, `target`, and `.work` are excluded. Unregistering a folder does not delete the original files. If you add back a folder you had removed from management, its earlier management data (publication settings, tags, history) is restored. Folders with the same name do not conflict with each other.
 
-読み取りエラーがあるときは、ライブラリの「読み取りエラーを確認・修正」または左側の「読み取りエラー」から、フォルダーをまたいだエラー一覧を開けます。スキル名またはパスを開いて原因を確認し、構文の誤りは本文を修正して保存してください。ファイルを読み取れない場合は場所・権限・文字コードを確認して再スキャンしてください。エラーを解消すると案内は消えます。
+Saving content changes the actual file in the registered location. The preview disables HTML, image loading, and link actions, and does not execute scripts. Changes made in external editors are watched automatically. If they are not reflected, use "Rescan".
 
-## アプリの更新
+When there are read errors, open the cross-folder error list from the library's "Review and fix read errors" or from "Read errors" on the left. Open the skill name or path to check the cause, and for syntax errors, fix the content and save. If a file cannot be read, check its location, permissions, and character encoding, then rescan. The notice disappears once the error is resolved.
 
-**インストーラー版（Setup）**: 既定で自動更新が有効です。起動時と、起動したままの間は24時間ごとに新しい版を確認し、あればダウンロードします。適用は次回の起動時に自動で行われ、同じ設定で起動し直します。前回の確認から24時間以内は通信しません。確認とダウンロードの失敗は現在の版で動き続けます。「設定」の「アプリの更新」にある「起動時に自動で更新する」で無効にできます（設定は `%LOCALAPPDATA%\Skilvella` など、データフォルダーの `app-update.json` に保存され、スキルのライブラリは変更しません）。「更新を確認」は24時間の間隔に関係なく確認し、「更新をインストール」は取得して今すぐ再起動します。更新情報は `skilvella.kagayoi.com` から取得します。
+<a id="app-updates"></a>
 
-以下は単体版（ZIP版）とMac向けの更新です。
+## App updates
 
-「設定」の更新欄、またはトレイメニューの「更新を確認」からGitHubの最新安定版を確認できます。「更新をインストール」を選ぶと、Windows x64 / Mac Apple Silicon向けの配布物と `SHA256SUMS.txt` をHTTPSで取得し、SHA-256を照合してから適用します。OS同梱の `curl` と実行ファイルの保存先への書込み権限が必要です。Linuxとその他のCPUではアプリ内適用に対応しません。
+**Installer (Setup) version**: Automatic updates are on by default. It checks for a new version at startup and every 24 hours while it keeps running, and downloads it if one is available. The update is applied automatically at the next startup, relaunching with the same settings. It does not connect within 24 hours of the previous check. If a check or download fails, it keeps running the current version. You can turn this off with "Update automatically at startup" under "App updates" in "Settings" (the setting is saved in `app-update.json` in the data folder, such as `%LOCALAPPDATA%\Skilvella`, and does not change the skill library). "Check for updates" checks regardless of the 24-hour interval, and "Install update" downloads the update and restarts immediately. Update information is fetched from `skilvella.kagayoi.com`.
 
-更新は処理中のHTTP操作の完了を待って終了し、同じ起動引数・作業フォルダーで再起動します。MCPクライアントは再接続してください。配布物の照合に失敗した場合は現在の版を維持します。適用後に新しいプロセスを起動できない場合は、旧実行ファイルまたはToolportの参照先の復元を試みます。更新を開始した設定画面は、新しい版が応答すると自動で再読み込みします。アプリの再起動前から開いていた古い設定画面で更新操作をすると、画面の再読み込みを案内します。
+The following applies to the standalone (ZIP) version and to Mac.
 
-更新前の実行ファイルと同じ場所に `.skilvella-update-*` フォルダーを作り、`update.log` を残します。通常配置では復旧用の `previous-binary` も保存します。更新後の動作を確認し、更新ヘルパーが終了したら、このフォルダーを削除できます。
+You can check for the latest stable release on GitHub from the update section in "Settings" or from the tray menu's "Check for updates". Choosing "Install update" downloads the package for Windows x64 / Mac Apple Silicon and `SHA256SUMS.txt` over HTTPS, verifies the SHA-256, and then applies it. This requires the OS-bundled `curl` and write permission to the executable's location. In-app updating is not supported on Linux or other CPUs.
 
-Toolportの `Skilvella-Latest.ps1` 管理下では既存の版を保持し、新版のフォルダーと検証情報を追加してランチャーの参照先を切り替えます。更新ヘルパーは再起動したアプリが終了するまで動くため、更新用フォルダーを削除する前にSkilvellaを終了してください。
+The update waits for in-flight HTTP operations to finish before exiting, then restarts with the same launch arguments and working folder. Reconnect your MCP clients. If package verification fails, the current version is kept. If the new process cannot be started after applying the update, it tries to restore the old executable or the Toolport reference target. The settings page that started the update reloads automatically once the new version responds. If you perform an update operation on an old settings page that was already open before the app restarted, you are asked to reload the page.
 
-外部のプロセス監視ツールで起動している場合は、そのツール側で再起動が必要になることがあります。Toolportの起動ロックを取得できない場合は更新を適用しません。起動しない場合はランチャーを再実行してください。日本語など非ASCII文字を含むToolport管理先はアプリ内適用に対応しません。通常の単体配置はこの制限の対象外です。
+A `.skilvella-update-*` folder is created in the same location as the pre-update executable, and it keeps `update.log`. In the normal layout, it also stores `previous-binary` for recovery. After you confirm that things work after the update and the update helper has exited, you can delete this folder.
 
-## MCP接続
+Under Toolport's `Skilvella-Latest.ps1` management, the existing version is kept, the new version's folder and verification information are added, and the launcher's reference target is switched. The update helper runs until the restarted app exits, so quit Skilvella before deleting the update folder.
 
-Streamable HTTP対応クライアントに次のURLを登録します。
+When Skilvella is launched by an external process monitor, you may need to restart it from that tool. If the Toolport startup lock cannot be acquired, the update is not applied. If it does not start, rerun the launcher. A Toolport-managed location that contains non-ASCII characters, such as Japanese, does not support in-app updating. The normal standalone layout is not subject to this limitation.
+
+<a id="mcp-connection"></a>
+
+## MCP connection
+
+Register the following URL with a client that supports Streamable HTTP.
 
 ```text
 http://127.0.0.1:7465/mcp
 ```
 
-ToolportではHTTPサーバーとして登録し、同じURLを指定します。Skilvellaは起動した状態にしてください。
+In Toolport, register it as an HTTP server and specify the same URL. Keep Skilvella running.
 
-| ツール | 用途 |
+| Tool | Purpose |
 | --- | --- |
-| `search_skills` | 公開中のスキルを検索し、概要とIDを取得 |
-| `load_skill` | IDを指定して `SKILL.md` 本文と参照ファイル一覧を取得 |
-| `read_skill_file` | スキル配下のUTF-8テキストを行単位で取得 |
+| `search_skills` | Search published skills and get summaries and IDs |
+| `load_skill` | Get the `SKILL.md` content and the list of reference files by specifying an ID |
+| `read_skill_file` | Get UTF-8 text under a skill, by line |
 
-`load_skill` は `next` が null になるまで続きの引数を渡し、本文を連結してから指示に従ってください。一覧は通常1ページ100件・パス合計8 KiBまでですが、1件のパスが8 KiBを超える場合はそのパスを単独で返すため応答が大きくなります。スキルと必要な参照は一件ずつ取得してください。参照は `read_skill_file` で必要な行範囲の `next_text_offset` を最後まで取得し、さらに行が必要な場合だけ `next_start_line` を使います。同じ行範囲のバイトページはそのまま連結し、行範囲の間には改行を補って連結します。`next_text_offset` の続きでは `start_line` と `max_lines` を維持し、次の行範囲では `start_line` を `next_start_line` に設定して `text_offset` を 0 に戻します。改行は従来どおり正規化され、末尾改行は除かれます。続きには返された `revision` を `expected_revision` に指定します。途中で変更された場合は最初から取得し直します。
+For `load_skill`, keep passing the continuation arguments until `next` is null, concatenate the content, and then follow the instructions. The list is normally 100 entries per page and up to 8 KiB of total paths, but if a single path exceeds 8 KiB, that path is returned alone, so the response becomes large. Fetch skills and the references they need one at a time. For references, use `read_skill_file` to fetch `next_text_offset` for the needed line range to the end, and use `next_start_line` only when more lines are needed. Byte pages of the same line range are concatenated as is, and line breaks are inserted between line ranges when concatenating. When continuing with `next_text_offset`, keep `start_line` and `max_lines`; for the next line range, set `start_line` to `next_start_line` and reset `text_offset` to 0. Line breaks are normalized as before, and the trailing line break is removed. For continuations, specify the returned `revision` as `expected_revision`. If the file changed in the meantime, fetch it again from the start.
 
-MCPは読み取り専用です。未公開・不正なfrontmatter・消失スキルの本文は取得できません。参照ファイルを実行する機能もありません。本文は最大2 MiB、参照テキストは最大1 MiBです。
+MCP is read-only. It cannot return the content of unpublished skills, skills with invalid frontmatter, or missing skills. There is also no feature to execute reference files. Content is limited to 2 MiB and reference text to 1 MiB.
 
-MCP公開だけでは、エージェントが同じスキルを標準探索して読み込む状態は変わりません。二重読み込みを避けるには、エージェントの標準探索先以外にスキルを配置し、ライブラリの「＋ フォルダーを追加」でその場所を登録してください。Skilvellaにフォルダーを移動する機能はありません。既存ファイルの移動が必要な場合は自分で行い、参照先を登録し直してください。Codexの設定ファイルは編集しません。標準探索先を変更した後はCodexを再起動してください。すでに会話へ読み込まれた内容は消えません。独自の探索設定や他クライアントは別途確認してください。
+MCP publication alone does not change the fact that agents standardly discover and load the same skills. To avoid double loading, place skills outside the agent's standard discovery paths and register that location with the library's "+ Add folder". Skilvella has no feature to move folders. If existing files need to be moved, do it yourself and register the new location again. Codex's configuration files are not edited. Restart Codex after changing the standard discovery paths. Content already loaded into a conversation is not removed. Check custom discovery settings and other clients separately.
 
-## 自動選択とコマンド候補
+## Automatic selection and command suggestions
 
-先に [MCP接続](#mcp接続) を使うクライアントへ登録・確認してください。「設定」の「呼び出し入口の同期」で同期先（Codex・Claude Code・Grok、複数選択可）にチェックを付けて保存すると、Skilvella本体が各クライアント用の呼び出し入口を自動同期します。旧版で「Codex連携」を有効にしていた場合は、Codexが選択された状態で引き継ぎます。Windows／macOS／Linux共通で、タスクスケジューラや別の常駐プロセスは使いません。同期は起動時・管理操作後・定期確認時に実行し、サービスの再起動後も設定を維持します。
+First register and verify Skilvella with a client that uses [MCP connection](#mcp-connection). In "Settings", under "Invocation entry sync", check the sync targets (Codex, Claude Code, Grok; multiple can be selected) and save, and Skilvella itself automatically syncs the invocation entries for each client. If you had enabled "Codex integration" in an older version, it is carried over with Codex selected. This works the same on Windows, macOS, and Linux and uses neither Task Scheduler nor any separate resident process. Sync runs at startup, after management operations, and during periodic checks, and the setting is kept after a service restart.
 
-| 同期先 | 入口の保存先 | 探索先への出し方 | 自動選択の制御 |
+| Sync target | Entry location | How it is exposed to discovery | Automatic selection control |
 | --- | --- | --- | --- |
-| Codex | `~/.agents/skills/skilvella/<name>` | 実ファイル（Codexは入れ子を探索） | `agents/openai.yaml` |
-| Claude Code | `~/.claude/skilvella/skills/<name>` | `~/.claude/skills/<name>` へのリンク（Windowsはジャンクション、macOS・Linuxはシンボリックリンク） | `disable-model-invocation` |
-| Grok | `~/.grok/skills/skilvella/<name>` | 実ファイル（Grokは入れ子を探索） | `disable-model-invocation` |
+| Codex | `~/.agents/skills/skilvella/<name>` | Real files (Codex searches nested folders) | `agents/openai.yaml` |
+| Claude Code | `~/.claude/skilvella/skills/<name>` | A link to `~/.claude/skills/<name>` (a junction on Windows, a symbolic link on macOS and Linux) | `disable-model-invocation` |
+| Grok | `~/.grok/skills/skilvella/<name>` | Real files (Grok searches nested folders) | `disable-model-invocation` |
 
-Claude Codeは `~/.claude/skills` の直下1階層しか探索しないため、入口を探索外へ置いてスキルごとにリンクを張ります。`~/.claude/skills` に同名の既存スキルやリンクがある場合は上書きせず、同期エラーとして名前を表示します。旧版の案内に沿って `~/.claude/skills/<name>` から `~/.agents/skills/skilvella/<name>` へ手作業で張ったリンクは、同期対象の名前に限りClaude Code用の入口へ張り替えて管理を引き継ぎます。同期対象外の名前のリンクには触れません（Codexを無効にすると参照先がなくなります）。Claude Code向けの同期を無効にすると、Skilvellaが作成・引き継いだリンクだけを外します。`~/.claude/skills` 自体を管理フォルダーに登録している場合は同期しません。
+Claude Code searches only one level directly under `~/.claude/skills`, so entries are placed outside the discovery path and a link is created for each skill. If an existing skill or link with the same name is already in `~/.claude/skills`, it is not overwritten, and the name is shown as a sync error. A link that you created by hand from `~/.claude/skills/<name>` to `~/.agents/skills/skilvella/<name>` following an old version's guidance is re-pointed to the Claude Code entry and taken over for management, but only for names that are sync targets. Links for names that are not sync targets are left untouched (if you disable Codex, their reference target disappears). Disabling sync for Claude Code removes only the links that Skilvella created or took over. If you have registered `~/.claude/skills` itself as a managed folder, sync is not performed.
 
-GrokはCodex（`~/.agents/skills`）とClaude Code（`~/.claude/skills`）の探索先も読み込み、同名のスキルは `~/.grok/skills`、`~/.agents/skills`、`~/.claude/skills` の順に優先します。Codexの入口は `agents/openai.yaml` で自動選択を止めるため、Grokでは「コマンド候補のみ」でも自動選択されます。Grokで使う場合はGrokを同期先に選んでください。
+Grok also reads the discovery paths of Codex (`~/.agents/skills`) and Claude Code (`~/.claude/skills`), and for skills with the same name it gives priority in the order `~/.grok/skills`, `~/.agents/skills`, `~/.claude/skills`. Codex entries stop automatic selection with `agents/openai.yaml`, so in Grok, even "Command suggestions only" skills are selected automatically. If you use Grok, select Grok as a sync target.
 
-各スキルの詳細画面、または一覧の「使い方」で選びます。一覧では現在のモードを確認し、その場で切り替えられます。MCPは非公開スキルの本文を返さず、正常な同期後にはその候補用入口も外します。
+Choose the mode on each skill's detail page or with "Usage" in the list. In the list you can check the current mode and switch it in place. MCP does not return the content of unpublished skills, and after a successful sync it also removes their suggestion entries.
 
-一覧で保存中にブラウザーの「戻る」や再読み込みを行った場合は、保存結果を確認してから最新の設定を表示します。通信が途切れて未受付だった要求は取り消し、確認結果を画面に表示します。
+If you press the browser's Back button or reload while a save is in progress in the list, Skilvella checks the save result before showing the latest settings. A request that was not accepted because the connection was interrupted is canceled, and the check result is shown on screen.
 
-| モード | 自動選択用の名前・説明 | コマンド候補 |
+| Mode | Name and description passed for automatic selection | Command suggestions |
 | --- | --- | --- |
-| 検索のみ（既定） | 渡さない | 表示しない |
-| コマンド候補のみ | 渡さない | 表示する |
-| 自動選択＋コマンド候補 | 渡す | 表示する |
+| Search only (default) | Not passed | Not shown |
+| Command suggestions only | Not passed | Shown |
+| Automatic selection + command suggestions | Passed | Shown |
 
-コマンド候補を出すスキルでは、一覧のスキル名の下と詳細画面の「使い方」に、同期先ごとの呼び出しコマンド（Codexは `$name`、Claude Code・Grokは `/name`）を表示します。名前が英小文字・数字・`-` 以外を含む場合は `skill-<id先頭8文字>`、同名の公開スキルがある場合は `<name>-<id先頭8文字>` になるため、表示されたコマンドを使ってください。コマンドがない場合は、詳細画面に理由（検索のみ・同期先が未選択・非公開や読み取りエラー）を表示します。一覧で非公開から公開に切り替えたスキルのコマンドは、再読み込み後に表示します。
+For skills that show command suggestions, the invocation command for each sync target (`$name` for Codex, `/name` for Claude Code and Grok) is shown under the skill name in the list and under "Usage" on the detail page. If the name contains anything other than lowercase letters, digits, and `-`, it becomes `skill-<first 8 characters of the id>`, and if a published skill with the same name exists, it becomes `<name>-<first 8 characters of the id>`, so use the command that is shown. When there is no command, the detail page shows the reason (search only, no sync target selected, unpublished, or read error). The command for a skill you switch from unpublished to published in the list appears after a reload.
 
-一覧でスキルにチェックを付け、一括操作の「使い方」を選んで「選択項目に適用」を押すと、複数スキルのモードをまとめて変更できます。「変更しない」なら現在のモードを維持します。公開状態・タグも同時に変更できます。
+In the list, check skills, choose "Usage" under the bulk operations, and press "Apply to selected" to change the mode of multiple skills at once. "No change" keeps the current mode. You can change the publication state and tags at the same time.
 
-「すべてのスキル」の下にある「取得元ごとに一括設定」を開くと、複数の取得元を選択し、「選択した取得元に適用」で公開状態と使い方をまとめて変更できます。対象は実行時に登録されている全ページのスキルで、今後の追加分には引き継ぎません。事前の対象件数はスキャン索引に基づき、不在・エラーの項目を除外します。結果には更新件数と対象外件数を表示します。公開時はファイルを再確認し、不在・読み取り不能・不正なファイルなどで再検証できない場合は全件の設定保存を取り消します。設定は一つのトランザクションで保存し、スキルの原本は変更しません。
+Opening "Bulk settings by source" under "All skills" lets you select multiple sources and change the publication state and usage together with "Apply to selected repositories". The scope is the skills on all pages registered at run time and does not carry over to skills added later. The pre-check count is based on the scan index and excludes missing and error entries. The result shows the number updated and the number excluded. When publishing, the files are checked again, and if they cannot be re-validated because they are missing, unreadable, invalid, or similar, saving the settings for all entries is canceled. The settings are saved in a single transaction, and the original skills are not changed.
 
-Codexには「自動選択を有効にして候補だけ隠す」独立した設定がないため、対応する3モードを提供します。自動選択でも原本の全文を常時複製するのではなく、必要なときにMCPから取得します。候補に表示しないスキルは、明示呼び出し専用の `$skilvella-search` から検索できます。MCPの `search_skills` を直接使うこともできます。
+Codex has no separate setting for "enable automatic selection but hide it from suggestions", so Skilvella provides the three corresponding modes. Even with automatic selection, it does not keep a full copy of the original content at all times; the content is fetched from MCP when needed. Skills not shown in suggestions can be searched with `$skilvella-search`, which is for explicit invocation only. You can also use MCP's `search_skills` directly.
 
-使い方のモードは全ての同期先に共通です。入口の保存先は上の表のとおりです。公開解除・モード変更時に不要になった生成物は探索先の外（`~/.agents`・`~/.claude`・`~/.grok` 直下の `skilvella-staging` / `skilvella-retired`）へ退避します。未知のファイルや手編集を検出した場合は上書きせず、設定画面に同期エラーを表示します。容量不足や強制終了で未完の一時ファイルが残った場合も、既存の正常な索引を保護して停止します。表示されたパスの内容を確認してから再試行してください。連携を無効にすると、この連携が所有する入口を探索先から外します。同期が停止している間は以前の候補や自動選択設定が残る場合があります。原本・公開状態・編集履歴は変更しません。Codexの候補表示が更新されない場合は、候補メニューを開き直すかCodexを再起動してください。Claude Codeは実行中のセッションでも `~/.claude/skills` の変更を反映しますが、セッション開始後に `~/.claude/skills` 自体を作成した場合は `/reload-skills` を実行してください。既存会話に読み込まれた内容は消せません。
+The usage mode is common to all sync targets. The entry locations are as in the table above. When you unpublish a skill or change its mode, artifacts that are no longer needed are moved outside the discovery paths (`skilvella-staging` / `skilvella-retired` directly under `~/.agents`, `~/.claude`, and `~/.grok`). If unknown files or manual edits are detected, they are not overwritten, and a sync error is shown on the settings page. If incomplete temporary files remain because of insufficient disk space or a forced exit, it stops while protecting the existing healthy index. Check the contents of the displayed path and then retry. Disabling the integration removes the entries it owns from the discovery paths. While sync is stopped, earlier suggestions and automatic selection settings may remain. Original files, publication states, and edit history are not changed. If Codex's suggestion display does not update, reopen the suggestion menu or restart Codex. Claude Code reflects changes to `~/.claude/skills` even in a running session, but if you created `~/.claude/skills` itself after the session started, run `/reload-skills`. Content already loaded into an existing conversation cannot be removed.
 
-## 表示設定
+<a id="display-settings"></a>
 
-ライブラリで左側のフォルダーを選び、「表示名を変更」を開くと、画面上のフォルダー名を変更できます。入力は前後の空白を含めて100文字以内で、改行などの制御文字は使えません。保存時に前後の空白を取り除き、空欄なら元の識別子に戻ります。表示名はアプリに保存され、実際のフォルダー名・スキルID・公開設定・編集履歴は変わりません。同じ表示名も使えますが、変更した名前には元の識別子を併記します。
+## Display settings
 
-管理画面の「設定」で、言語を自動または9言語（日本語、英語、簡体字、繁体字、韓国語、スペイン語、フランス語、ドイツ語、ブラジルポルトガル語）から選べます。既定の「自動」はブラウザーの言語設定を使います。言語は選択すると保存され、JavaScriptを無効にしている場合は「保存」を押します。選択は同じブラウザーの接続ポートごとに保存され、すでに開いている別タブでは次に読み込むページから適用されます。旧版の言語設定は、同じブラウザーで同じ接続先の管理画面を開くと引き継がれます。引き継ぎにはJavaScriptが必要です。スキル名・説明・本文・パスと技術的なエラー詳細は原文を保持し、トレイやメニューバーのメニューは日本語です。
+In the library, select a folder on the left and open "Change display name" to change the folder name shown on screen. The input must be within 100 characters including leading and trailing whitespace, and control characters such as line breaks are not allowed. Leading and trailing whitespace is trimmed on save, and an empty value reverts to the original identifier. The display name is saved in the app, and the actual folder name, skill IDs, publication settings, and edit history do not change. Duplicate display names are allowed, but a name you have changed is shown with its original identifier alongside it.
 
-テーマはJavaScriptが有効なときに自動・ライト・ダークから選べます。選択はブラウザーに保存され、自動ではブラウザーの配色設定に追従します。
+In "Settings" of the manager, you can choose the language as automatic or one of nine languages (Japanese, English, Simplified Chinese, Traditional Chinese, Korean, Spanish, French, German, Brazilian Portuguese). The default "Automatic" uses the browser's language setting. The language is saved when you select it, and if JavaScript is disabled, press "Save". The selection is saved per connection port in the same browser, and other tabs that are already open apply it from the next page they load. A language setting from an older version is carried over when you open the manager at the same address in the same browser. Carrying it over requires JavaScript. Skill names, descriptions, content, paths, and technical error details keep their original text. The tray and menu bar menus, command-line output such as `--help`, startup messages, and errors, and the installer (Setup) version's message boxes are also shown in the same nine languages. These languages are determined in the order of the environment variable `SKILVELLA_LANGUAGE` (for example `ja`, `pt-BR`) → `LC_ALL` → `LC_MESSAGES` → `LANG` → the OS display language, and if it cannot be determined, English is used. MCP tool names and descriptions are in English.
 
-## データとバックアップ
+You can choose the theme from Automatic, Light, and Dark when JavaScript is enabled. The selection is saved in the browser, and Automatic follows the browser's color scheme setting.
 
-| OS | 既定のデータ保存先 |
+## Data and backups
+
+| OS | Default data location |
 | --- | --- |
 | Windows | `%LOCALAPPDATA%\Skilvella` |
 | macOS | `~/Library/Application Support/Skilvella` |
-| Linux | `$XDG_DATA_HOME/skilvella` または `~/.local/share/skilvella` |
+| Linux | `$XDG_DATA_HOME/skilvella` or `~/.local/share/skilvella` |
 
-`SKILL.md` と参照ファイルの正本は登録フォルダーです。データフォルダーの `library.sqlite3` には検索索引に加え、タグ・カテゴリ・公開設定・登録先・フォルダーの表示名・編集履歴も保存します。**DB全体を削除すると、これらの管理情報を失います。**
+The source of truth for `SKILL.md` and reference files is the registered folders. In addition to the search index, the data folder's `library.sqlite3` also stores tags, categories, publication settings, registered locations, folder display names, and edit history. **If you delete the entire DB, this management data is lost.**
 
-バックアップはSkilvellaを終了してから、データフォルダーと登録フォルダーの両方をコピーしてください。DBだけでは現在のスキルファイルを復元できません。別PCでは登録元の絶対パスが異なるため、DBをそのまま共有しての同時利用は対象外です。
+To back up, quit Skilvella first and then copy both the data folder and the registered folders. The DB alone cannot restore the current skill files. On another PC the absolute paths of the registered sources differ, so sharing the DB as is for simultaneous use is not supported.
 
-## オプションとトラブルシュート
+## Options and troubleshooting
 
 ```sh
 skilvella --data-dir /absolute/path/to/data --port 7465 --no-watch
 skilvella --help
 ```
 
-- ポートが使用中なら、既存プロセスを終了するか `--port` で変更します。管理画面とMCPの両方に同じポートを使います。
-- 古いWindows版からの更新後に管理画面が復帰しない場合は、通常配置では更新済みの `skilvella.exe` を、Toolport管理下ではランチャーを一度起動してください。
-- 旧版で中断したフォルダー移動を起動時に復旧できない場合は、起動が中止されます。元データと移行記録は保持されます。
-- データ保存先とスキル登録先は重ねられません。ローカルディスク上の別フォルダーを指定してください。
-- 別タブで編集した場合も保存時に競合を検出します。保持された下書きをコピーし、再読み込みして最新の内容へ統合してください。
-- 検索は空白区切りのAND・部分一致です。日本語から英語を意味で探す検索、埋め込みモデル、クラウド同期は含みません。
-- 元フォルダーがオフラインになっても登録情報と履歴は保持します。再接続後に再スキャンしてください。
+- If the port is in use, quit the existing process or change it with `--port`. The manager and MCP both use the same port.
+- If the manager does not come back after updating from an old Windows version, launch the updated `skilvella.exe` once in the normal layout, or the launcher once under Toolport management.
+- If an interrupted folder move from an old version cannot be recovered at startup, startup is aborted. The original data and the migration record are kept.
+- The data location and the skill registration locations cannot overlap. Specify separate folders on a local disk.
+- Edits made in another tab are also detected as conflicts on save. Copy the retained draft, reload, and merge it into the latest content.
+- Search uses whitespace-separated AND and substring matching. Searching English skills by meaning from a Japanese query, embedding models, and cloud sync are not included.
+- Even if the source folder goes offline, the registration data and history are kept. Rescan after it reconnects.
 
-接続は `127.0.0.1` 限定です。同じPCの利用者・プロセスを信頼する用途を想定しています。
+Connections are limited to `127.0.0.1`. It is intended for use where you trust the users and processes on the same PC.
 
-ライセンスは[MIT](LICENSE)です。
+The license is [MIT](LICENSE).
 
-開発に参加する方は[開発手順](docs/DEVELOPMENT.md)、[設計](DESIGN.md)、[作業規約](AGENTS.md)を参照してください。
+If you want to contribute to development, see the [development guide](docs/DEVELOPMENT.md), the [design](DESIGN.md), and the [contributor guidelines](AGENTS.md).
