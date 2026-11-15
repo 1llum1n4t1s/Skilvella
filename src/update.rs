@@ -12,7 +12,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-const REPO: &str = "https://github.com/1llum1n4t1s/Skilvella";
+/// ZIP版・macOS版の配布元（Cloudflare R2 の公開URL）。固定の1ホストだけを信頼し、リダイレクトは辿らない。
+/// 配置: `{FEED}/latest.json`（公開中の版）、`{FEED}/<版>/SHA256SUMS.txt`・`{FEED}/<版>/<asset>`（版付き不変）。
+const FEED: &str = "https://skilvella.kagayoi.com/portable";
+/// latest.json の読取り上限。版だけの小さなJSONなので、巨大な応答は拒否する。
+const MAX_FEED: u64 = 4096;
 const MAX_ARCHIVE: u64 = 150 * 1024 * 1024;
 const MAX_CHECKSUMS: u64 = 1024 * 1024;
 const WINDOWS_ASSET: &str = "Skilvella-windows-x86_64.zip";
@@ -31,7 +35,6 @@ pub struct UpdateInfo {
     pub latest_version: String,
     pub available: bool,
     pub supported: bool,
-    pub release_url: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -136,7 +139,8 @@ fn hidden(command: &mut Command) {
 }
 
 // シェルを介さずOS同梱curlを使う。引数・URLは内部生成し、HTTPへの降格を拒否する。
-fn request(url: &str, limit: u64, head: bool) -> anyhow::Result<Vec<u8>> {
+// リダイレクトは辿らない（固定ホストの応答だけを信頼する）。
+fn request(url: &str, limit: u64) -> anyhow::Result<Vec<u8>> {
     let curl = if cfg!(windows) {
         let system = std::env::var_os("SystemRoot").context("SystemRoot is unavailable")?;
         PathBuf::from(system).join("System32/curl.exe")
@@ -149,11 +153,6 @@ fn request(url: &str, limit: u64, head: bool) -> anyhow::Result<Vec<u8>> {
         .args([
             "--proto",
             "=https",
-            "--proto-redir",
-            "=https",
-            "--location",
-            "--max-redirs",
-            "5",
             "--fail",
             "--silent",
             "--connect-timeout",
@@ -163,15 +162,6 @@ fn request(url: &str, limit: u64, head: bool) -> anyhow::Result<Vec<u8>> {
             "--max-filesize",
         ])
         .arg(limit.to_string());
-    if head {
-        command.args([
-            "--head",
-            "--output",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-            "--write-out",
-            "%{url_effective}",
-        ]);
-    }
     command
         .arg(url)
         .stdin(Stdio::null())
@@ -205,20 +195,33 @@ fn request(url: &str, limit: u64, head: bool) -> anyhow::Result<Vec<u8>> {
 
 /// 同期I/Oを行うため、非同期ハンドラーからは spawn_blocking で呼ぶ。
 pub fn check() -> anyhow::Result<UpdateInfo> {
-    let resolved = String::from_utf8(request(&format!("{REPO}/releases/latest"), 4096, true)?)?;
-    let prefix = format!("{REPO}/releases/tag/");
-    let tag = resolved
-        .strip_prefix(&prefix)
-        .context("Unexpected stable release location")?;
-    ensure!(tag.starts_with('v'), "Unexpected stable release tag");
-    let latest = version(tag)?;
+    let latest_version = feed_version(&request(&format!("{FEED}/latest.json"), MAX_FEED)?)?;
     Ok(UpdateInfo {
         current_version: env!("CARGO_PKG_VERSION").to_owned(),
-        latest_version: tag.trim_start_matches('v').to_owned(),
-        available: latest > version(env!("CARGO_PKG_VERSION"))?,
+        available: version(&latest_version)? > version(env!("CARGO_PKG_VERSION"))?,
+        latest_version,
         supported: in_app_asset().is_some(),
-        release_url: resolved,
     })
+}
+
+/// latest.json（`{"schema":1,"version":"X.Y.Z"}`）から版だけを取り出す。
+/// 未知のフィールドは無視して将来の拡張を許す。版は URL の一部になるため、`v` 付きやプレリリース、
+/// 数字と `.` 以外を含む値は `version()` の厳格検査で拒否する（URL・パスへ任意の文字列を通さない）。
+fn feed_version(body: &[u8]) -> anyhow::Result<String> {
+    ensure!(body.len() as u64 <= MAX_FEED, "Update feed is too large");
+    let feed: serde_json::Value =
+        serde_json::from_slice(body).context("Update feed is not valid JSON")?;
+    let value = feed
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .context("Update feed has no version")?;
+    // version() は先頭の v を許容するため、公開物の形式（数字始まり）をここで先に固定する。
+    ensure!(
+        value.starts_with(|c: char| c.is_ascii_digit()),
+        "Unexpected stable release version"
+    );
+    version(value)?;
+    Ok(value.to_owned())
 }
 
 fn checksum(list: &str, asset: &str) -> anyhow::Result<String> {
@@ -492,17 +495,15 @@ fn prepare() -> anyhow::Result<PreparedUpdate> {
     let lock = installation_lock(&target)?;
     let info = check()?;
     ensure!(info.available, "The installed version is already current");
+    // Toolport ランチャーの引き継ぎ（versions/vX.Y.Z・cache.json・install.json の tag）が使うローカル契約。
+    // 配布元（Git のタグ）とは無関係に、従来どおり v 付きの形式を保つ。
     let tag = format!("v{}", info.latest_version);
-    let base = format!("{REPO}/releases/download/{tag}");
+    let base = format!("{FEED}/{}", info.latest_version);
     let sum = checksum(
-        &String::from_utf8(request(
-            &format!("{base}/SHA256SUMS.txt"),
-            MAX_CHECKSUMS,
-            false,
-        )?)?,
+        &String::from_utf8(request(&format!("{base}/SHA256SUMS.txt"), MAX_CHECKSUMS)?)?,
         asset,
     )?;
-    let archive = request(&format!("{base}/{asset}"), MAX_ARCHIVE, false)?;
+    let archive = request(&format!("{base}/{asset}"), MAX_ARCHIVE)?;
     let binary = verify_archive(&archive, &sum, asset, &info.latest_version)?;
     let binary_hash = digest(&binary);
     let launcher = managed(&target, &tag, &sum, &binary_hash)?;
@@ -1227,9 +1228,41 @@ mod tests {
     }
 
     #[test]
+    fn feed_version_reads_only_the_version() {
+        let feed = |text: &str| feed_version(text.as_bytes());
+        assert_eq!(feed(r#"{"schema":1,"version":"1.2.3"}"#).unwrap(), "1.2.3");
+        // 未知のフィールドは無視する。
+        assert_eq!(
+            feed(r#"{"schema":2,"version":"10.0.7","url":"https://example.invalid/x","extra":{"a":1}}"#)
+                .unwrap(),
+            "10.0.7"
+        );
+        // v 付き・プレリリース・ビルドメタデータ・桁不足・先頭ゼロ・文字列以外は拒否する。
+        for bad in [
+            r#"{"version":"v1.2.3"}"#,
+            r#"{"version":"1.2.3-beta.1"}"#,
+            r#"{"version":"1.2.3+build"}"#,
+            r#"{"version":"1.2"}"#,
+            r#"{"version":"01.2.3"}"#,
+            r#"{"version":"1.2.3/../x"}"#,
+            r#"{"version":123}"#,
+            r#"{"schema":1}"#,
+            r#"{"Version":"1.2.3"}"#,
+            r#"["1.2.3"]"#,
+            "not json",
+            "",
+        ] {
+            assert!(feed(bad).is_err(), "{bad}");
+        }
+        // 上限を超える応答は、JSON として妥当でも拒否する。
+        let huge = format!(r#"{{"version":"1.2.3","pad":"{}"}}"#, "a".repeat(5000));
+        assert!(feed(&huge).is_err());
+    }
+
+    #[test]
     fn failed_download_reports_the_downloader_status() {
         // ポート1のループバックは待受がなく、外部通信なしで curl の接続失敗を再現できる。
-        let error = request("https://127.0.0.1:1/", 4096, false)
+        let error = request("https://127.0.0.1:1/", 4096)
             .unwrap_err()
             .to_string();
         // 終了状態の表記はOSで異なる（Windows: exit code、unix: exit status）ため、

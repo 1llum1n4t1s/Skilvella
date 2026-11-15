@@ -499,7 +499,6 @@
   if (updates) {
     const checkButton = updates.querySelector("[data-update-check]");
     const installButton = updates.querySelector("[data-update-install]");
-    const releaseLink = updates.querySelector("[data-update-release]");
     const status = updates.querySelector("[data-update-status]");
     let busy = false;
     let info = null;
@@ -530,7 +529,6 @@
       info = null;
       checkButton.disabled = true;
       installButton.hidden = true;
-      releaseLink.hidden = true;
       updateStatus("update-checking");
       try {
         const result = await requestUpdate("check");
@@ -540,11 +538,6 @@
         if (!result.supported) updateStatus("update-unsupported");
         installButton.hidden = !(result.available && result.supported);
         installButton.disabled = false;
-        const release = new URL(result.release_url);
-        if (release.origin === "https://github.com" && release.pathname.startsWith("/1llum1n4t1s/Skilvella/releases/")) {
-          releaseLink.href = release.href;
-          releaseLink.hidden = false;
-        }
       } catch (error) {
         info = null;
         installButton.hidden = true;

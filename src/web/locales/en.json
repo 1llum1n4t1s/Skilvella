@@ -184,7 +184,6 @@
   "更新を確認できます。": "Ready to check for updates.",
   "更新を確認": "Check for updates",
   "更新をインストール": "Install update",
-  "リリースを開く": "Open release",
   "更新をインストールするとアプリを再起動します。編集中の内容を保存してから実行してください。": "Installing an update restarts the app. Save your edits before continuing.",
   "起動時に自動で更新する": "Update automatically at startup",
   "新しい版を自動で確認してダウンロードします。適用は次回の起動時です。確認は24時間に1回までです。": "Checks for new versions and downloads them automatically. Updates are applied the next time the app starts. Checks happen at most once every 24 hours.",

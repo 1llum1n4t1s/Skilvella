@@ -1,4 +1,5 @@
-//! 通常の HTTPS リダイレクトと配布物だけを返す、外部へ接続しないテスト用プロキシ。
+//! 偽の R2 配信元（skilvella.kagayoi.com/portable）だけを返す、外部へ接続しないテスト用プロキシ。
+//! latest.json と候補版の SHA256SUMS.txt・アーカイブだけを GET で返し、それ以外は 404 にする。
 use anyhow::{Context, Result, ensure};
 use rustls::{ServerConfig, ServerConnection, StreamOwned, pki_types::PrivatePkcs8KeyDer};
 use skilvella::update::release::regression::Inputs;
@@ -15,8 +16,8 @@ use std::{
     time::Duration,
 };
 
-const RELEASES: &str = "/1llum1n4t1s/Skilvella/releases";
-const HOST: &str = "github.com";
+const FEED: &str = "/portable";
+const HOST: &str = "skilvella.kagayoi.com";
 
 pub struct ReleaseFeed {
     address: SocketAddr,
@@ -90,7 +91,7 @@ fn serve(mut stream: TcpStream, config: Arc<ServerConfig>, files: &Inputs) -> Re
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let connect = first_line(&mut stream)?;
     ensure!(
-        connect == "CONNECT github.com:443 HTTP/1.1",
+        connect == "CONNECT skilvella.kagayoi.com:443 HTTP/1.1",
         "Unexpected proxy request: {connect}"
     );
     stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
@@ -100,20 +101,19 @@ fn serve(mut stream: TcpStream, config: Arc<ServerConfig>, files: &Inputs) -> Re
     let method = parts.next().context("Missing method")?;
     let path = parts.next().context("Missing path")?;
     let version = files.candidate;
-    let tag = format!("{RELEASES}/tag/v{version}");
-    let latest = format!("{RELEASES}/latest");
-    let download = format!("{RELEASES}/download/v{version}/");
+    let latest = format!("{FEED}/latest.json");
+    let directory = format!("{FEED}/{version}/");
+    let feed = format!("{{\"schema\":1,\"version\":\"{version}\"}}\n");
     let (status, body, extra) = match (method, path) {
-        ("HEAD", path) if path == latest => (
-            "302 Found",
-            &[][..],
-            format!("Location: https://{HOST}{tag}\r\n"),
+        ("GET", path) if path == latest => (
+            "200 OK",
+            feed.as_bytes(),
+            "Content-Type: application/json\r\n".to_owned(),
         ),
-        ("HEAD", path) if path == tag => ("200 OK", &[][..], String::new()),
-        ("GET", path) if path.strip_prefix(&download) == Some("SHA256SUMS.txt") => {
+        ("GET", path) if path.strip_prefix(&directory) == Some("SHA256SUMS.txt") => {
             ("200 OK", files.sums.as_slice(), String::new())
         }
-        ("GET", path) if path.strip_prefix(&download) == Some(files.asset) => {
+        ("GET", path) if path.strip_prefix(&directory) == Some(files.asset) => {
             ("200 OK", files.archive.as_slice(), String::new())
         }
         _ => {

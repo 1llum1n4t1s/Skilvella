@@ -35,13 +35,13 @@ pub fn run() -> Result<()> {
         return curl_with_fixture_ca();
     }
     let args: Vec<_> = env::args_os().skip(1).collect();
-    let (tag, distribution, parent) = match args.as_slice() {
+    let (origin, distribution, parent) = match args.as_slice() {
         [mode, target, app_args @ ..] if mode == "--supervise" => {
             return supervise(Path::new(target), app_args);
         }
         [tag, distribution, parent] => (tag, Path::new(distribution), Path::new(parent)),
         _ => bail!(
-            "Usage: release_update <previous-vX.Y.Z> <absolute-distribution-dir> <absolute-work-parent>"
+            "Usage: release_update <previous-X.Y.Z | absolute-previous-dir> <absolute-distribution-dir> <absolute-work-parent>"
         ),
     };
     let root = regression::workspace(parent)?;
@@ -50,7 +50,9 @@ pub fn run() -> Result<()> {
         .enable_all()
         .build()?
         .block_on(scenario(
-            tag.to_str().context("Expected an ASCII release tag")?,
+            origin
+                .to_str()
+                .context("Expected an ASCII version or folder path")?,
             distribution,
             &root,
         ));
@@ -91,7 +93,7 @@ fn supervise(target: &Path, args: &[std::ffi::OsString]) -> Result<()> {
     Ok(())
 }
 
-async fn scenario(tag: &str, distribution: &Path, root: &Path) -> Result<()> {
+async fn scenario(origin: &str, distribution: &Path, root: &Path) -> Result<()> {
     let home = root.join("home");
     let codex = home.join(".codex");
     let tmp = root.join("tmp");
@@ -104,7 +106,7 @@ async fn scenario(tag: &str, distribution: &Path, root: &Path) -> Result<()> {
     } else {
         "skilvella"
     });
-    let files = Arc::new(regression::prepare(tag, distribution, &target)?);
+    let files = Arc::new(regression::prepare(origin, distribution, &target)?);
     let cert = root.join("fixture.pem");
     let feed = ReleaseFeed::start(&cert, files.clone())?;
 

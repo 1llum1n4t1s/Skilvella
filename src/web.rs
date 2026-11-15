@@ -471,7 +471,7 @@ async fn check_update(
     if let Some(response) = update_csrf_error(locale, &state, &form.csrf) {
         return response;
     }
-    // Setup版はVelopackの更新元で確認する（間引きは無視）。ZIP版・macOS版は従来のGitHub確認。
+    // Setup版はVelopackの更新元で確認する（間引きは無視）。ZIP版・macOS版は R2（skilvella.kagayoi.com/portable）の latest.json で確認する。
     #[cfg(all(windows, feature = "windows-installer"))]
     let task = crate::update::auto::manual_check;
     #[cfg(not(all(windows, feature = "windows-installer")))]

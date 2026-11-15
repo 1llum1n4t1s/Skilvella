@@ -1,4 +1,4 @@
-//! 通常ビルドから分離した、GitHub配布物の梱包と公開前検証。
+//! 通常ビルドから分離した、ZIP版・macOS版の配布物（R2 の portable/ に置くもの）の梱包と公開前検証。
 use super::{
     BUILD_INFO, MAC_ASSET, MAX_ARCHIVE, MAX_CHECKSUMS, WINDOWS_ASSET, asset_name, checksum, digest,
     executable_name, verify_archive, write_new,

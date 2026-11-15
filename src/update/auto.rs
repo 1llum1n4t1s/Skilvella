@@ -284,8 +284,7 @@ mod installer {
 
     /// 設定画面からの手動確認。間引きを無視し、Velopackで確認する。
     ///
-    /// 画面のJavaScriptが `supported` と `release_url` を検査するため、常に妥当な値を返す
-    /// （`release_url` は更新元の固定URL。GitHubのリリースURLではないので画面には出ない）。
+    /// 画面のJavaScriptが `supported` を検査するため、常に妥当な値を返す。
     pub fn manual_check() -> anyhow::Result<UpdateInfo> {
         let _operation = try_operation()?;
         let manager = manager()?;
@@ -302,7 +301,6 @@ mod installer {
             latest_version: latest,
             available,
             supported: true,
-            release_url: format!("{FEED_URL}/"),
         })
     }
 
