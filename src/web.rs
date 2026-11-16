@@ -124,8 +124,12 @@ struct SettingsPage {
     installer: bool,
     /// 自動更新の設定（既定ON）。`installer` が偽のときは使わない。
     auto_update: bool,
-    /// 同期先クライアントごとの状態（Codex・Claude Code・Grokの順）。
+    /// 同期先クライアントごとの状態（`SkillClient::ALL` の順）。
     clients: Vec<ClientSyncView>,
+    /// 折りたたみ（その他のクライアント）に入れたクライアントの件数（表示用の文字列）。
+    hidden_count: String,
+    /// 状態の表に1行以上あるか（有効またはエラーありのクライアントがあるか）。
+    has_status: bool,
 }
 /// 設定画面の同期先1件分。パスは表示用に整形済み。
 struct ClientSyncView {
@@ -134,10 +138,28 @@ struct ClientSyncView {
     settings: CodexSyncSettings,
     path: String,
     link_path: String,
+    /// 同期先のチェックボックスを折りたたまずに出すか（`client_shown`）。
+    shown: bool,
+    /// 状態の表に行を出すか（`client_has_status`）。
+    status: bool,
+}
+/// 同期先のチェックボックスを折りたたまずに表示するか。
+///
+/// このPCで検出したクライアントに加え、有効・生成済みの入口がある・同期エラーがある
+/// クライアントは検出の有無にかかわらず必ず表示する（不変条件）。保存フォームは
+/// `targets=true` で未送信のクライアントを無効化するため、有効なものを隠すと保存時に
+/// 黙って無効化されてしまう。折りたたんだものも同じフォーム内に残り、送信される。
+fn client_shown(detected: bool, settings: &CodexSyncSettings) -> bool {
+    detected || client_has_status(settings) || settings.exported > 0
+}
+/// 状態（生成先・リンク先・件数・エラー）を表に出すか。無効で問題のないクライアントは出さない。
+fn client_has_status(settings: &CodexSyncSettings) -> bool {
+    settings.enabled || !settings.last_error.is_empty()
 }
 async fn settings(Extension(locale): Extension<Locale>, State(state): State<AppState>) -> Response {
     let result = state
         .run(|lib| {
+            let detected = lib.detected_clients()?;
             SkillClient::ALL
                 .into_iter()
                 .map(|client| {
@@ -147,6 +169,8 @@ async fn settings(Extension(locale): Extension<Locale>, State(state): State<AppS
                         label: client.label(),
                         path: display_path(&settings.path),
                         link_path: display_path(&settings.link_path),
+                        shown: client_shown(detected.contains(&client), &settings),
+                        status: client_has_status(&settings),
                         settings,
                     })
                 })
@@ -164,6 +188,8 @@ async fn settings(Extension(locale): Extension<Locale>, State(state): State<AppS
                 version: env!("CARGO_PKG_VERSION"),
                 installer: crate::update::auto::INSTALLER_BUILD,
                 auto_update,
+                hidden_count: clients.iter().filter(|c| !c.shown).count().to_string(),
+                has_status: clients.iter().any(|c| c.status),
                 clients,
             },
         ),
@@ -199,8 +225,9 @@ async fn set_language(
 /// 同期先の設定フォーム。
 ///
 /// - 新しい画面: `targets=1` と、選んだクライアントのチェックボックス（`codex` / `claude` /
-///   `grok` = `true`）を送る。未選択のチェックボックスは送られないため、`targets` で
-///   「全て未選択」と旧形式を区別する。
+///   `grok` / `cursor` / `copilot` / `devin` = `true`）を送る。未選択のチェックボックスは
+///   送られないため、`targets` で「全て未選択」と旧形式を区別する。画面で折りたたんだ
+///   クライアントも同じフォーム内にあり、選択状態が送られる。
 /// - 旧形式: `enabled` だけを送り、Codexだけを切り替える（他クライアントは変えない）。
 #[derive(Deserialize)]
 struct CodexSettingsForm {
@@ -214,6 +241,25 @@ struct CodexSettingsForm {
     claude: bool,
     #[serde(default)]
     grok: bool,
+    #[serde(default)]
+    cursor: bool,
+    #[serde(default)]
+    copilot: bool,
+    #[serde(default)]
+    devin: bool,
+}
+impl CodexSettingsForm {
+    /// クライアントごとの選択。網羅的なmatchで、クライアントの追加時にフォームの更新漏れを防ぐ。
+    fn selected(&self, client: SkillClient) -> bool {
+        match client {
+            SkillClient::Codex => self.codex,
+            SkillClient::Claude => self.claude,
+            SkillClient::Grok => self.grok,
+            SkillClient::Cursor => self.cursor,
+            SkillClient::Copilot => self.copilot,
+            SkillClient::Devin => self.devin,
+        }
+    }
 }
 async fn set_codex_enabled(
     Extension(locale): Extension<Locale>,
@@ -225,11 +271,10 @@ async fn set_codex_enabled(
     }
     let changes = match (form.enabled, form.targets) {
         (Some(enabled), false) => vec![(SkillClient::Codex, enabled)],
-        (None, true) => vec![
-            (SkillClient::Codex, form.codex),
-            (SkillClient::Claude, form.claude),
-            (SkillClient::Grok, form.grok),
-        ],
+        (None, true) => SkillClient::ALL
+            .into_iter()
+            .map(|client| (client, form.selected(client)))
+            .collect(),
         _ => {
             return error(
                 locale,
@@ -1548,7 +1593,7 @@ async fn repository_bulk(
     }
 }
 /// 有効なクライアントごとの呼び出しコマンド（クライアント名, コマンド）。
-/// Claude Code・Grokは同じ `/name` になるため、同じコマンドは1つにまとめて名前を並べる。
+/// Codex以外は同じ `/name` になるため、同じコマンドは1つにまとめて名前を並べる。
 fn command_list(clients: &[SkillClient], name: Option<&String>) -> Vec<(String, String)> {
     let Some(name) = name else {
         return Vec::new();
@@ -1968,6 +2013,35 @@ async fn favicon() -> Response {
 
 #[cfg(test)]
 mod tests {
+    /// 有効・生成済み・同期エラーありのクライアントは、検出されていなくても同期先を隠さない
+    /// （隠すと `targets=true` の保存で黙って無効化されるため）。状態の表は有効かエラーありだけ。
+    #[test]
+    fn active_clients_are_never_hidden() {
+        use crate::model::CodexSyncSettings;
+        let idle = CodexSyncSettings::default();
+        assert!(!super::client_shown(false, &idle));
+        assert!(super::client_shown(true, &idle));
+        assert!(!super::client_has_status(&idle));
+        let enabled = CodexSyncSettings {
+            enabled: true,
+            ..Default::default()
+        };
+        let exported = CodexSyncSettings {
+            exported: 2,
+            ..Default::default()
+        };
+        let failed = CodexSyncSettings {
+            last_error: "boom".into(),
+            ..Default::default()
+        };
+        for settings in [&enabled, &exported, &failed] {
+            assert!(super::client_shown(false, settings));
+        }
+        assert!(super::client_has_status(&enabled));
+        assert!(super::client_has_status(&failed));
+        assert!(!super::client_has_status(&exported));
+    }
+
     /// 区切りは半角カンマ・全角カンマ・読点・改行で同じ結果になる。
     #[test]
     fn tags_split_on_all_separators() {

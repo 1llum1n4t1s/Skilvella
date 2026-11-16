@@ -93,15 +93,24 @@ MCP 공개만으로는 에이전트가 같은 스킬을 표준 방식으로 탐�
 
 ## 자동 선택과 명령 후보
 
-먼저 [MCP 연결](#mcp-connection)을 사용하는 클라이언트에 Skilvella를 등록하고 동작을 확인하세요. "설정"의 "호출 진입점 동기화"에서 동기화 대상(Codex, Claude Code, Grok. 여러 개 선택 가능)을 체크하고 저장하면, Skilvella가 직접 각 클라이언트의 호출 진입점을 자동으로 동기화합니다. 이전 버전에서 "Codex 연동"을 켜 두었다면 Codex가 선택된 상태로 승계됩니다. Windows, macOS, Linux에서 똑같이 동작하며 작업 스케줄러도, 별도의 상주 프로세스도 사용하지 않습니다. 동기화는 시작할 때, 관리 작업 후, 정기 점검 중에 실행되며, 서비스를 다시 시작한 뒤에도 설정이 유지됩니다.
+먼저 [MCP 연결](#mcp-connection)을 사용하는 클라이언트에 Skilvella를 등록하고 동작을 확인하세요. "설정"의 "호출 진입점 동기화"에서 동기화 대상(Codex, Claude Code, Grok, Cursor, GitHub Copilot, Devin. 여러 개 선택 가능)을 체크하고 저장하면, Skilvella가 직접 각 클라이언트의 호출 진입점을 자동으로 동기화합니다. 이 PC에서 설정 폴더(`~/.cursor` 등)를 찾지 못한 클라이언트는 같은 양식의 "기타 클라이언트" 아래에 접어 둡니다. 켜져 있거나 동기화 오류가 있는 클라이언트는 항상 표시합니다. 상태 표에는 켜진 클라이언트와 동기화 오류가 있는 클라이언트만 표시합니다. 이전 버전에서 "Codex 연동"을 켜 두었다면 Codex가 선택된 상태로 승계됩니다. Windows, macOS, Linux에서 똑같이 동작하며 작업 스케줄러도, 별도의 상주 프로세스도 사용하지 않습니다. 동기화는 시작할 때, 관리 작업 후, 정기 점검 중에 실행되며, 서비스를 다시 시작한 뒤에도 설정이 유지됩니다.
 
 | 동기화 대상 | 진입점 위치 | 탐색에 노출하는 방식 | 자동 선택 제어 |
 | --- | --- | --- | --- |
 | Codex | `~/.agents/skills/skilvella/<name>` | 실제 파일(Codex는 중첩 폴더를 탐색함) | `agents/openai.yaml` |
 | Claude Code | `~/.claude/skilvella/skills/<name>` | `~/.claude/skills/<name>`으로의 링크(Windows는 정션, macOS와 Linux는 심볼릭 링크) | `disable-model-invocation` |
 | Grok | `~/.grok/skills/skilvella/<name>` | 실제 파일(Grok은 중첩 폴더를 탐색함) | `disable-model-invocation` |
+| Cursor | `~/.cursor/skills/skilvella/<name>` | 실제 파일(Cursor는 중첩 폴더를 탐색하지만 링크를 따라가지 않을 수 있음) | `disable-model-invocation` |
+| GitHub Copilot | `~/.copilot/skilvella/skills/<name>` | `~/.copilot/skills/<name>`으로의 링크 | `disable-model-invocation` |
+| Devin | `<Devin 설정>/skilvella/skills/<name>` | `<Devin 설정>/skills/<name>`으로의 링크 | `triggers: [user]` |
+
+`<Devin 설정>`은 Windows에서 `%APPDATA%\devin`, macOS와 Linux에서 `~/.config/devin`입니다(`XDG_CONFIG_HOME`은 사용하지 않음). GitHub Copilot은 항상 `~/.copilot`을 사용하며 `COPILOT_HOME`을 따르지 않습니다.
 
 Claude Code는 `~/.claude/skills` 바로 아래 한 단계만 탐색하므로, 진입점은 탐색 경로 밖에 두고 스킬마다 링크를 만듭니다. `~/.claude/skills`에 같은 이름의 기존 스킬이나 링크가 이미 있으면 덮어쓰지 않으며 해당 이름이 동기화 오류로 표시됩니다. 이전 버전의 안내에 따라 직접 만든 `~/.claude/skills/<name>`에서 `~/.agents/skills/skilvella/<name>`으로의 링크는 Claude Code 진입점을 가리키도록 다시 연결되어 관리 대상으로 승계되지만, 동기화 대상인 이름에 한합니다. 동기화 대상이 아닌 이름의 링크는 건드리지 않습니다(Codex를 끄면 그 참조 대상이 사라집니다). Claude Code의 동기화를 끄면 Skilvella가 만들었거나 승계한 링크만 제거됩니다. `~/.claude/skills` 자체를 관리 폴더로 등록했다면 동기화는 수행되지 않습니다.
+
+GitHub Copilot(Copilot CLI는 `~/.copilot/skills/<name>/SKILL.md`만 찾음)과 Devin도 같은 링크 방식과 규칙을 따릅니다. 같은 이름의 기존 항목은 덮어쓰지 않고, Skilvella가 만든 링크만 제거하며, 링크 폴더가 관리 폴더와 겹치면 동기화하지 않습니다. 직접 만든 Codex 진입점 링크를 승계하는 것은 Claude Code뿐입니다. Copilot CLI가 `disable-model-invocation`을 따르는지와 Devin의 탐색 깊이는 확인되지 않았습니다.
+
+Cursor는 `~/.agents/skills`와 `~/.claude/skills`, GitHub Copilot은 `~/.agents/skills`, Devin은 `~/.agents/skills`와 `~/.copilot/skills`도 읽으므로, 여러 클라이언트를 켜면 같은 진입점이 중복으로 표시될 수 있습니다.
 
 Grok은 Codex(`~/.agents/skills`)와 Claude Code(`~/.claude/skills`)의 탐색 경로도 읽으며, 같은 이름의 스킬은 `~/.grok/skills`, `~/.agents/skills`, `~/.claude/skills` 순으로 우선합니다. Codex 진입점은 `agents/openai.yaml`로 자동 선택을 막으므로, Grok에서는 "명령 후보만" 스킬도 자동으로 선택됩니다. Grok을 사용한다면 동기화 대상으로 Grok을 선택하세요.
 
@@ -115,7 +124,7 @@ Grok은 Codex(`~/.agents/skills`)와 Claude Code(`~/.claude/skills`)의 탐색 �
 | 명령 후보만 | 전달하지 않음 | 표시함 |
 | 자동 선택 + 명령 후보 | 전달함 | 표시함 |
 
-명령 후보를 표시하는 스킬은 동기화 대상별 호출 명령(Codex는 `$name`, Claude Code와 Grok은 `/name`)이 목록의 스킬 이름 아래와 상세 페이지의 "사용 방식"에 표시됩니다. 이름에 소문자, 숫자, `-` 이외의 문자가 포함되면 `skill-<ID의 처음 8자>`가 되고, 같은 이름의 공개 스킬이 있으면 `<name>-<ID의 처음 8자>`가 되므로 표시된 명령을 사용하세요. 명령이 없을 때는 상세 페이지에 이유(검색만, 동기화 대상 미선택, 비공개, 읽기 오류)가 표시됩니다. 목록에서 비공개에서 공개로 전환한 스킬의 명령은 새로 고침 후에 나타납니다.
+명령 후보를 표시하는 스킬은 동기화 대상별 호출 명령(Codex는 `$name`, 다른 클라이언트는 `/name`)이 목록의 스킬 이름 아래와 상세 페이지의 "사용 방식"에 표시됩니다. 이름에 소문자, 숫자, `-` 이외의 문자가 포함되면 `skill-<ID의 처음 8자>`가 되고, 같은 이름의 공개 스킬이 있으면 `<name>-<ID의 처음 8자>`가 되므로 표시된 명령을 사용하세요. 명령이 없을 때는 상세 페이지에 이유(검색만, 동기화 대상 미선택, 비공개, 읽기 오류)가 표시됩니다. 목록에서 비공개에서 공개로 전환한 스킬의 명령은 새로 고침 후에 나타납니다.
 
 목록에서 스킬을 체크하고 일괄 작업의 "사용 방식"을 선택한 뒤 "선택 항목에 적용"을 누르면 여러 스킬의 모드를 한꺼번에 바꿀 수 있습니다. "변경 안 함"은 현재 모드를 유지합니다. 공개 상태와 태그를 동시에 변경할 수도 있습니다.
 
@@ -123,7 +132,7 @@ Grok은 Codex(`~/.agents/skills`)와 Claude Code(`~/.claude/skills`)의 탐색 �
 
 Codex에는 "자동 선택은 켜되 후보에는 표시하지 않음"이라는 별도 설정이 없으므로, Skilvella는 그에 해당하는 세 가지 모드를 제공합니다. 자동 선택일 때도 원본 내용의 전체 사본을 항상 보관하지는 않으며, 필요할 때 MCP에서 내용을 가져옵니다. 후보에 표시되지 않는 스킬은 명시적 호출 전용인 `$skilvella-search`로 검색할 수 있습니다. MCP의 `search_skills`를 직접 사용할 수도 있습니다.
 
-사용 방식 모드는 모든 동기화 대상에 공통입니다. 진입점 위치는 위 표와 같습니다. 스킬을 비공개로 하거나 모드를 바꾸면 더 이상 필요 없는 산출물은 탐색 경로 밖(`~/.agents`, `~/.claude`, `~/.grok` 바로 아래의 `skilvella-staging` / `skilvella-retired`)으로 옮겨집니다. 알 수 없는 파일이나 수동 편집이 감지되면 덮어쓰지 않으며 설정 페이지에 동기화 오류가 표시됩니다. 디스크 공간 부족이나 강제 종료로 불완전한 임시 파일이 남으면 기존의 정상 색인을 보호하면서 중단됩니다. 표시된 경로의 내용을 확인한 뒤 다시 시도하세요. 연동을 끄면 해당 연동이 소유한 진입점이 탐색 경로에서 제거됩니다. 동기화가 중지된 동안에는 이전의 후보와 자동 선택 설정이 남아 있을 수 있습니다. 원본 파일, 공개 상태, 편집 이력은 바뀌지 않습니다. Codex의 후보 표시가 갱신되지 않으면 후보 메뉴를 다시 열거나 Codex를 다시 시작하세요. Claude Code는 실행 중인 세션에서도 `~/.claude/skills`의 변경을 반영하지만, 세션을 시작한 뒤에 `~/.claude/skills` 자체를 만들었다면 `/reload-skills`를 실행하세요. 이미 기존 대화에 로드된 내용은 제거할 수 없습니다.
+사용 방식 모드는 모든 동기화 대상에 공통입니다. 진입점 위치는 위 표와 같습니다. 스킬을 비공개로 하거나 모드를 바꾸면 더 이상 필요 없는 산출물은 탐색 경로 밖(`~/.agents`, `~/.claude`, `~/.grok`, `~/.cursor`, `~/.copilot`, `<Devin 설정>` 바로 아래의 `skilvella-staging` / `skilvella-retired`)으로 옮겨집니다. 알 수 없는 파일이나 수동 편집이 감지되면 덮어쓰지 않으며 설정 페이지에 동기화 오류가 표시됩니다. 디스크 공간 부족이나 강제 종료로 불완전한 임시 파일이 남으면 기존의 정상 색인을 보호하면서 중단됩니다. 표시된 경로의 내용을 확인한 뒤 다시 시도하세요. 연동을 끄면 해당 연동이 소유한 진입점이 탐색 경로에서 제거됩니다. 동기화가 중지된 동안에는 이전의 후보와 자동 선택 설정이 남아 있을 수 있습니다. 원본 파일, 공개 상태, 편집 이력은 바뀌지 않습니다. Codex의 후보 표시가 갱신되지 않으면 후보 메뉴를 다시 열거나 Codex를 다시 시작하세요. Claude Code는 실행 중인 세션에서도 `~/.claude/skills`의 변경을 반영하지만, 세션을 시작한 뒤에 `~/.claude/skills` 자체를 만들었다면 `/reload-skills`를 실행하세요. 이미 기존 대화에 로드된 내용은 제거할 수 없습니다.
 
 <a id="display-settings"></a>
 

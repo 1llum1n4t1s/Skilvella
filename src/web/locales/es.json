@@ -45,8 +45,6 @@
   "検索のみ（省コンテキスト）": "Solo búsqueda (menos contexto)",
   "コマンド候補のみ": "Solo sugerencias de comandos",
   "自動選択＋コマンド候補": "Selección automática + sugerencias de comandos",
-  "生成先:": "Destino:",
-  "生成済み件数:": "Entradas generadas:",
   "呼び出し入口の同期の設定": "Configuración de sincronización de puntos de invocación",
   "使い方を選択してください。": "Seleccione el uso.",
   "自動選択では名前と説明を初期コンテキストに渡します。コマンド候補のみでは明示したときだけ使います。候補に非表示でもMCP検索から探せます。": "La selección automática añade el nombre y la descripción al contexto inicial. Solo sugerencias usa la habilidad únicamente al solicitarla explícitamente. Las habilidades ocultas siguen disponibles mediante búsqueda MCP.",
@@ -230,7 +228,6 @@
   "同期先": "Destinos de sincronización",
   "選んだクライアントごとに呼び出し入口を生成します。有効にすると検索用スキル skilvella-search が常に候補に表示されます。各スキルの使い方は一覧または詳細画面で選択でき、全ての同期先に共通です。": "Genera puntos de invocación para cada cliente seleccionado. Al activarlo, la habilidad skilvella-search aparece siempre como comando. Elige el uso de cada habilidad desde la lista o el detalle; se aplica a todos los destinos.",
   "GrokはCodexとClaude Codeの入口も読み込みます。Grokを有効にすると、使い方の設定を反映したGrok用の入口が優先されます。": "Grok también lee los puntos de Codex y Claude Code. Si activas Grok, tienen prioridad sus propios puntos, que reflejan tu configuración de uso.",
-  "リンク先:": "Ubicación de enlaces:",
   "同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。": "La sincronización se ha detenido. La configuración guardada aún no se ha aplicado a este destino. Pueden quedar comandos o selecciones automáticas anteriores.",
   "同期エラー:": "Error de sincronización:",
   "同期先を選択してください。": "Selecciona los destinos de sincronización.",
@@ -267,5 +264,12 @@
   "同期先が選ばれていないため、コマンドはありません。": "No hay comando porque no se ha seleccionado ningún destino de sincronización.",
   "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Solo las habilidades publicadas y legibles se convierten en comandos. Publíquela en MCP y compruebe que no haya errores de lectura.",
   "編集": "Edición",
-  "復元": "Restauración"
+  "復元": "Restauración",
+  "その他のクライアント（{count}件）": "Otros clientes ({count})",
+  "このPCで設定フォルダーが見つからなかったクライアントです。": "No se encontró la carpeta de configuración de estos clientes en este equipo.",
+  "Cursor・GitHub Copilot・Devinは他のクライアントの探索先（~/.agents/skills・~/.claude/skills・~/.copilot/skills）も読むため、同じ入口が重複して表示されることがあります。": "Cursor, GitHub Copilot y Devin también leen las ubicaciones de otros clientes (~/.agents/skills, ~/.claude/skills, ~/.copilot/skills), así que un mismo punto puede aparecer repetido.",
+  "クライアント": "Cliente",
+  "生成先": "Destino",
+  "リンク先": "Ubicación de enlaces",
+  "件数": "Entradas"
 }

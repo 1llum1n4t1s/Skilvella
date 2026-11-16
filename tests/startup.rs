@@ -31,6 +31,8 @@ async fn headless_process_serves_ui_and_mcp_on_the_bound_port() {
             .env("USERPROFILE", &home)
             .env("HOME", &home)
             .env("CODEX_HOME", home.join(".codex"))
+            // Devinの設定フォルダー（Windowsは %APPDATA%\devin）も隔離したホームへ向ける。
+            .env("APPDATA", home.join("AppData/Roaming"))
             .env("SKILVELLA_LANGUAGE", "en")
             .env_remove("LOCALAPPDATA")
             .stdout(Stdio::piped())
@@ -131,6 +133,7 @@ fn occupied_port_does_not_create_or_change_the_library() {
         .env("USERPROFILE", &home)
         .env("HOME", &home)
         .env("CODEX_HOME", home.join(".codex"))
+        .env("APPDATA", home.join("AppData/Roaming"))
         .env("SKILVELLA_LANGUAGE", "en")
         .output()
         .unwrap();

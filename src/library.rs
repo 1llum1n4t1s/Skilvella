@@ -57,34 +57,84 @@ mod codex_index {
             SkillClient::Codex => "codex_sync",
             SkillClient::Claude => "claude_sync",
             SkillClient::Grok => "grok_sync",
+            SkillClient::Cursor => "cursor_sync",
+            SkillClient::Copilot => "copilot_sync",
+            SkillClient::Devin => "devin_sync",
         }
     }
-    /// 所有記録（manifest・中断記録）を置くデータフォルダー内の名前。Codexは旧版と共通。
+    /// 所有記録（manifest・中断記録・リンクの所有記録）を置くデータフォルダー内の名前。
+    /// Codexは旧版と共通、Claude Codeの `claude-index/links.json` も旧版と同じ場所のまま使う。
     fn state_name(client: SkillClient) -> &'static str {
         match client {
             SkillClient::Codex => "codex-index",
             SkillClient::Claude => "claude-index",
             SkillClient::Grok => "grok-index",
+            SkillClient::Cursor => "cursor-index",
+            SkillClient::Copilot => "copilot-index",
+            SkillClient::Devin => "devin-index",
         }
     }
     /// 生成先として受け入れるパスの末尾。記録の改ざん・破損で無関係な場所を
     /// 退避・削除しないよう、復旧・清掃の前にも必ず照合する。
+    /// Devinの設定フォルダーはOSで異なる（`%APPDATA%\devin` / `~/.config/devin`）ため、
+    /// 共通する `devin` 以下だけを照合する。
     fn root_suffix(client: SkillClient) -> &'static str {
         match client {
             SkillClient::Codex => ".agents/skills/skilvella",
             SkillClient::Claude => ".claude/skilvella/skills",
             SkillClient::Grok => ".grok/skills/skilvella",
+            SkillClient::Cursor => ".cursor/skills/skilvella",
+            SkillClient::Copilot => ".copilot/skilvella/skills",
+            SkillClient::Devin => "devin/skilvella/skills",
+        }
+    }
+    /// リンク置き場として受け入れるパスの末尾（リンク方式のクライアントだけ）。
+    /// リンクの所有記録が改ざん・破損していても、無関係な場所のリンクを外さないために照合する。
+    fn link_suffix(client: SkillClient) -> Option<&'static str> {
+        match client {
+            SkillClient::Claude => Some(".claude/skills"),
+            SkillClient::Copilot => Some(".copilot/skills"),
+            SkillClient::Devin => Some("devin/skills"),
+            SkillClient::Codex | SkillClient::Grok | SkillClient::Cursor => None,
         }
     }
     fn valid_root(client: SkillClient, root: &Path) -> bool {
         root.is_absolute() && root.ends_with(root_suffix(client))
     }
+    /// 自動選択（モデルによる暗黙の呼び出し）の止め方。クライアントごとに表し方が違う。
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum InvocationControl {
+        /// Codex: 入口ごとの `agents/openai.yaml` の `allow_implicit_invocation`。
+        OpenAiYaml,
+        /// Claude Code・Grok・Cursor・GitHub Copilot: frontmatterの `disable-model-invocation: true`。
+        DisableModelInvocation,
+        /// Devin: frontmatterの `triggers: [user]`（既定は `[user, model]`）。
+        UserTriggers,
+    }
+    fn invocation_control(client: SkillClient) -> InvocationControl {
+        match client {
+            SkillClient::Codex => InvocationControl::OpenAiYaml,
+            SkillClient::Claude
+            | SkillClient::Grok
+            | SkillClient::Cursor
+            | SkillClient::Copilot => InvocationControl::DisableModelInvocation,
+            SkillClient::Devin => InvocationControl::UserTriggers,
+        }
+    }
     fn load_settings(c: &Connection, client: SkillClient) -> Result<CodexSyncSettings> {
         Ok(setting_json(c, settings_key(client))?.unwrap_or_default())
     }
-    /// 生成物の所有フォルダー。ホームは起動時に記録した `~/.agents/skills` から求め、
-    /// Codexと同じ利用者ホームを全クライアントで共有する。
-    fn target(c: &Connection, client: SkillClient) -> Result<Option<PathBuf>> {
+    /// 起動時に記録したDevinの設定フォルダー（未記録なら `None`）。
+    ///
+    /// 同期中に `%APPDATA%` などの環境変数を直接読まず、`Library::open_for_user`（ホームから
+    /// 導出）または `open_for_user_with_devin`（起動時に環境変数から求めた値）が記録した値だけを使う。
+    /// テストは隔離したホームから導出した値になり、利用者の実フォルダーに触れない。
+    fn devin_config(c: &Connection) -> Result<Option<PathBuf>> {
+        let dir: Option<PathBuf> = setting_json(c, super::DEVIN_CONFIG_DIR)?;
+        Ok(dir.filter(|dir| dir.is_absolute()))
+    }
+    /// 記録済みの `~/.agents/skills` から利用者ホームを求める（未記録なら `None`）。
+    fn recorded_home(c: &Connection) -> Result<Option<PathBuf>> {
         let roots: Vec<PathBuf> = setting_json(c, "native_skill_roots")?.unwrap_or_default();
         match roots.first() {
             None => Ok(None),
@@ -93,35 +143,87 @@ mod codex_index {
                     root.is_absolute() && root.ends_with(".agents/skills"),
                     "Skill entry export requires the recorded .agents/skills root"
                 );
-                let home = root
-                    .parent()
-                    .and_then(Path::parent)
-                    .context("Invalid native skill root")?;
-                Ok(Some(match client {
-                    SkillClient::Codex => root.join("skilvella"),
-                    // Claude Codeは `~/.claude/skills` 直下しか探索しないため、生成物は
-                    // 探索外に置き、リンクだけを探索先へ出す。
-                    SkillClient::Claude => home.join(".claude").join("skilvella").join("skills"),
-                    SkillClient::Grok => home.join(".grok").join("skills").join("skilvella"),
-                }))
+                Ok(Some(
+                    root.parent()
+                        .and_then(Path::parent)
+                        .context("Invalid native skill root")?
+                        .to_owned(),
+                ))
             }
         }
     }
+    /// 生成物の所有フォルダー。ホームは起動時に記録した `~/.agents/skills` から求め、
+    /// Codexと同じ利用者ホームを全クライアントで共有する（Devinは記録済みの設定フォルダー）。
+    fn target(c: &Connection, client: SkillClient) -> Result<Option<PathBuf>> {
+        let Some(home) = recorded_home(c)? else {
+            return Ok(None);
+        };
+        Ok(match client {
+            SkillClient::Codex => Some(home.join(".agents").join("skills").join("skilvella")),
+            // Claude Code・GitHub Copilotは探索先の直下しか見ない（Copilot CLI）ため、生成物は
+            // 探索外に置き、リンクだけを探索先へ出す。
+            SkillClient::Claude => Some(home.join(".claude").join("skilvella").join("skills")),
+            SkillClient::Grok => Some(home.join(".grok").join("skills").join("skilvella")),
+            SkillClient::Cursor => Some(home.join(".cursor").join("skills").join("skilvella")),
+            SkillClient::Copilot => Some(home.join(".copilot").join("skilvella").join("skills")),
+            // 記録がない（`Library::open` だけで開いた）場合は未設定として扱い、
+            // 無効なDevinに毎回同期エラーを付けない。
+            SkillClient::Devin => devin_config(c)?.map(|dir| dir.join("skilvella").join("skills")),
+        })
+    }
     /// 探索先へ1スキルずつリンクを張るクライアントのリンク置き場。
+    /// 生成先 `<設定フォルダー>/skilvella/skills` の2階層上の `skills`
+    /// （`~/.claude/skills`・`~/.copilot/skills`・`<devin設定>/skills`）。
     fn link_dir(root: &Path, client: SkillClient) -> Option<PathBuf> {
-        match client {
-            // `~/.claude/skilvella/skills` → `~/.claude/skills`
-            SkillClient::Claude => root
-                .parent()
-                .and_then(Path::parent)
-                .map(|claude| claude.join("skills")),
-            SkillClient::Codex | SkillClient::Grok => None,
-        }
+        link_suffix(client)?;
+        root.parent()
+            .and_then(Path::parent)
+            .map(|config| config.join("skills"))
+    }
+    /// 各クライアントがこのPCで使われているかの目印（設定フォルダー）。
+    /// Codexは `~/.agents`・`~/.codex`・`CODEX_HOME`（記録済みの探索先の親）のどれか。
+    fn client_markers(c: &Connection, client: SkillClient) -> Result<Vec<PathBuf>> {
+        let Some(home) = recorded_home(c)? else {
+            return Ok(Vec::new());
+        };
+        Ok(match client {
+            SkillClient::Codex => {
+                let roots: Vec<PathBuf> =
+                    setting_json(c, "native_skill_roots")?.unwrap_or_default();
+                roots
+                    .iter()
+                    .filter_map(|root| root.parent().map(Path::to_owned))
+                    .collect()
+            }
+            SkillClient::Claude => vec![home.join(".claude")],
+            SkillClient::Grok => vec![home.join(".grok")],
+            SkillClient::Cursor => vec![home.join(".cursor")],
+            SkillClient::Copilot => vec![home.join(".copilot")],
+            SkillClient::Devin => devin_config(c)?.into_iter().collect(),
+        })
     }
     impl Library {
+        /// このPCで設定フォルダーが見つかったクライアント（表示順は `SkillClient::ALL`）。
+        ///
+        /// 設定画面で関係のないクライアントを折りたたむための目安で、同期の可否には使わない。
+        /// 目印は記録済みのホーム・Devinの設定フォルダーから求めるため、テストは隔離した
+        /// ホームにフォルダーを作るだけで差し替えられる。読み取りエラーは未検出として扱う。
+        pub fn detected_clients(&self) -> Result<Vec<SkillClient>> {
+            let c = self.connection()?;
+            let mut detected = Vec::new();
+            for client in SkillClient::ALL {
+                if client_markers(&c, client)?
+                    .iter()
+                    .any(|marker| marker.try_exists().unwrap_or(false))
+                {
+                    detected.push(client);
+                }
+            }
+            Ok(detected)
+        }
         /// 全クライアントの生成入口（SKILL.md）を、原本の走査から除外するための目印として集める。
         /// 戻り値は (既知の入口, 所有記録が確認できない, 未確認の出力領域)。
-        /// Codexだけでなく、Claude Code・Grokの生成物が管理フォルダー内に入っても
+        /// Codexだけでなく、他の全クライアントの生成物が管理フォルダー内に入っても
         /// 原本として登録しないよう、同じ検証を各クライアントの所有記録に適用する。
         pub(super) fn owned_codex_markers(&self) -> (HashSet<PathBuf>, bool, HashSet<PathBuf>) {
             let mut markers = HashSet::new();
@@ -549,7 +651,7 @@ mod codex_index {
                     "skilvella-search/SKILL.md".into(),
                     frontmatter_policy(client, finder, false),
                 );
-                if client == SkillClient::Codex {
+                if invocation_control(client) == InvocationControl::OpenAiYaml {
                     desired.insert(
                         "skilvella-search/agents/openai.yaml".into(),
                         "policy:\n  allow_implicit_invocation: false\n".into(),
@@ -620,8 +722,8 @@ mod codex_index {
                         format!("{name}/SKILL.md"),
                         frontmatter_policy(client, text, policy.automatic),
                     );
-                    if client != SkillClient::Codex {
-                        // Claude Code・GrokはSKILL.mdのfrontmatterで自動選択を制御する。
+                    if invocation_control(client) != InvocationControl::OpenAiYaml {
+                        // Codex以外はSKILL.mdのfrontmatter（`frontmatter_policy`）で自動選択を制御する。
                         count += 1;
                         continue;
                     }
@@ -929,20 +1031,22 @@ mod codex_index {
             Ok(())
         }
 
-        /// Claude Code向けに、生成物の各スキルフォルダーへのリンクを `~/.claude/skills` に揃える。
+        /// リンク方式のクライアント（Claude Code・GitHub Copilot・Devin）向けに、生成物の
+        /// 各スキルフォルダーへのリンクを探索先（`~/.claude/skills` など）に揃える。
         ///
-        /// - Claude Codeは `~/.claude/skills/<name>/SKILL.md` の1階層しか探索しないため、
+        /// - 探索先の `<name>/SKILL.md` の1階層しか探索しない（または深さが未確認の）ため、
         ///   生成物は探索外の所有フォルダーへ一括公開し、探索先にはリンクだけを置く。
         /// - Windowsはジャンクション（管理者権限・開発者モード不要）、macOS・Linuxは
         ///   シンボリックリンクを使う。リンクの削除は中身に触れない。
-        /// - 作成したリンクは `links.json` に記録し、記録と一致するリンクだけを外す。
-        ///   利用者のフォルダー・別の場所へのリンクは上書きせず、エラーとして表示する。
-        /// - 旧版で手動移行した、Codex入口（`~/.agents/skills/skilvella/<name>`）への
-        ///   同名リンクはSkilvellaの生成物しか指さないため、引き継いで張り替える。
+        /// - 作成したリンクはクライアントごとの `<所有記録>/links.json` に記録し、記録と一致する
+        ///   リンクだけを外す。利用者のフォルダー・別の場所へのリンクは上書きせず、エラーとして表示する。
+        /// - Claude Codeだけは、旧版で手動移行した、Codex入口（`~/.agents/skills/skilvella/<name>`）への
+        ///   同名リンクをSkilvellaの生成物しか指さないものとして引き継いで張り替える。
         fn sync_client_links(&self, c: &Connection, client: SkillClient) -> Result<()> {
-            if client != SkillClient::Claude {
+            let Some(link_suffix) = link_suffix(client) else {
                 return Ok(());
-            }
+            };
+            let label = client.label();
             let state = self.client_state(client)?;
             let record_path = state.join("links.json");
             reject_links(&record_path)?;
@@ -956,7 +1060,7 @@ mod codex_index {
             };
             ensure!(
                 record.owner == self.db,
-                "Claude Code link record belongs to another library"
+                "{label} link record belongs to another library"
             );
             // 公開済みの生成物（復旧後の状態を含む）から、張るべきリンク名を決める。
             let manifest_path = state.join("manifest.json");
@@ -998,7 +1102,7 @@ mod codex_index {
             let mut failures = Vec::new();
             // 1) 記録済みのリンクのうち、不要になったものと置き場が変わったものを外す。
             let record_valid = record.dir.is_absolute()
-                && record.dir.ends_with(".claude/skills")
+                && record.dir.ends_with(link_suffix)
                 && valid_root(client, &record.target);
             for name in record.names.iter().filter(|name| valid_link_name(name)) {
                 if !record_valid {
@@ -1038,7 +1142,7 @@ mod codex_index {
                     })?,
                 )?;
                 bail!(
-                    "Claude Codeの入口リンクを更新できません: {}",
+                    "{label}の入口リンクを更新できません: {}",
                     failures.join("; ")
                 );
             }
@@ -1047,7 +1151,13 @@ mod codex_index {
             if let Some(dir) = &dir {
                 reject_links(dir)?;
                 fs::create_dir_all(dir)?;
-                let legacy = target(c, SkillClient::Codex)?;
+                // 旧版の手動移行リンクの引き継ぎはClaude Codeだけに限る。他のクライアントで
+                // Codex入口へのリンクを見つけても利用者のものとして扱い、上書きしない。
+                let legacy = if client == SkillClient::Claude {
+                    target(c, SkillClient::Codex)?
+                } else {
+                    None
+                };
                 let pending: Vec<String> = desired.difference(&kept).cloned().collect();
                 for name in &pending {
                     let path = dir.join(name);
@@ -1097,21 +1207,22 @@ mod codex_index {
             }
             if !conflicts.is_empty() {
                 bail!(
-                    "Claude Codeの探索先 {} に同名のスキルがあるため、入口のリンクを作成しませんでした（上書きしません）: {}",
+                    "{label}の探索先 {} に同名のスキルがあるため、入口のリンクを作成しませんでした（上書きしません）: {}",
                     dir.as_deref().unwrap_or(Path::new("")).display(),
                     conflicts.join(", ")
                 );
             }
             ensure!(
                 failures.is_empty(),
-                "Claude Codeの入口リンクを更新できません: {}",
+                "{label}の入口リンクを更新できません: {}",
                 failures.join("; ")
             );
             Ok(())
         }
     }
 
-    /// Claude Code向けリンクの所有記録。`target` は作成時の生成物フォルダー。
+    /// リンク方式のクライアント向けリンクの所有記録（クライアントごとの `links.json`）。
+    /// `target` は作成時の生成物フォルダー。形式はClaude Code専用だった旧版と同じ。
     #[derive(Default, Serialize, Deserialize)]
     struct LinkRecord {
         owner: PathBuf,
@@ -1157,21 +1268,24 @@ mod codex_index {
         name
     }
 
-    /// Codexの `agents/openai.yaml` の代わりに、Claude Code・Grok共通の
-    /// `disable-model-invocation` で自動選択を止める（手動の `/name` 呼び出しは残る）。
+    /// Codexの `agents/openai.yaml` の代わりに、frontmatterで自動選択を止める
+    /// （手動の `/name` 呼び出しは残る）。Claude Code・Grok・Cursor・GitHub Copilotは
+    /// `disable-model-invocation: true`、Devinは `triggers: [user]` を加える。
+    /// 自動選択を許可する場合は何も加えず、各クライアントの既定（自動選択あり）に任せる。
     fn frontmatter_policy(client: SkillClient, text: String, automatic: bool) -> String {
-        if client == SkillClient::Codex || automatic {
+        if automatic {
             return text;
         }
+        let line = match invocation_control(client) {
+            InvocationControl::OpenAiYaml => return text,
+            InvocationControl::DisableModelInvocation => "disable-model-invocation: true\n",
+            InvocationControl::UserTriggers => "triggers: [user]\n",
+        };
         // 生成文は必ず `---\n...\n---\n` で始まるため、閉じ区切りの直前へ1行加える。
         match text[3..].find("\n---\n") {
             Some(index) => {
                 let at = 3 + index + 1;
-                format!(
-                    "{}disable-model-invocation: true\n{}",
-                    &text[..at],
-                    &text[at..]
-                )
+                format!("{}{line}{}", &text[..at], &text[at..])
             }
             None => text,
         }
@@ -2046,6 +2160,24 @@ fn lock_writer_file(path: &Path) -> Result<fs::File> {
     Ok(file)
 }
 
+/// 起動時に記録するDevinの設定フォルダーの設定キー（値はJSONの絶対パス）。
+const DEVIN_CONFIG_DIR: &str = "devin_config_dir";
+
+/// ホームから導出するDevinの設定フォルダーの既定値。
+///
+/// Devin CLIの探索先はWindowsが `%APPDATA%\devin\skills`、macOS・Linuxが
+/// `~/.config/devin/skills`。ここでは環境変数を読まず、Windowsは既定の
+/// `%USERPROFILE%\AppData\Roaming` を仮定する（実際の `%APPDATA%` は起動時に
+/// `Library::open_for_user_with_devin` で渡す）。`XDG_CONFIG_HOME` はDevin CLIが
+/// 尊重するか未確認のため使わない。
+pub fn default_devin_config_dir(home: &Path) -> PathBuf {
+    if cfg!(windows) {
+        home.join("AppData").join("Roaming").join("devin")
+    } else {
+        home.join(".config").join("devin")
+    }
+}
+
 #[derive(Clone)]
 pub struct Library {
     db: PathBuf,
@@ -2061,10 +2193,36 @@ impl Library {
     pub fn open(data_dir: &Path) -> Result<Self> {
         Self::open_inner(data_dir, None)
     }
+    /// 利用者のホームを記録して開く。Devinの設定フォルダーはホームから既定値を導出する
+    /// （`default_devin_config_dir`）。環境変数を読まないため、テストは隔離したホームだけで完結する。
     pub fn open_for_user(data_dir: &Path, home: &Path, codex_home: Option<&Path>) -> Result<Self> {
-        Self::open_inner(data_dir, Some((home, codex_home)))
+        Self::open_for_user_with_devin(data_dir, home, codex_home, &default_devin_config_dir(home))
     }
-    fn open_inner(data_dir: &Path, native_context: Option<(&Path, Option<&Path>)>) -> Result<Self> {
+    /// `open_for_user` に、起動時に環境変数（Windowsの `%APPDATA%`）から求めた
+    /// Devinの設定フォルダーを加えて開く。同期処理は記録済みの値だけを使う。
+    pub fn open_for_user_with_devin(
+        data_dir: &Path,
+        home: &Path,
+        codex_home: Option<&Path>,
+        devin_config: &Path,
+    ) -> Result<Self> {
+        Self::open_inner(data_dir, Some((home, codex_home, devin_config)))
+    }
+    /// 起動ごとに今回のDevinの設定フォルダーだけを保持する（`native_skill_roots` と同じ扱い）。
+    fn record_devin_config(&self, dir: &Path) -> Result<()> {
+        ensure!(dir.is_absolute(), "Devin config folder must be absolute");
+        // 一時的なvolume不在でも既知のパスを保持し、管理画面を開く。
+        let dir = migration::normalize_path(dir).unwrap_or_else(|_| dir.to_owned());
+        put(
+            &self.connection()?,
+            DEVIN_CONFIG_DIR,
+            &serde_json::to_string(&dir)?,
+        )
+    }
+    fn open_inner(
+        data_dir: &Path,
+        native_context: Option<(&Path, Option<&Path>, &Path)>,
+    ) -> Result<Self> {
         reject_links(data_dir)?;
         let mut directory = fs::DirBuilder::new();
         directory.recursive(true);
@@ -2103,8 +2261,9 @@ impl Library {
             CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY,skill_id TEXT NOT NULL,content TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,reason TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE VIRTUAL TABLE IF NOT EXISTS skill_fts USING fts5(id UNINDEXED,name,description,content,tags,category,tokenize='trigram');")?;
-        if let Some((home, codex_home)) = native_context {
+        if let Some((home, codex_home, devin_config)) = native_context {
             library.record_native_roots(home, codex_home)?;
+            library.record_devin_config(devin_config)?;
         }
         library.recover_pending_migration()?;
         library.refresh_repository_cache(&library.connection()?)?;

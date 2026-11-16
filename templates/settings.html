@@ -22,18 +22,24 @@
 <section class="panel stack" id="codex"><h2>{{ locale.text("呼び出し入口の同期") }}</h2>
 <form method="post" action="/settings/codex" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="targets" value="true">
 <fieldset class="stack client-targets"><legend>{{ locale.text("同期先") }}</legend>
-{% for client in clients %}<label class="checkbox"><input type="checkbox" name="{{ client.key }}" value="true" {% if client.settings.enabled %}checked{% endif %}> {{ client.label }}</label>
-{% endfor %}</fieldset>
+{# 検出済み・有効・生成済み・エラーありのクライアントは常にここへ出す（隠すと保存で無効化されるため）。 #}
+{% for client in clients %}{% if client.shown %}<label class="checkbox"><input type="checkbox" name="{{ client.key }}" value="true" {% if client.settings.enabled %}checked{% endif %}> {{ client.label }}</label>
+{% endif %}{% endfor %}
+{# このPCで見つからなかったクライアントは消さずに折りたたみ、同じフォームで送信する。 #}
+{% if hidden_count != "0" %}<details class="client-more" data-client-more><summary>{{ locale.format("その他のクライアント（{count}件）", [("count", hidden_count.as_str())]) }}</summary>
+<div class="stack">{% for client in clients %}{% if !client.shown %}<label class="checkbox"><input type="checkbox" name="{{ client.key }}" value="true" {% if client.settings.enabled %}checked{% endif %}> {{ client.label }}</label>
+{% endif %}{% endfor %}<p class="note">{{ locale.text("このPCで設定フォルダーが見つからなかったクライアントです。") }}</p></div></details>{% endif %}
+</fieldset>
 <p class="note">{{ locale.text("選んだクライアントごとに呼び出し入口を生成します。有効にすると検索用スキル skilvella-search が常に候補に表示されます。各スキルの使い方は一覧または詳細画面で選択でき、全ての同期先に共通です。") }}</p>
 <p class="note">{{ locale.text("GrokはCodexとClaude Codeの入口も読み込みます。Grokを有効にすると、使い方の設定を反映したGrok用の入口が優先されます。") }}</p>
+<p class="note">{{ locale.text("Cursor・GitHub Copilot・Devinは他のクライアントの探索先（~/.agents/skills・~/.claude/skills・~/.copilot/skills）も読むため、同じ入口が重複して表示されることがあります。") }}</p>
 <button type="submit" data-busy="{{ locale.text("保存中…") }}">{{ locale.text("保存") }}</button></form>
-{% for client in clients %}<div class="stack" id="sync-{{ client.key }}"><h3>{{ client.label }}</h3>
-<p>{{ locale.text("生成先:") }} <code>{{ client.path }}</code></p>
-{% if !client.link_path.is_empty() %}<p>{{ locale.text("リンク先:") }} <code>{{ client.link_path }}</code></p>{% endif %}
-<p>{{ locale.text("生成済み件数:") }} {{ client.settings.exported }}</p>
-{% if !client.settings.last_error.is_empty() %}<div class="notice warning" role="status"><p>{{ locale.text("同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。") }}</p><p>{{ locale.text("同期エラー:") }} {{ client.settings.last_error }}</p></div>{% endif %}
-</div>
-{% endfor %}<p class="note">{{ locale.text("MCP公開とは別の設定です。正常な同期後に非公開スキルの入口を外します。MCPは非公開の本文を返しません。本文の原本は複製しません。") }}</p>
+{# 状態は有効またはエラーありのクライアントだけを表にする。狭い画面ではCSSで行ごとの縦並びにする。 #}
+{% if has_status %}<table class="client-status" data-client-status><thead><tr><th scope="col">{{ locale.text("クライアント") }}</th><th scope="col">{{ locale.text("生成先") }}</th><th scope="col">{{ locale.text("リンク先") }}</th><th scope="col">{{ locale.text("件数") }}</th></tr></thead><tbody>
+{% for client in clients %}{% if client.status %}<tr id="sync-{{ client.key }}"><th scope="row">{{ client.label }}</th><td data-label="{{ locale.text("生成先") }}"><code>{{ client.path }}</code></td><td data-label="{{ locale.text("リンク先") }}">{% if client.link_path.is_empty() %}<span class="muted">—</span>{% else %}<code>{{ client.link_path }}</code>{% endif %}</td><td data-label="{{ locale.text("件数") }}">{{ client.settings.exported }}</td></tr>
+{% if !client.settings.last_error.is_empty() %}<tr class="client-error"><td colspan="4"><div class="notice warning" role="status"><p>{{ locale.text("同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。") }}</p><p>{{ client.label }} · {{ locale.text("同期エラー:") }} {{ client.settings.last_error }}</p></div></td></tr>
+{% endif %}{% endif %}{% endfor %}</tbody></table>{% endif %}
+<p class="note">{{ locale.text("MCP公開とは別の設定です。正常な同期後に非公開スキルの入口を外します。MCPは非公開の本文を返しません。本文の原本は複製しません。") }}</p>
 </section>
 <section class="panel stack" id="updates" data-updates data-csrf="{{ csrf }}" data-version="{{ version }}"><h2>{{ locale.text("アプリの更新") }}</h2>
 <p>{{ locale.text("現在のバージョン:") }} <strong>{{ version }}</strong></p>

@@ -201,10 +201,12 @@ async fn run(options: Options) -> anyhow::Result<()> {
     };
     let home = user_home()?;
     let codex_home = env::var_os("CODEX_HOME").map(PathBuf::from);
-    let state = AppState::new(Library::open_for_user(
+    let devin_config = devin_config_dir(&home);
+    let state = AppState::new(Library::open_for_user_with_devin(
         &options.data_dir,
         &home,
         codex_home.as_deref(),
+        &devin_config,
     )?);
     state
         .run_mut(move |lib| lib.initialize_directory(&home, codex_home.as_deref()))
@@ -275,6 +277,21 @@ async fn run(options: Options) -> anyhow::Result<()> {
     let result = server.await?;
     result?;
     Ok(())
+}
+
+/// Devin CLIの設定フォルダー（ユーザー単位のスキルは `<ここ>/skills`）。
+///
+/// Windowsは `%APPDATA%\devin`、それ以外は `~/.config/devin`。環境変数は起動時のここだけで読み、
+/// Libraryへ記録した値を同期で使う。`%APPDATA%` がない・相対パスの場合はホームからの既定値に戻す。
+fn devin_config_dir(home: &std::path::Path) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(appdata) = env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        return appdata.join("devin");
+    }
+    skilvella::library::default_devin_config_dir(home)
 }
 
 fn user_home() -> anyhow::Result<PathBuf> {

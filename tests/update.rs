@@ -119,6 +119,8 @@ fn helper_lifecycle(bad_update: bool, cancel: bool, bad_args: bool, panic_after_
             .env("USERPROFILE", &home)
             .env("HOME", &home)
             .env("CODEX_HOME", home.join(".codex"))
+            // Devinの設定フォルダー（Windowsは %APPDATA%\devin）も隔離したホームへ向ける。
+            .env("APPDATA", home.join("AppData/Roaming"))
             .env("TEMP", &root)
             .env("TMP", &root)
             .stdin(Stdio::null())

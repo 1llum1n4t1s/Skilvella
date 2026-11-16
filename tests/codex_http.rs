@@ -530,7 +530,13 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
             enabled
         );
         assert!(!body.contains("name=\"claude\" value=\"true\" checked"));
-        assert!(body.contains("生成済み件数:"));
+        // 状態の表は有効または同期エラーありのクライアントだけに行を出す
+        // （無効化時は前回置いた管理外ファイルで同期が止まり、エラーとして残る）。
+        let codex = state.library.codex_settings().unwrap();
+        assert_eq!(
+            body.contains("id=\"sync-codex\""),
+            codex.enabled || !codex.last_error.is_empty()
+        );
         assert!(body.contains("skilvella-search"));
         let saved = Library::open_for_user(&root.join("data"), &home, None).unwrap();
         assert_eq!(saved.codex_settings().unwrap().enabled, enabled);
@@ -693,7 +699,9 @@ async fn sync_target_form_selects_multiple_clients() {
     assert!(body.contains("name=\"claude\" value=\"true\" checked"));
     assert!(body.contains("name=\"grok\" value=\"true\" checked"));
     assert!(!body.contains("name=\"codex\" value=\"true\" checked"));
-    assert!(body.contains("リンク先:"));
+    assert!(body.contains("data-client-status"));
+    assert!(body.contains("id=\"sync-claude\"") && body.contains("id=\"sync-grok\""));
+    assert!(!body.contains("id=\"sync-codex\""));
     // 旧形式のPOSTはCodexだけを切り替え、Claude Code・Grokの選択を保つ。
     assert_eq!(
         post(format!("csrf={token}&enabled=true"))
@@ -720,6 +728,138 @@ async fn sync_target_form_selects_multiple_clients() {
         "link itself must be removed"
     );
     assert!(!home.join(".grok/skills/skilvella").exists());
+}
+
+/// 設定画面の同期先は、このPCで検出したクライアントを通常表示し、それ以外を同じフォーム内の
+/// 折りたたみへ入れる。有効・生成済み・同期エラーありのクライアントは検出の有無にかかわらず
+/// 折りたたまない（`targets=true` の保存で黙って無効化されるのを防ぐ）。折りたたみ内の
+/// チェックボックスも送信され、6クライアントそれぞれを保存できる。
+#[tokio::test]
+async fn sync_targets_collapse_undetected_clients_but_never_active_ones() {
+    use skilvella::model::SkillClient;
+    let root = common::isolated_root("clients");
+    let home = root.join("home");
+    // Claude Codeだけが「検出済み」（設定フォルダーがある）。
+    fs::create_dir_all(home.join(".claude")).unwrap();
+    let library = Library::open_for_user(&root.join("data"), &home, None).unwrap();
+    let state = AppState::new(library);
+    let server = common::HttpServer::start(state.clone()).await;
+    let base = server.base.clone();
+    let client = common::no_redirect_client();
+    let token = state.csrf.to_string();
+    let page = || {
+        let client = client.clone();
+        let url = format!("{base}/settings");
+        async move { client.get(url).send().await.unwrap().text().await.unwrap() }
+    };
+    // 折りたたみの外（通常表示）にあるか、内側にあるか。
+    let placement = |body: &str, key: &str| -> Option<bool> {
+        let at = body.find(&format!("name=\"{key}\" value=\"true\""))?;
+        let details = body.find("data-client-more").unwrap_or(usize::MAX);
+        Some(at < details)
+    };
+    let body = page().await;
+    assert_eq!(placement(&body, "claude"), Some(true));
+    for key in ["codex", "grok", "cursor", "copilot", "devin"] {
+        assert_eq!(placement(&body, key), Some(false), "{key}");
+    }
+    assert!(body.contains("その他のクライアント（5件）"));
+    // 折りたたみと中のチェックボックスは、同期先を保存するフォームの内側にある（同じPOSTで送信される）。
+    let form_start = body.find("action=\"/settings/codex\"").unwrap();
+    let form = &body[form_start..form_start + body[form_start..].find("</form>").unwrap()];
+    assert!(form.contains("data-client-more"));
+    for key in ["codex", "grok", "cursor", "copilot", "devin"] {
+        assert!(
+            form.contains(&format!("name=\"{key}\" value=\"true\"")),
+            "{key}"
+        );
+    }
+    // 有効なクライアントがなければ状態の表は出さない（無効の「件数0」を並べない）。
+    assert!(!body.contains("data-client-status"));
+    assert!(body.contains("~/.copilot/skills"));
+
+    // 折りたたみ内のチェックボックスも同じフォームで送信され、保存できる。
+    let response = common::form_post(&client, format!("{base}/settings/codex"))
+        .body(format!(
+            "csrf={token}&targets=true&claude=true&cursor=true&copilot=true&devin=true"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let enabled = |client| state.library.client_settings(client).unwrap().enabled;
+    assert!(!enabled(SkillClient::Codex) && !enabled(SkillClient::Grok));
+    for client in [
+        SkillClient::Claude,
+        SkillClient::Cursor,
+        SkillClient::Copilot,
+        SkillClient::Devin,
+    ] {
+        assert!(enabled(client), "{client:?}");
+    }
+    assert!(state.library.sync_summary().unwrap().last_error.is_empty());
+    let body = page().await;
+    for key in ["claude", "cursor", "copilot", "devin"] {
+        assert_eq!(placement(&body, key), Some(true), "{key}");
+        assert!(body.contains(&format!("name=\"{key}\" value=\"true\" checked")));
+        assert!(body.contains(&format!("id=\"sync-{key}\"")), "{key}");
+    }
+    assert!(!body.contains("id=\"sync-codex\"") && !body.contains("id=\"sync-grok\""));
+    assert!(body.contains("その他のクライアント（2件）"));
+    // 全て外して、以降は保存値を直接書き換えて不変条件を確かめる（読み取りは同期を誘発しない）。
+    let response = common::form_post(&client, format!("{base}/settings/codex"))
+        .body(format!("csrf={token}&targets=true"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    // 設定フォルダーのない新しいホームで、有効・生成済み・エラーありの各状態を作る。
+    let fresh = common::isolated_root("clients-invariant");
+    let fresh_home = fresh.join("home");
+    fs::create_dir_all(&fresh_home).unwrap();
+    let library = Library::open_for_user(&fresh.join("data"), &fresh_home, None).unwrap();
+    assert!(library.detected_clients().unwrap().is_empty());
+    let db = rusqlite::Connection::open(fresh.join("data/library.sqlite3")).unwrap();
+    let put = |key: &str, value: &str| {
+        db.execute(
+            "INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [key, value],
+        )
+        .unwrap();
+    };
+    put(
+        "copilot_sync",
+        r#"{"enabled":true,"path":"","last_error":"","exported":0}"#,
+    );
+    put(
+        "cursor_sync",
+        r#"{"enabled":false,"path":"","last_error":"","exported":3}"#,
+    );
+    put(
+        "devin_sync",
+        r#"{"enabled":false,"path":"","last_error":"boom","exported":0}"#,
+    );
+    let state = AppState::new(library);
+    let server = common::HttpServer::start(state.clone()).await;
+    let body = client
+        .get(format!("{}/settings", server.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    for key in ["copilot", "cursor", "devin"] {
+        assert_eq!(placement(&body, key), Some(true), "{key}");
+    }
+    for key in ["codex", "claude", "grok"] {
+        assert_eq!(placement(&body, key), Some(false), "{key}");
+    }
+    // 状態の表は有効またはエラーありだけ（生成済みでも無効なCursorは出さない）。
+    assert!(body.contains("id=\"sync-copilot\"") && body.contains("id=\"sync-devin\""));
+    assert!(!body.contains("id=\"sync-cursor\""));
+    assert!(body.contains("boom"));
 }
 
 /// 一覧・詳細に出す呼び出しコマンドが、実際に生成した入口のフォルダー名と一致することを確かめる。

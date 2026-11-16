@@ -93,15 +93,24 @@ MCP公開だけでは、エージェントが同じスキルを標準探索し�
 
 ## 自動選択とコマンド候補
 
-先に [MCP接続](#mcp-connection) を使うクライアントへ登録・確認してください。「設定」の「呼び出し入口の同期」で同期先（Codex・Claude Code・Grok、複数選択可）にチェックを付けて保存すると、Skilvella本体が各クライアント用の呼び出し入口を自動同期します。旧版で「Codex連携」を有効にしていた場合は、Codexが選択された状態で引き継ぎます。Windows／macOS／Linux共通で、タスクスケジューラや別の常駐プロセスは使いません。同期は起動時・管理操作後・定期確認時に実行し、サービスの再起動後も設定を維持します。
+先に [MCP接続](#mcp-connection) を使うクライアントへ登録・確認してください。「設定」の「呼び出し入口の同期」で同期先（Codex・Claude Code・Grok・Cursor・GitHub Copilot・Devin、複数選択可）にチェックを付けて保存すると、Skilvella本体が各クライアント用の呼び出し入口を自動同期します。このPCで設定フォルダー（`~/.cursor` など）が見つからないクライアントは同じフォーム内の「その他のクライアント」に折りたたみます。有効または同期エラーのあるクライアントは常に表示します。状態の表には、有効なクライアントと同期エラーのあるクライアントだけを表示します。旧版で「Codex連携」を有効にしていた場合は、Codexが選択された状態で引き継ぎます。Windows／macOS／Linux共通で、タスクスケジューラや別の常駐プロセスは使いません。同期は起動時・管理操作後・定期確認時に実行し、サービスの再起動後も設定を維持します。
 
 | 同期先 | 入口の保存先 | 探索先への出し方 | 自動選択の制御 |
 | --- | --- | --- | --- |
 | Codex | `~/.agents/skills/skilvella/<name>` | 実ファイル（Codexは入れ子を探索） | `agents/openai.yaml` |
 | Claude Code | `~/.claude/skilvella/skills/<name>` | `~/.claude/skills/<name>` へのリンク（Windowsはジャンクション、macOS・Linuxはシンボリックリンク） | `disable-model-invocation` |
 | Grok | `~/.grok/skills/skilvella/<name>` | 実ファイル（Grokは入れ子を探索） | `disable-model-invocation` |
+| Cursor | `~/.cursor/skills/skilvella/<name>` | 実ファイル（Cursorは入れ子を探索。リンクを辿らない場合がある） | `disable-model-invocation` |
+| GitHub Copilot | `~/.copilot/skilvella/skills/<name>` | `~/.copilot/skills/<name>` へのリンク | `disable-model-invocation` |
+| Devin | `<Devin設定>/skilvella/skills/<name>` | `<Devin設定>/skills/<name>` へのリンク | `triggers: [user]` |
+
+`<Devin設定>` はWindowsが `%APPDATA%\devin`、macOS・Linuxが `~/.config/devin` です（`XDG_CONFIG_HOME` は使いません）。GitHub Copilotは常に `~/.copilot` を使い、`COPILOT_HOME` には従いません。
 
 Claude Codeは `~/.claude/skills` の直下1階層しか探索しないため、入口を探索外へ置いてスキルごとにリンクを張ります。`~/.claude/skills` に同名の既存スキルやリンクがある場合は上書きせず、同期エラーとして名前を表示します。旧版の案内に沿って `~/.claude/skills/<name>` から `~/.agents/skills/skilvella/<name>` へ手作業で張ったリンクは、同期対象の名前に限りClaude Code用の入口へ張り替えて管理を引き継ぎます。同期対象外の名前のリンクには触れません（Codexを無効にすると参照先がなくなります）。Claude Code向けの同期を無効にすると、Skilvellaが作成・引き継いだリンクだけを外します。`~/.claude/skills` 自体を管理フォルダーに登録している場合は同期しません。
+
+GitHub Copilot（Copilot CLIは `~/.copilot/skills/<name>/SKILL.md` だけを探索）とDevinも同じリンク方式・同じ規則です。同名の既存エントリは上書きせず、Skilvellaが作成したリンクだけを外し、リンク置き場が管理フォルダーと重なる場合は同期しません。手作業で張ったCodex入口へのリンクを引き継ぐのはClaude Codeだけです。Copilot CLIで `disable-model-invocation` が効くかと、Devinの探索の深さは未確認です。
+
+Cursorは `~/.agents/skills` と `~/.claude/skills`、GitHub Copilotは `~/.agents/skills`、Devinは `~/.agents/skills` と `~/.copilot/skills` も読むため、複数のクライアントを有効にすると同じ入口が重複して表示されることがあります。
 
 GrokはCodex（`~/.agents/skills`）とClaude Code（`~/.claude/skills`）の探索先も読み込み、同名のスキルは `~/.grok/skills`、`~/.agents/skills`、`~/.claude/skills` の順に優先します。Codexの入口は `agents/openai.yaml` で自動選択を止めるため、Grokでは「コマンド候補のみ」でも自動選択されます。Grokで使う場合はGrokを同期先に選んでください。
 
@@ -115,7 +124,7 @@ GrokはCodex（`~/.agents/skills`）とClaude Code（`~/.claude/skills`）の探
 | コマンド候補のみ | 渡さない | 表示する |
 | 自動選択＋コマンド候補 | 渡す | 表示する |
 
-コマンド候補を出すスキルでは、一覧のスキル名の下と詳細画面の「使い方」に、同期先ごとの呼び出しコマンド（Codexは `$name`、Claude Code・Grokは `/name`）を表示します。名前が英小文字・数字・`-` 以外を含む場合は `skill-<id先頭8文字>`、同名の公開スキルがある場合は `<name>-<id先頭8文字>` になるため、表示されたコマンドを使ってください。コマンドがない場合は、詳細画面に理由（検索のみ・同期先が未選択・非公開や読み取りエラー）を表示します。一覧で非公開から公開に切り替えたスキルのコマンドは、再読み込み後に表示します。
+コマンド候補を出すスキルでは、一覧のスキル名の下と詳細画面の「使い方」に、同期先ごとの呼び出しコマンド（Codexは `$name`、他のクライアントは `/name`）を表示します。名前が英小文字・数字・`-` 以外を含む場合は `skill-<id先頭8文字>`、同名の公開スキルがある場合は `<name>-<id先頭8文字>` になるため、表示されたコマンドを使ってください。コマンドがない場合は、詳細画面に理由（検索のみ・同期先が未選択・非公開や読み取りエラー）を表示します。一覧で非公開から公開に切り替えたスキルのコマンドは、再読み込み後に表示します。
 
 一覧でスキルにチェックを付け、一括操作の「使い方」を選んで「選択項目に適用」を押すと、複数スキルのモードをまとめて変更できます。「変更しない」なら現在のモードを維持します。公開状態・タグも同時に変更できます。
 
@@ -123,7 +132,7 @@ GrokはCodex（`~/.agents/skills`）とClaude Code（`~/.claude/skills`）の探
 
 Codexには「自動選択を有効にして候補だけ隠す」独立した設定がないため、対応する3モードを提供します。自動選択でも原本の全文を常時複製するのではなく、必要なときにMCPから取得します。候補に表示しないスキルは、明示呼び出し専用の `$skilvella-search` から検索できます。MCPの `search_skills` を直接使うこともできます。
 
-使い方のモードは全ての同期先に共通です。入口の保存先は上の表のとおりです。公開解除・モード変更時に不要になった生成物は探索先の外（`~/.agents`・`~/.claude`・`~/.grok` 直下の `skilvella-staging` / `skilvella-retired`）へ退避します。未知のファイルや手編集を検出した場合は上書きせず、設定画面に同期エラーを表示します。容量不足や強制終了で未完の一時ファイルが残った場合も、既存の正常な索引を保護して停止します。表示されたパスの内容を確認してから再試行してください。連携を無効にすると、この連携が所有する入口を探索先から外します。同期が停止している間は以前の候補や自動選択設定が残る場合があります。原本・公開状態・編集履歴は変更しません。Codexの候補表示が更新されない場合は、候補メニューを開き直すかCodexを再起動してください。Claude Codeは実行中のセッションでも `~/.claude/skills` の変更を反映しますが、セッション開始後に `~/.claude/skills` 自体を作成した場合は `/reload-skills` を実行してください。既存会話に読み込まれた内容は消せません。
+使い方のモードは全ての同期先に共通です。入口の保存先は上の表のとおりです。公開解除・モード変更時に不要になった生成物は探索先の外（`~/.agents`・`~/.claude`・`~/.grok`・`~/.cursor`・`~/.copilot`・`<Devin設定>` 直下の `skilvella-staging` / `skilvella-retired`）へ退避します。未知のファイルや手編集を検出した場合は上書きせず、設定画面に同期エラーを表示します。容量不足や強制終了で未完の一時ファイルが残った場合も、既存の正常な索引を保護して停止します。表示されたパスの内容を確認してから再試行してください。連携を無効にすると、この連携が所有する入口を探索先から外します。同期が停止している間は以前の候補や自動選択設定が残る場合があります。原本・公開状態・編集履歴は変更しません。Codexの候補表示が更新されない場合は、候補メニューを開き直すかCodexを再起動してください。Claude Codeは実行中のセッションでも `~/.claude/skills` の変更を反映しますが、セッション開始後に `~/.claude/skills` 自体を作成した場合は `/reload-skills` を実行してください。既存会話に読み込まれた内容は消せません。
 
 <a id="display-settings"></a>
 

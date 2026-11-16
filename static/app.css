@@ -229,6 +229,16 @@ table { border-collapse: collapse; width: 100%; text-align: left; }
 .codex-mode-options input { flex: 0 0 auto; margin: 0; }
 .client-targets { min-width: 0; margin: 0; padding: 0; border: 0; }
 .client-targets legend { padding: 0; font-weight: 600; }
+/* このPCで見つからなかった同期先。消さずに折りたたむ（同じフォームで送信される）。 */
+.client-more summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.client-more[open] summary { margin-bottom: 12px; }
+/* 有効またはエラーありの同期先だけの状態表。パスは折り返し、横スクロールさせない。 */
+.client-status { border: 1px solid var(--line); background: var(--paper); table-layout: auto; }
+.client-status th[scope="row"] { color: var(--ink); background: transparent; font-size: 12px; white-space: nowrap; }
+.client-status td { padding: 12px; overflow-wrap: anywhere; }
+.client-status code { font-size: 11px; }
+.client-status .client-error td { padding-top: 0; }
+.client-status .client-error .notice { margin: 0; }
 .codex-policy-status:not(:empty) { display: block; margin-top: 8px; }
 th { background: var(--input); color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .05em; white-space: nowrap; padding: 14px 12px; border-bottom: 1px solid var(--line); }
 td { padding: 16px 12px; vertical-align: top; border-bottom: 1px solid var(--line); font-size: 12px; }
@@ -378,6 +388,14 @@ code.command { display: inline-block; padding: 2px 8px; border-radius: 6px; back
   .confirmation-dialog { padding: 18px; }
   .confirmation-actions button { flex: 1; }
   .folder-actions form>.note { display: block; margin: 8px 0 0; }
+  /* 同期先の状態表は1クライアントずつ縦に並べ、列名を各値の前に出す。 */
+  .client-status thead { display: none; }
+  .client-status, .client-status tbody, .client-status tr, .client-status th[scope="row"], .client-status td { display: block; width: 100%; }
+  .client-status th[scope="row"] { padding: 12px 12px 4px; border-bottom: 0; }
+  .client-status td { padding: 4px 12px; border-bottom: 0; }
+  .client-status td[data-label]::before { content: attr(data-label); display: block; color: var(--muted); font-size: 11px; font-weight: 600; }
+  .client-status tr { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+  .client-status tr:last-child { border-bottom: 0; }
   .path-picker { flex-wrap: wrap; }
   [id] { scroll-margin-top: 160px; }
 }

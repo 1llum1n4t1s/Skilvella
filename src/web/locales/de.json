@@ -45,8 +45,6 @@
   "検索のみ（省コンテキスト）": "Nur Suche (weniger Kontext)",
   "コマンド候補のみ": "Nur Befehlsvorschläge",
   "自動選択＋コマンド候補": "Automatische Auswahl + Befehlsvorschläge",
-  "生成先:": "Zielordner:",
-  "生成済み件数:": "Generierte Einträge:",
   "呼び出し入口の同期の設定": "Einstellungen zur Synchronisierung der Aufrufeinträge",
   "使い方を選択してください。": "Wählen Sie die Verwendung.",
   "自動選択では名前と説明を初期コンテキストに渡します。コマンド候補のみでは明示したときだけ使います。候補に非表示でもMCP検索から探せます。": "Die automatische Auswahl fügt Name und Beschreibung dem Anfangskontext hinzu. Nur Befehlsvorschläge verwendet die Skill nur auf ausdrückliche Anfrage. Ausgeblendete Skills bleiben über die MCP-Suche auffindbar.",
@@ -230,7 +228,6 @@
   "同期先": "Synchronisierungsziele",
   "選んだクライアントごとに呼び出し入口を生成します。有効にすると検索用スキル skilvella-search が常に候補に表示されます。各スキルの使い方は一覧または詳細画面で選択でき、全ての同期先に共通です。": "Erzeugt Aufrufeinträge für jeden ausgewählten Client. Wenn aktiviert, erscheint der Skill skilvella-search immer als Befehl. Die Verwendung jedes Skills wählen Sie in der Liste oder Detailansicht; sie gilt für alle Ziele.",
   "GrokはCodexとClaude Codeの入口も読み込みます。Grokを有効にすると、使い方の設定を反映したGrok用の入口が優先されます。": "Grok liest auch die Einträge von Codex und Claude Code. Ist Grok aktiviert, haben seine eigenen Einträge mit Ihren Verwendungseinstellungen Vorrang.",
-  "リンク先:": "Linkort:",
   "同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。": "Die Synchronisierung wurde angehalten. Gespeicherte Einstellungen sind noch nicht bei diesem Ziel angekommen. Frühere Befehle oder automatische Auswahl können bestehen bleiben.",
   "同期エラー:": "Synchronisierungsfehler:",
   "同期先を選択してください。": "Wählen Sie Synchronisierungsziele aus.",
@@ -267,5 +264,12 @@
   "同期先が選ばれていないため、コマンドはありません。": "Kein Befehl, da kein Synchronisierungsziel ausgewählt ist.",
   "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Nur veröffentlichte, lesbare Skills werden zu Befehlen. Veröffentlichen Sie ihn über MCP und stellen Sie sicher, dass keine Lesefehler vorliegen.",
   "編集": "Bearbeitung",
-  "復元": "Wiederherstellung"
+  "復元": "Wiederherstellung",
+  "その他のクライアント（{count}件）": "Weitere Clients ({count})",
+  "このPCで設定フォルダーが見つからなかったクライアントです。": "Für diese Clients wurde auf diesem PC kein Einstellungsordner gefunden.",
+  "Cursor・GitHub Copilot・Devinは他のクライアントの探索先（~/.agents/skills・~/.claude/skills・~/.copilot/skills）も読むため、同じ入口が重複して表示されることがあります。": "Cursor, GitHub Copilot und Devin lesen auch die Orte anderer Clients (~/.agents/skills, ~/.claude/skills, ~/.copilot/skills), daher kann derselbe Eintrag doppelt erscheinen.",
+  "クライアント": "Client",
+  "生成先": "Zielordner",
+  "リンク先": "Linkort",
+  "件数": "Einträge"
 }

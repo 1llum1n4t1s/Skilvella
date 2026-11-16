@@ -45,8 +45,6 @@
   "検索のみ（省コンテキスト）": "Search only (less context)",
   "コマンド候補のみ": "Command suggestions only",
   "自動選択＋コマンド候補": "Automatic selection + command suggestions",
-  "生成先:": "Generated entries:",
-  "生成済み件数:": "Generated count:",
   "呼び出し入口の同期の設定": "Invocation entry sync settings",
   "使い方を選択してください。": "Select how to use this skill.",
   "自動選択では名前と説明を初期コンテキストに渡します。コマンド候補のみでは明示したときだけ使います。候補に非表示でもMCP検索から探せます。": "Automatic selection adds the name and description to the initial context. Command suggestions only uses the skill when explicitly requested. Skills hidden from suggestions remain discoverable through MCP search.",
@@ -230,7 +228,6 @@
   "同期先": "Sync targets",
   "選んだクライアントごとに呼び出し入口を生成します。有効にすると検索用スキル skilvella-search が常に候補に表示されます。各スキルの使い方は一覧または詳細画面で選択でき、全ての同期先に共通です。": "Generates invocation entries for each selected client. When enabled, the skilvella-search skill always appears as a command. Choose how each skill is used from the list or detail page; the choice applies to all sync targets.",
   "GrokはCodexとClaude Codeの入口も読み込みます。Grokを有効にすると、使い方の設定を反映したGrok用の入口が優先されます。": "Grok also reads the Codex and Claude Code entries. When Grok is enabled, its own entries, which reflect your usage settings, take precedence.",
-  "リンク先:": "Link location:",
   "同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。": "Synchronization has stopped. Saved settings have not reached this target yet. Previous commands or automatic selection may remain.",
   "同期エラー:": "Sync error:",
   "同期先を選択してください。": "Select sync targets.",
@@ -267,5 +264,12 @@
   "同期先が選ばれていないため、コマンドはありません。": "No command because no sync target is selected.",
   "公開中で読み取れるスキルだけがコマンドになります。MCPに公開し、読み取りエラーがないことを確認してください。": "Only published, readable skills become commands. Publish it to MCP and make sure there are no read errors.",
   "編集": "Edit",
-  "復元": "Restore"
+  "復元": "Restore",
+  "その他のクライアント（{count}件）": "Other clients ({count})",
+  "このPCで設定フォルダーが見つからなかったクライアントです。": "No settings folder was found on this PC for these clients.",
+  "Cursor・GitHub Copilot・Devinは他のクライアントの探索先（~/.agents/skills・~/.claude/skills・~/.copilot/skills）も読むため、同じ入口が重複して表示されることがあります。": "Cursor, GitHub Copilot, and Devin also read other clients' locations (~/.agents/skills, ~/.claude/skills, ~/.copilot/skills), so the same entry may appear more than once.",
+  "クライアント": "Client",
+  "生成先": "Entry folder",
+  "リンク先": "Link location",
+  "件数": "Entries"
 }

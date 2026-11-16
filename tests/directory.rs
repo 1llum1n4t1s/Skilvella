@@ -950,12 +950,14 @@ fn startup_auto_selection_conflict_keeps_previous_settings_and_scans_manual_sour
     assert_eq!(reopened.sources().unwrap()[0].alias, "manual");
 }
 
-/// Claude Code・Grokの生成物も、Codexと同じく管理フォルダー内で原本として取り込まない。
+/// Claude Code・Grok・Cursor・GitHub Copilot・Devinの生成物も、Codexと同じく管理フォルダー内で
+/// 原本として取り込まない（生成物の所有フォルダーとリンク置き場の両方）。
 #[test]
 fn client_entries_are_never_ingested_as_original_skills() {
     use skilvella::model::SkillClient;
     let b = base();
     let home = b.join("home");
+    let devin = skilvella::library::default_devin_config_dir(&home);
     let source = b.join("source");
     skill(&source.join("one"), "original");
     let l = Library::open_for_user(&b.join("data"), &home, None).unwrap();
@@ -963,13 +965,24 @@ fn client_entries_are_never_ingested_as_original_skills() {
     let id = all(&l)[0].id.clone();
     publish(&l, &id);
     l.set_codex_policy(&id, false, true).unwrap();
-    l.set_clients_enabled(&[(SkillClient::Claude, true), (SkillClient::Grok, true)])
-        .unwrap();
+    l.set_clients_enabled(&[
+        (SkillClient::Claude, true),
+        (SkillClient::Grok, true),
+        (SkillClient::Cursor, true),
+        (SkillClient::Copilot, true),
+        (SkillClient::Devin, true),
+    ])
+    .unwrap();
     assert!(l.sync_summary().unwrap().last_error.is_empty());
     for (alias, folder) in [
         ("grok", home.join(".grok/skills")),
         ("claude-store", home.join(".claude/skilvella")),
         ("claude-links", home.join(".claude/skills")),
+        ("cursor", home.join(".cursor/skills")),
+        ("copilot-store", home.join(".copilot/skilvella")),
+        ("copilot-links", home.join(".copilot/skills")),
+        ("devin-store", devin.join("skilvella")),
+        ("devin-links", devin.join("skills")),
     ] {
         l.add_source(alias, &folder).unwrap();
         l.scan().unwrap();

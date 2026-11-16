@@ -7,13 +7,13 @@ pub struct CodexSkillPolicy {
 }
 
 /// 呼び出し入口の同期状態。設定はクライアントごとに別キーへ保存する。
-/// 名前は互換のためCodex時代のまま残し、Claude Code・Grokでも同じ形を使う。
+/// 名前は互換のためCodex時代のまま残し、他のクライアントでも同じ形を使う。
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CodexSyncSettings {
     pub enabled: bool,
     /// 生成物（SKILL.md群）を置く所有フォルダー。表示用で保存値は読み出し時に再計算する。
     pub path: String,
-    /// 探索先へリンクを張るクライアント（Claude Code）のリンク置き場。表示用。
+    /// 探索先へリンクを張るクライアント（Claude Code・GitHub Copilot・Devin）のリンク置き場。表示用。
     #[serde(default)]
     pub link_path: String,
     pub last_error: String,
@@ -26,17 +26,33 @@ pub struct CodexSyncSettings {
 /// - Claude Code: `~/.claude/skills/` 直下1階層しか探索しないため、生成物を
 ///   `~/.claude/skilvella/skills/` に置き、`~/.claude/skills/<name>` へリンクを張る
 /// - Grok: `~/.grok/skills/skilvella/` へ実ファイル（入れ子を探索する）
+/// - Cursor: `~/.cursor/skills/skilvella/` へ実ファイル（入れ子を探索する。リンクを辿らない
+///   既知の不具合があるため、リンクは使わない）
+/// - GitHub Copilot: CLIは `~/.copilot/skills/<name>/SKILL.md` の1階層だけを探索するため、
+///   Claude Codeと同じく生成物を `~/.copilot/skilvella/skills/` に置き、リンクを張る
+/// - Devin: 設定フォルダー（Windowsは `%APPDATA%\devin`、他は `~/.config/devin`）の
+///   `skills/<name>` へ、Claude Codeと同じくリンクを張る（探索の深さが未確認のため）
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillClient {
     Codex,
     Claude,
     Grok,
+    Cursor,
+    Copilot,
+    Devin,
 }
 
 impl SkillClient {
-    /// 同期・表示の順序。Codexを先頭に置き、既存の表示順を保つ。
-    pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::Grok];
+    /// 同期・表示の順序。Codexを先頭に置き、既存の表示順を保ったまま新しいクライアントを後ろへ足す。
+    pub const ALL: [Self; 6] = [
+        Self::Codex,
+        Self::Claude,
+        Self::Grok,
+        Self::Cursor,
+        Self::Copilot,
+        Self::Devin,
+    ];
 
     /// フォーム・JSONで使う識別子。
     pub fn key(self) -> &'static str {
@@ -44,6 +60,9 @@ impl SkillClient {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Grok => "grok",
+            Self::Cursor => "cursor",
+            Self::Copilot => "copilot",
+            Self::Devin => "devin",
         }
     }
 
@@ -53,15 +72,20 @@ impl SkillClient {
             Self::Codex => "Codex",
             Self::Claude => "Claude Code",
             Self::Grok => "Grok",
+            Self::Cursor => "Cursor",
+            Self::Copilot => "GitHub Copilot",
+            Self::Devin => "Devin",
         }
     }
 
     /// 入口名からクライアントで入力する呼び出しコマンドを作る。
-    /// Codexはスキルを `$name` で明示し、Claude Code・Grokは `/name` で呼び出す。
+    /// Codexはスキルを `$name` で明示し、他のクライアントは `/name` で呼び出す。
     pub fn command(self, name: &str) -> String {
         match self {
             Self::Codex => format!("${name}"),
-            Self::Claude | Self::Grok => format!("/{name}"),
+            Self::Claude | Self::Grok | Self::Cursor | Self::Copilot | Self::Devin => {
+                format!("/{name}")
+            }
         }
     }
 }

@@ -601,6 +601,193 @@ fn claude_and_grok_targets_use_their_own_layout_and_invocation_policy() {
     );
 }
 
+/// Cursorは実体配置、GitHub Copilot・Devinはリンク方式で、Devinだけ `triggers: [user]` で自動選択を止める。
+/// リンク方式の利用者エントリは上書きせず、旧Codex入口へのリンクの引き継ぎはClaude Code以外では行わない。
+#[test]
+fn cursor_copilot_and_devin_targets_use_their_own_layout_and_invocation_policy() {
+    let (base, library, id) = setup();
+    let home = base.join("home");
+    let devin = skilvella::library::default_devin_config_dir(&home);
+    // 検出はホーム配下の設定フォルダーだけを見る（隔離したホームで差し替えられる）。
+    assert!(library.detected_clients().unwrap().is_empty());
+    fs::create_dir_all(home.join(".grok")).unwrap();
+    fs::create_dir_all(&devin).unwrap();
+    assert_eq!(
+        library.detected_clients().unwrap(),
+        [SkillClient::Grok, SkillClient::Devin]
+    );
+
+    publish(&library, &id, true);
+    library.set_codex_policy(&id, false, true).unwrap();
+    for client in [
+        SkillClient::Cursor,
+        SkillClient::Copilot,
+        SkillClient::Devin,
+    ] {
+        // 設定キーがない旧データでは無効。
+        assert!(!library.client_settings(client).unwrap().enabled);
+    }
+    // 旧版の手動移行を模した、Codex入口への同名リンク（Devinの探索先）。Claude Code以外では引き継がない。
+    library.set_codex_enabled(true).unwrap();
+    let codex = PathBuf::from(library.codex_settings().unwrap().path);
+    let devin_links = devin.join("skills");
+    fs::create_dir_all(&devin_links).unwrap();
+    create_directory_link(&codex.join("original"), &devin_links.join("original")).unwrap();
+    // GitHub Copilotの探索先にある利用者自身のスキル（検索入口と同名・無関係）は上書きしない。
+    let copilot_links = home.join(".copilot/skills");
+    fs::create_dir_all(copilot_links.join("skilvella-search")).unwrap();
+    fs::write(
+        copilot_links.join("skilvella-search/SKILL.md"),
+        "user skill",
+    )
+    .unwrap();
+    fs::create_dir_all(copilot_links.join("mine")).unwrap();
+    fs::write(copilot_links.join("mine/SKILL.md"), "mine").unwrap();
+
+    library
+        .set_clients_enabled(&[
+            (SkillClient::Cursor, true),
+            (SkillClient::Copilot, true),
+            (SkillClient::Devin, true),
+        ])
+        .unwrap();
+
+    // Cursorは入れ子を探索するため、専用フォルダーへ実ファイルで置く（リンクを使わない）。
+    let cursor = home.join(".cursor/skills/skilvella");
+    let cursor_text = fs::read_to_string(cursor.join("original/SKILL.md")).unwrap();
+    assert!(cursor_text.contains("disable-model-invocation: true\n---\n"));
+    assert!(!cursor_text.contains("triggers:"));
+    assert!(!cursor_text.contains("PRIVATE ORIGINAL BODY"));
+    assert!(!cursor.join("original/agents/openai.yaml").exists());
+    assert!(!is_link(&cursor.join("original")));
+    assert!(
+        fs::read_to_string(cursor.join("skilvella-search/SKILL.md"))
+            .unwrap()
+            .contains("disable-model-invocation: true")
+    );
+    let cursor_settings = library.client_settings(SkillClient::Cursor).unwrap();
+    assert!(cursor_settings.last_error.is_empty());
+    assert!(cursor_settings.link_path.is_empty());
+    assert_eq!(cursor_settings.exported, 1);
+
+    // GitHub Copilotは生成物を探索外に置き、`~/.copilot/skills/<name>` へリンクを張る。
+    let copilot_store = home.join(".copilot/skilvella/skills");
+    assert!(is_link(&copilot_links.join("original")));
+    assert_eq!(
+        fs::read_to_string(copilot_links.join("original/SKILL.md")).unwrap(),
+        fs::read_to_string(copilot_store.join("original/SKILL.md")).unwrap()
+    );
+    assert!(
+        fs::read_to_string(copilot_store.join("original/SKILL.md"))
+            .unwrap()
+            .contains("disable-model-invocation: true\n---\n")
+    );
+    let copilot = library.client_settings(SkillClient::Copilot).unwrap();
+    assert!(PathBuf::from(&copilot.link_path).ends_with(".copilot/skills"));
+    assert_eq!(copilot.exported, 1);
+    assert!(
+        copilot.last_error.contains("GitHub Copilot")
+            && copilot.last_error.contains("skilvella-search"),
+        "{}",
+        copilot.last_error
+    );
+    assert_eq!(
+        fs::read_to_string(copilot_links.join("skilvella-search/SKILL.md")).unwrap(),
+        "user skill"
+    );
+    assert!(base.join("data/copilot-index/links.json").is_file());
+
+    // Devinは設定フォルダーの `skills/<name>` へリンクを張り、`triggers: [user]` で自動選択を止める。
+    let devin_store = devin.join("skilvella/skills");
+    let devin_text = fs::read_to_string(devin_store.join("original/SKILL.md")).unwrap();
+    assert!(
+        devin_text.contains("triggers: [user]\n---\n"),
+        "{devin_text}"
+    );
+    assert!(!devin_text.contains("disable-model-invocation"));
+    assert!(
+        fs::read_to_string(devin_store.join("skilvella-search/SKILL.md"))
+            .unwrap()
+            .contains("triggers: [user]")
+    );
+    assert!(is_link(&devin_links.join("skilvella-search")));
+    let devin_settings = library.client_settings(SkillClient::Devin).unwrap();
+    assert!(PathBuf::from(&devin_settings.link_path).ends_with("devin/skills"));
+    // Codex入口へのリンクは引き継がず、同名の衝突として報告する（リンクはCodex入口を指したまま）。
+    assert!(
+        devin_settings.last_error.contains("Devin")
+            && devin_settings.last_error.contains("original"),
+        "{}",
+        devin_settings.last_error
+    );
+    assert!(devin_links.join("original/agents/openai.yaml").is_file());
+    assert!(
+        !fs::read_to_string(devin_links.join("original/SKILL.md"))
+            .unwrap()
+            .contains("triggers:")
+    );
+    assert!(base.join("data/devin-index/links.json").is_file());
+    // 他のクライアントの失敗はCodex・Cursorを止めない。
+    assert!(library.codex_settings().unwrap().last_error.is_empty());
+
+    // 自動選択を許可するとfrontmatterの制限を外す。
+    library.set_codex_policy(&id, true, true).unwrap();
+    assert!(
+        !fs::read_to_string(cursor.join("original/SKILL.md"))
+            .unwrap()
+            .contains("disable-model-invocation")
+    );
+    assert!(
+        !fs::read_to_string(devin_store.join("original/SKILL.md"))
+            .unwrap()
+            .contains("triggers:")
+    );
+    assert!(
+        !fs::read_to_string(copilot_links.join("original/SKILL.md"))
+            .unwrap()
+            .contains("disable-model-invocation")
+    );
+
+    // 無効にすると生成物・自分のリンク・所有記録を外し、利用者のエントリと旧リンクは残す。
+    library
+        .set_clients_enabled(&[
+            (SkillClient::Cursor, false),
+            (SkillClient::Copilot, false),
+            (SkillClient::Devin, false),
+        ])
+        .unwrap();
+    assert!(!cursor.exists());
+    assert!(!copilot_store.exists());
+    assert!(!devin_store.exists());
+    assert!(fs::symlink_metadata(copilot_links.join("original")).is_err());
+    assert!(fs::symlink_metadata(devin_links.join("skilvella-search")).is_err());
+    assert!(!base.join("data/copilot-index/links.json").exists());
+    assert!(!base.join("data/devin-index/links.json").exists());
+    assert_eq!(
+        fs::read_to_string(copilot_links.join("skilvella-search/SKILL.md")).unwrap(),
+        "user skill"
+    );
+    assert_eq!(
+        fs::read_to_string(copilot_links.join("mine/SKILL.md")).unwrap(),
+        "mine"
+    );
+    assert!(is_link(&devin_links.join("original")));
+    for client in [
+        SkillClient::Cursor,
+        SkillClient::Copilot,
+        SkillClient::Devin,
+    ] {
+        assert!(
+            library
+                .client_settings(client)
+                .unwrap()
+                .last_error
+                .is_empty(),
+            "{client:?}"
+        );
+    }
+}
+
 #[test]
 fn claude_links_preserve_user_entries_and_adopt_legacy_codex_links() {
     let (base, library, id) = setup();
@@ -723,10 +910,10 @@ fn unchanged_sync_state_is_not_rewritten() {
     db.execute_batch(
         "CREATE TABLE sync_writes(key TEXT NOT NULL);
          CREATE TRIGGER sync_writes_update AFTER UPDATE ON settings
-           WHEN new.key IN ('codex_sync','claude_sync','grok_sync')
+           WHEN new.key IN ('codex_sync','claude_sync','grok_sync','cursor_sync','copilot_sync','devin_sync')
            BEGIN INSERT INTO sync_writes VALUES(new.key); END;
          CREATE TRIGGER sync_writes_insert AFTER INSERT ON settings
-           WHEN new.key IN ('codex_sync','claude_sync','grok_sync')
+           WHEN new.key IN ('codex_sync','claude_sync','grok_sync','cursor_sync','copilot_sync','devin_sync')
            BEGIN INSERT INTO sync_writes VALUES(new.key); END;",
     )
     .unwrap();
