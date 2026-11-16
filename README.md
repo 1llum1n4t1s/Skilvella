@@ -61,7 +61,7 @@ You can check for the latest stable release at skilvella.kagayoi.com from the up
 
 The update waits for in-flight HTTP operations to finish before exiting, then restarts with the same launch arguments and working folder. Reconnect your MCP clients. If package verification fails, the current version is kept. If the new process cannot be started after applying the update, it tries to restore the old executable or the Toolport reference target. The settings page that started the update reloads automatically once the new version responds. If you perform an update operation on an old settings page that was already open before the app restarted, you are asked to reload the page.
 
-A `.skilvella-update-*` folder is created in the same location as the pre-update executable, and it keeps `update.log`. In the normal layout, it also stores `previous-binary` for recovery. After you confirm that things work after the update and the update helper has exited, you can delete this folder.
+A `.skilvella-update-*` folder is created in the same location as the pre-update executable, and it keeps `update.log`. In the normal layout, it also stores `previous-binary` for recovery. Skilvella removes this folder automatically at startup once it is more than 24 hours old, and only when no update is in progress and the folder contains nothing but files the updater created. You do not need to delete it yourself; if you do, wait until the update helper has exited.
 
 Under Toolport's `Skilvella-Latest.ps1` management, the existing version is kept, the new version's folder and verification information are added, and the launcher's reference target is switched. The update helper runs until the restarted app exits, so quit Skilvella before deleting the update folder.
 

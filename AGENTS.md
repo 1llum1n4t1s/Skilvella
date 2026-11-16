@@ -25,6 +25,7 @@ cargo test --locked --features launcher
 - `src/windows_startup.rs` 内のテストは、空白・非ASCIIを含む起動コマンドと既存登録・既存のスタートメニューショートカットの保持、Setup版のインストール時のZIP版の自動起動登録の引き継ぎ（別プログラムの値は保持）と、アンインストール時にSetup版自身の登録だけを外すことを検証します。Setupのフックは `update-feed-test` ビルドでは別の値名を使い、隔離検証で実ユーザーの自動起動を置き換えません。ショートカットは `SKILVELLA_MIGRATION_TEST_ROOT` 配下（未指定時はOSの一時ディレクトリ配下）のテスト用フォルダーへ作成し、実ユーザーのスタートメニューを使いません。レジストリの書込みは `SKILVELLA_MIGRATION_TEST_ROOT` 配下の隔離ハイブで検証し、実ユーザーのスタートアップ設定を使わないでください。
 - `tests/launcher.rs` は任意の起動補助の引数転送・作業ディレクトリ・起動失敗を検証します。`launcher` 機能を指定しない `cargo test --locked` では対象外のため、上記のとおり `--features launcher` を付けて実行してください。`launcher` 機能は依存を追加せず、`src`・`tests` に機能別の分岐もないため、機能付きの1回の実行で既定機能の検証も兼ねます。この前提が変わる場合はCIと本一覧に機能なしの実行を戻してください。
 - `src/update/auto.rs` 内のテストは自動更新設定の既定値・壊れたJSON・原子的保存・24時間の間引きを検証し、`tests/localization.rs` は自動更新の保存経路のCSRFとSetup版限定の表示を検証します。Velopackを呼ぶ処理は `windows-installer` 機能付きのWindowsビルドだけが対象で、実機での取得・適用は [開発手順](docs/DEVELOPMENT.md#windowsインストーラーの追加配布) の隔離環境の手順（`update-feed-test` 機能）で確認します。
+- `src/update/cleanup.rs` 内のテストは、起動時の一時物の清掃が、古い更新ステージと設定の一時ファイルだけを消すことを検証します。新しいもの・名前違い・未知のファイルを含むステージ・リンク・更新ロック保持中・実行ファイル本体とロックファイルは残ります。清掃の対象を広げるときは、DESIGN.md の条件と同時に見直してください。
 - `tests/release_update.rs` は通常のテスト実行の対象外です。CIと上記一覧では `release-update-test` 機能のClippyだけを行い、実際の更新回帰は [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) の手順で実行してください。
 - ローカル検証では `SKILVELLA_MIGRATION_TEST_ROOT` と子プロセスの `TEMP` / `TMP` をGit作業ツリー外の作業専用フォルダーへ設定してください。ディレクトリ初期化・Codex入口生成にはテスト用ホームを明示し、利用者のフォルダーとクライアント設定を保護してください。対象テストと保存先は [開発手順の一覧](docs/DEVELOPMENT.md#開発) を参照してください。
 

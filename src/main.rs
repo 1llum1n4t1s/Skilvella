@@ -244,6 +244,9 @@ async fn run(options: Options) -> anyhow::Result<()> {
         options.data_dir.display(),
         locale::text("停止: Ctrl+C")
     );
+    // 更新処理が残した24時間より古い自分の一時物（`.skilvella-update-*` 等）を、専用スレッドで1回だけ片付ける。
+    // 起動を待たせず、失敗しても本体は止めない（標準エラーに残して次回の起動で再試行する）。
+    skilvella::update::cleanup::spawn_background(state.library.data_dir().to_path_buf());
     // Setup版だけ、起動時と常駐中に更新を確認・取得する（適用は次回起動時にVelopackが行う）。
     // サービス再起動のループの外で1回だけ開始する。専用スレッドなのでTokioのワーカーは塞がない。
     #[cfg(all(windows, feature = "windows-installer"))]

@@ -26,6 +26,8 @@ static INSTALLING: AtomicBool = AtomicBool::new(false);
 
 /// Setup版（Velopack）の自動更新。設定・間引きの判定は全ビルドで共通、Velopack呼び出しはSetup版のみ。
 pub mod auto;
+/// 更新処理が残した、自分の古い一時物（更新ステージ等）の起動時清掃。
+pub mod cleanup;
 #[cfg(feature = "release-tools")]
 pub mod release;
 
