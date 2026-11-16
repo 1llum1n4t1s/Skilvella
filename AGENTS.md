@@ -28,6 +28,7 @@ cargo test --locked --features launcher
 - `src/update/cleanup.rs` 内のテストは、起動時の一時物の清掃が、古い更新ステージと設定の一時ファイルだけを消すことを検証します。新しいもの・名前違い・未知のファイルを含むステージ・リンク・更新ロック保持中・実行ファイル本体とロックファイルは残ります。清掃の対象を広げるときは、DESIGN.md の条件と同時に見直してください。
 - `tests/release_update.rs` は通常のテスト実行の対象外です。CIと上記一覧では `release-update-test` 機能のClippyだけを行い、実際の更新回帰は [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) の手順で実行してください。
 - `tests/workflow_uses.rs` は、ワークフローの `uses:` が40文字のコミット SHA であることを検証します。タグ・ブランチ参照は失敗します。
+- `tests/release_scripts.rs` は、配布スクリプトが full nupkg のファイル名や `SHA256SUMS.txt` の行順を組み立て直さないことを検証します。vpk が書いた full nupkg を探し、チェックサムは行に書いてあるファイルと照合します。
 - ローカル検証では `SKILVELLA_MIGRATION_TEST_ROOT` と子プロセスの `TEMP` / `TMP` をGit作業ツリー外の作業専用フォルダーへ設定してください。ディレクトリ初期化・Codex入口生成にはテスト用ホームを明示し、利用者のフォルダーとクライアント設定を保護してください。対象テストと保存先は [開発手順の一覧](docs/DEVELOPMENT.md#開発) を参照してください。
 
 ## 変更時の制約
@@ -55,3 +56,4 @@ cargo test --locked --features launcher
 | 規約 | 強制 |
 | --- | --- |
 | ワークフローの `uses:` はタグやブランチではなく、40文字のコミット SHA に固定する | `tests/workflow_uses.rs` |
+| 配布スクリプトは full nupkg の名前と `SHA256SUMS.txt` の行順を組み立て直さない。書いたファイルを読む | `tests/release_scripts.rs` |

@@ -62,15 +62,25 @@ $expectedNames = @($assets + $sumsName | Sort-Object)
 $actualNames = @(Get-ChildItem -LiteralPath $directory.FullName -File -Force | ForEach-Object Name | Sort-Object)
 if (Compare-Object $expectedNames $actualNames) { throw "unexpected distribution contents: $($actualNames -join ', ')" }
 
-# SHA256SUMS.txt は `<hash>  <名前>` の2行（アプリ内更新の checksum() と同じ形式）。skilvella-release checksums は名前順で出力するので、
-# 期待値も名前順に組み立てて実ファイルのハッシュと一致させる（1.1.9 の初回 run で並びの違いにより失敗した）。
+# SHA256SUMS.txt はアプリ内更新の checksum() と同じく、64桁のハッシュ、空白2つまたは「空白+*」、ファイル名。
+# 行の並びは作らない。$assets の順で期待値を連結すると、skilvella-release checksums の出力順とずれて
+# 1.1.9 の初回配信が失敗した。ファイルに書いてある名前のハッシュを、その実ファイルと照合する。
 $sumsText = [IO.File]::ReadAllText((Join-Path $directory.FullName $sumsName), [Text.UTF8Encoding]::new($false, $true))
 $hashes = @{}
-foreach ($asset in $assets) {
-    $hashes[$asset] = (Get-FileHash -LiteralPath (Join-Path $directory.FullName $asset) -Algorithm SHA256).Hash.ToLowerInvariant()
+$checksumPattern = '^(?<hash>[0-9A-Fa-f]{64})(?<gap>  | \*)(?<name>[^ \t]+)$'
+foreach ($line in @($sumsText.Replace("`r`n", "`n").Trim() -split "`n")) {
+    if ($line -notmatch $checksumPattern) { throw "Malformed checksum line in ${sumsName}: $line" }
+    $name = $Matches.name
+    $hash = $Matches.hash.ToLowerInvariant()
+    if ($hashes.ContainsKey($name)) { throw "Duplicate checksum for $name" }
+    if ($assets -notcontains $name) { throw "$sumsName names a file that is not a release archive: $name" }
+    $actual = (Get-FileHash -LiteralPath (Join-Path $directory.FullName $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($hash -cne $actual) { throw "$sumsName does not match $name" }
+    $hashes[$name] = $hash
 }
-$expectedSums = ($assets | Sort-Object | ForEach-Object { "$($hashes[$_])  $_" }) -join "`n"
-if ($sumsText.Replace("`r`n", "`n").Trim() -cne $expectedSums) { throw "$sumsName does not match the archives" }
+foreach ($asset in $assets) {
+    if (-not $hashes.ContainsKey($asset)) { throw "$sumsName is missing $asset" }
+}
 
 $contentTypes = @{
     'Skilvella-windows-x86_64.zip'   = 'application/zip'

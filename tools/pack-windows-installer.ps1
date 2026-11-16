@@ -103,10 +103,16 @@ try {
     vpk pack @packOptions @signing
     $setup = Join-Path $packages 'SkilvellaApp-win-Setup.exe'
     if (!(Test-Path -LiteralPath $setup -PathType Leaf)) { throw 'Setup executable was not generated.' }
-    # 自動更新の更新元（R2）には、Setup のほか releases.win.json と full nupkg が必要。
+    # 自動更新の更新元（R2）には、Setup のほか releases.win.json と vpk が書いた full nupkg が必要。
     # Setup だけでは、アプリ側から新版を見つけられない。
-    foreach ($required in @('releases.win.json', "SkilvellaApp-$version-full.nupkg")) {
-        if (!(Test-Path -LiteralPath (Join-Path $packages $required) -PathType Leaf)) { throw "Update feed file was not generated: $required" }
+    # full nupkg の名前は組み立てない。チャネル名を挟んだ名前を探すと、vpk が書いたファイルと一致せず
+    # v1.1.7 の Setup 配信が梱包の直後に止まった。出力にある full nupkg を1件だけ使う。
+    if (!(Test-Path -LiteralPath (Join-Path $packages 'releases.win.json') -PathType Leaf)) {
+        throw 'Update feed file was not generated: releases.win.json'
+    }
+    $fullPackages = @(Get-ChildItem -LiteralPath $packages -File -Filter 'SkilvellaApp-*-full.nupkg')
+    if ($fullPackages.Count -ne 1) {
+        throw "Expected one SkilvellaApp-*-full.nupkg that vpk wrote, found $($fullPackages.Count)."
     }
     # 版付きの不変名の Setup も置く（固定名 Setup は最新版を指す URL として毎回置き換える）。
     Copy-Item -LiteralPath $setup -Destination (Join-Path $packages "SkilvellaApp-$version-win-Setup.exe")
