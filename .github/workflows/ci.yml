@@ -6,6 +6,12 @@ on:
 permissions:
   contents: read
 
+# 同じブランチへ続けて push したとき、古い run を取り消して最新の検証だけを走らせる。
+# release/ ブランチは公開前の release ビルドを含む検証なので、途中で消さず必ず最後まで走らせる。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/heads/release/') }}
+
 jobs:
   check:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -18,14 +24,14 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os == 'macos-latest' && fromJSON('["self-hosted", "macOS", "ARM64", "m3mb14"]') || matrix.os }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup show
       # 依存クレートのビルド結果を GitHub のキャッシュへ保存し、毎回の全依存コンパイルを避ける。
       # セルフホストランナーもジョブごとに作業フォルダーを初期化するため、同じキャッシュを使う。
       # キーはOS・ツールチェーン・Cargo.lock から作られ、依存が変われば作り直される。
       # cache-bin は必ず無効にする。有効だと後処理の「Cleaning cargo/bin」が、セルフホストランナーで
       # 共有している CARGO_HOME/bin の rustup 本体を消し、以後のジョブが rustup・cargo を実行できなくなる。
-      - uses: Swatinem/rust-cache@v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-bin: "false"
       - run: cargo fmt --all --check
