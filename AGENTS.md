@@ -5,7 +5,7 @@ SkilvellaはRust製のローカルスキル管理アプリです。構造・デ�
 ## 開発と検証
 
 - `rust-toolchain.toml` に固定されたRustを使用し、依存解決は `Cargo.lock` に従ってください。OS別のビルド要件は [開発手順](docs/DEVELOPMENT.md#開発) を参照してください。
-- コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。[CI](.github/workflows/ci.yml) はWindows・LinuxのGitHub提供ランナーとmacOSのARM64セルフホストランナーを使い、フォークからのプルリクエストでは検証ジョブをスキップします。CIは依存クレートのビルド結果をキャッシュし、同じブランチへ続けて push したときは古い run を取り消します（`release/` ブランチの run は取り消しません）。ワークフローの `uses:` はタグではなく commit SHA に固定し、更新時も SHA で指定してください。
+- コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。[CI](.github/workflows/ci.yml) はWindows・LinuxのGitHub提供ランナーとmacOSのARM64セルフホストランナーを使い、フォークからのプルリクエストでは検証ジョブをスキップします。CIは依存クレートのビルド結果をキャッシュし、同じブランチへ続けて push したときは古い run を取り消します（`release/` ブランチの run は取り消しません）。ワークフローの `uses:` はタグではなく commit SHA に固定し、更新時も SHA で指定してください。タグやブランチのままの `uses:` は `tests/workflow_uses.rs` が失敗させます。
 
 ```sh
 cargo fmt --all --check
@@ -27,6 +27,7 @@ cargo test --locked --features launcher
 - `src/update/auto.rs` 内のテストは自動更新設定の既定値・壊れたJSON・原子的保存・24時間の間引きを検証し、`tests/localization.rs` は自動更新の保存経路のCSRFとSetup版限定の表示を検証します。Velopackを呼ぶ処理は `windows-installer` 機能付きのWindowsビルドだけが対象で、実機での取得・適用は [開発手順](docs/DEVELOPMENT.md#windowsインストーラーの追加配布) の隔離環境の手順（`update-feed-test` 機能）で確認します。
 - `src/update/cleanup.rs` 内のテストは、起動時の一時物の清掃が、古い更新ステージと設定の一時ファイルだけを消すことを検証します。新しいもの・名前違い・未知のファイルを含むステージ・リンク・更新ロック保持中・実行ファイル本体とロックファイルは残ります。清掃の対象を広げるときは、DESIGN.md の条件と同時に見直してください。
 - `tests/release_update.rs` は通常のテスト実行の対象外です。CIと上記一覧では `release-update-test` 機能のClippyだけを行い、実際の更新回帰は [配布物の作成と検証](docs/DEVELOPMENT.md#配布物の作成と検証) の手順で実行してください。
+- `tests/workflow_uses.rs` は、ワークフローの `uses:` が40文字のコミット SHA であることを検証します。タグ・ブランチ参照は失敗します。
 - ローカル検証では `SKILVELLA_MIGRATION_TEST_ROOT` と子プロセスの `TEMP` / `TMP` をGit作業ツリー外の作業専用フォルダーへ設定してください。ディレクトリ初期化・Codex入口生成にはテスト用ホームを明示し、利用者のフォルダーとクライアント設定を保護してください。対象テストと保存先は [開発手順の一覧](docs/DEVELOPMENT.md#開発) を参照してください。
 
 ## 変更時の制約
@@ -44,3 +45,13 @@ cargo test --locked --features launcher
 - Windowsインストーラー（Setup）は `tools/pack-windows-installer.ps1` で梱包し、公開用の署名は `-Sign`（Sigilune）で行ってください。公開用は `.github/workflows/release.yml`（`release/<版>` ブランチへの push で起動）で作り、署名用Secretsを梱包・署名のstep、R2用の `CLOUDFLARE_API_TOKEN` を配信のstep以外へ渡さないでください。Setup版の自動更新は `src/update/auto.rs`（更新元は `update_source` の1か所、設定は `app-update.json` でLibraryに入れない）で行い、配信は `tools/publish-windows-installer-r2.ps1` でR2へ行います。版付きの成果物は既存オブジェクトを上書きしないでください。手順は [Windowsインストーラーの追加配布](docs/DEVELOPMENT.md#windowsインストーラーの追加配布) を参照してください。
 - アイコンの再生成は通常ビルドから独立した `tools/export-icons/Cargo.toml` の開発用パッケージで行い、生成済みの素材を追跡してください。再生成手順は [アイコン素材](docs/DEVELOPMENT.md#アイコン素材) を参照してください。
 - 利用者向けの説明はREADME、設計はDESIGN、作業規約は本書に置き、開発環境・素材生成の詳細は `docs/DEVELOPMENT.md` へ集約してください。
+
+## 規約と強制
+
+次の検査が失敗する変更は、規約に合っていない。エラーがファイルと、代わりに使う形を示す。文書だけの注意は検査にならない。例外は違反している行に、理由・期限・人の承認を書いて付ける。期限を過ぎた例外は失敗する。
+
+`correct-allow: 理由; expires: YYYY-MM-DD; approved: 人の名前`
+
+| 規約 | 強制 |
+| --- | --- |
+| ワークフローの `uses:` はタグやブランチではなく、40文字のコミット SHA に固定する | `tests/workflow_uses.rs` |
