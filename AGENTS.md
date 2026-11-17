@@ -5,7 +5,7 @@ SkilvellaはRust製のローカルスキル管理アプリです。構造・デ�
 ## 開発と検証
 
 - `rust-toolchain.toml` に固定されたRustを使用し、依存解決は `Cargo.lock` に従ってください。OS別のビルド要件は [開発手順](docs/DEVELOPMENT.md#開発) を参照してください。
-- コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。[CI](.github/workflows/ci.yml) はWindows・LinuxのGitHub提供ランナーとmacOSのARM64セルフホストランナーを使い、フォークからのプルリクエストでは検証ジョブをスキップします。CIは依存クレートのビルド結果をキャッシュし、同じブランチへ続けて push したときは古い run を取り消します（`release/` ブランチの run は取り消しません）。ワークフローの `uses:` はタグではなく commit SHA に固定し、更新時も SHA で指定してください。タグやブランチのままの `uses:` は `tests/workflow_uses.rs` が失敗させます。
+- コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。[CI](.github/workflows/ci.yml) はWindows・Linux・macOS（Apple Silicon の `macos-latest`）のGitHub提供ランナーを使い、フォークからのプルリクエストでは検証ジョブをスキップします。CIは依存クレートのビルド結果をキャッシュし、同じブランチへ続けて push したときは古い run を取り消します（`release/` ブランチの run は取り消しません）。ワークフローの `uses:` はタグではなく commit SHA に固定し、更新時も SHA で指定してください。タグやブランチのままの `uses:` は `tests/workflow_uses.rs` が失敗させます。
 
 ```sh
 cargo fmt --all --check

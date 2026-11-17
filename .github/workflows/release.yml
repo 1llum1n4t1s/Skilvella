@@ -10,7 +10,7 @@ name: Release
 #   skip_upload を付けると、ビルド・署名・検証だけ行い R2 へ配信しない（成果物は Actions に残る）。
 #   GitHub のブランチフィルタは glob（正規表現ではない）。release/1.1.9 のような名前に一致する。
 # - 構成: guard → (portable-windows / portable-macos / installer) → verify → update-test-macos → publish。
-#     portable-*  ZIP版・macOS版のアーカイブを作る。macOS は自前 Mac (m3mb14)。Secrets も Environment も渡さない。
+#     portable-*  ZIP版・macOS版のアーカイブを作る。macOS は GitHub 提供の macos-latest (Apple Silicon)。Secrets も Environment も渡さない。
 #     installer   Windows Setup を署名して作る（Sigilune・Certum のクラウド鍵）。署名用 Secrets は梱包・署名の step だけ。
 #     verify      両アーカイブから SHA256SUMS.txt を作り、自動更新と同じ実装で検証し、Windows で更新回帰を通す。
 #     update-test-macos  同じ3ファイルで Apple Silicon Mac の更新回帰を通す。
@@ -119,9 +119,9 @@ jobs:
           retention-days: 30
 
   portable-macos:
-    # 自前の Apple Silicon Mac。Secrets と Environment は渡さない（ビルド・梱包だけ）。
+    # GitHub 提供の Apple Silicon Mac。Secrets と Environment は渡さない（ビルド・梱包だけ）。
     needs: guard
-    runs-on: [self-hosted, macOS, ARM64, m3mb14]
+    runs-on: macos-latest
     timeout-minutes: 60
     defaults:
       run:
@@ -136,8 +136,8 @@ jobs:
       - run: rustup show
 
       # 依存クレートのビルド結果を GitHub のキャッシュへ保存する（ci.yml と同じ設定）。
-      # cache-bin は必ず無効にする。有効だと後処理の「Cleaning cargo/bin」が、セルフホストランナーで
-      # 共有している CARGO_HOME/bin の rustup 本体を消し、以後のジョブが rustup・cargo を実行できなくなる。
+      # cache-bin は必ず無効にする。有効だと後処理の「Cleaning cargo/bin」が、
+      # 共有している CARGO_HOME/bin の rustup 本体を消し（セルフホストランナーで実際に起きた）、以後のジョブが rustup・cargo を実行できなくなる。
       - name: ビルドキャッシュ
         # Swatinem/rust-cache@v2.9.3
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
@@ -326,7 +326,7 @@ jobs:
   update-test-macos:
     # Apple Silicon Mac での更新回帰。Secrets と Environment は渡さない。
     needs: [guard, verify]
-    runs-on: [self-hosted, macOS, ARM64, m3mb14]
+    runs-on: macos-latest
     timeout-minutes: 60
     defaults:
       run:
