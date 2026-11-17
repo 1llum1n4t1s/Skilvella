@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.12 - 2026-11-18
+
+- 利用者が観測できる変更はありません。依存クレート（rmcp など）の更新と、配布物を作る CI の実行環境の見直しだけです。
+
 ## 1.1.11 - 2026-11-17
 
 - 呼び出し入口の同期先に Cursor、GitHub Copilot、Devin を追加しました。Cursor は `~/.cursor/skills/skilvella/<name>` に入口を置き、GitHub Copilot は `~/.copilot/skills/<name>`、Devin は Windows の `%APPDATA%\devin\skills/<name>` と macOS・Linux の `~/.config/devin/skills/<name>` へリンクします。設定画面では、このPCで設定フォルダーが見つからないクライアントを「その他のクライアント」に折りたたみ、有効・生成済み・同期エラーのあるクライアントは常に表示します。状態の表には、有効なクライアントと同期エラーのあるクライアントだけを出します。複数のクライアントを有効にすると、同じ入口が重複して表示されることがあります。
