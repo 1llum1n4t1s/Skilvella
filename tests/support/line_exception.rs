@@ -2,6 +2,9 @@
 //!
 //! `correct-allow:` を付けた行だけを外す。理由、期限、人の承認が同じ行にないと失敗する。
 //! 期限を過ぎた例外も失敗する。
+//!
+//! 日付換算と例外文の単体テストは `tests/line_exception.rs` に置く。このファイルは規約検査が
+//! `#[path]` で共有するため、ここへ `#[cfg(test)]` を戻すと、検査バイナリの数だけ同じテストが走る。
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -81,7 +84,9 @@ fn exemption_format() -> String {
     "a correct-allow exception needs `correct-allow: <reason>; expires: YYYY-MM-DD; approved: <person>` on the same line. The reason is at least 8 characters, and approved is a person (not agent, claude, or bot)".to_owned()
 }
 
-fn approved_is_human(name: &str) -> bool {
+// 期限と承認の単体テスト（`tests/line_exception.rs`）だけが呼ぶ。規約検査のバイナリは使わない。
+#[allow(dead_code)]
+pub(super) fn approved_is_human(name: &str) -> bool {
     const BANNED: &[&str] = &[
         "agent", "claude", "bot", "todo", "gpt", "cursor", "human", "user",
     ];
@@ -99,7 +104,9 @@ fn approved_is_human(name: &str) -> bool {
     (2..=80).contains(&name.len()) && letters >= 2
 }
 
-fn parse_date(text: &str) -> Option<(i32, u32, u32)> {
+// 日付の境界は `tests/line_exception.rs` だけが確かめる。
+#[allow(dead_code)]
+pub(super) fn parse_date(text: &str) -> Option<(i32, u32, u32)> {
     let mut parts = text.split('-');
     let year: i32 = parts.next()?.parse().ok()?;
     let month: u32 = parts.next()?.parse().ok()?;
@@ -130,7 +137,10 @@ fn today_utc() -> (i32, u32, u32) {
 }
 
 /// Howard Hinnant の civil_from_days。Unix 日数 0 は 1970-01-01。
-fn civil_from_days(mut days: i64) -> (i32, u32, u32) {
+///
+/// 起点の確認は `tests/line_exception.rs` だけが行う。
+#[allow(dead_code)]
+pub(super) fn civil_from_days(mut days: i64) -> (i32, u32, u32) {
     days += 719_468;
     let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
     let day_of_era = (days - era * 146_097) as u64;
@@ -147,35 +157,4 @@ fn civil_from_days(mut days: i64) -> (i32, u32, u32) {
     };
     let year = if month <= 2 { year + 1 } else { year };
     (year as i32, month as u32, day as u32)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{approved_is_human, civil_from_days, exemption, parse_date};
-
-    #[test]
-    fn unix_epoch_is_1970_01_01() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-    }
-
-    #[test]
-    fn rejects_impossible_dates() {
-        assert!(parse_date("2026-02-31").is_none());
-        assert!(parse_date("2026-13-01").is_none());
-        assert!(parse_date("2024-02-29").is_some());
-        assert!(parse_date("2026-02-29").is_none());
-    }
-
-    #[test]
-    fn expired_and_unsigned_exceptions_fail() {
-        let expired = "uses: actions/checkout@v1 # correct-allow: the tag is frozen upstream; expires: 2020-01-01; approved: Yuichiro Shinozaki";
-        let error = exemption(expired).expect_err("expired");
-        assert!(error.contains("expired"), "{error}");
-        let unsigned = "uses: actions/checkout@v1 # correct-allow: the tag is frozen upstream; expires: 2999-01-01; approved: claude";
-        assert!(exemption(unsigned).is_err());
-        assert!(!approved_is_human("claude"));
-        let valid = "uses: actions/checkout@v1 # correct-allow: the tag is frozen upstream; expires: 2999-01-01; approved: Yuichiro Shinozaki";
-        assert_eq!(exemption(valid), Ok(true));
-        assert_eq!(exemption("uses: actions/checkout@v1"), Ok(false));
-    }
 }
