@@ -20,7 +20,7 @@
 <noscript><p>{{ locale.text("テーマの切り替えと更新の確認にはJavaScriptが必要です。") }}</p></noscript>
 </section>
 <section class="panel stack" id="codex"><h2>{{ locale.text("呼び出し入口の同期") }}</h2>
-<form method="post" action="/settings/codex" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="targets" value="true">
+<form method="post" action="/settings/codex" class="stack" data-save-on-change><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="targets" value="true">
 <fieldset class="stack client-targets"><legend>{{ locale.text("同期先") }}</legend>
 {# 検出済み・有効・生成済み・エラーありのクライアントは常にここへ出す（隠すと保存で無効化されるため）。 #}
 {% for client in clients %}{% if client.shown %}<label class="checkbox"><input type="checkbox" name="{{ client.key }}" value="true" {% if client.settings.enabled %}checked{% endif %}> {{ client.label }}</label>
@@ -33,7 +33,7 @@
 <p class="note">{{ locale.text("選んだクライアントごとに呼び出し入口を生成します。有効にすると検索用スキル skilvella-search が常に候補に表示されます。各スキルの使い方は一覧または詳細画面で選択でき、全ての同期先に共通です。") }}</p>
 <p class="note">{{ locale.text("GrokはCodexとClaude Codeの入口も読み込みます。Grokを有効にすると、使い方の設定を反映したGrok用の入口が優先されます。") }}</p>
 <p class="note">{{ locale.text("Cursor・GitHub Copilot・Devinは他のクライアントの探索先（~/.agents/skills・~/.claude/skills・~/.copilot/skills）も読むため、同じ入口が重複して表示されることがあります。") }}</p>
-<button type="submit" data-busy="{{ locale.text("保存中…") }}">{{ locale.text("保存") }}</button></form>
+<noscript><button type="submit" data-busy="{{ locale.text("保存中…") }}">{{ locale.text("保存") }}</button></noscript></form>
 {# 状態は有効またはエラーありのクライアントだけを表にする。狭い画面ではCSSで行ごとの縦並びにする。 #}
 {% if has_status %}<table class="client-status" data-client-status><thead><tr><th scope="col">{{ locale.text("クライアント") }}</th><th scope="col">{{ locale.text("生成先") }}</th><th scope="col">{{ locale.text("リンク先") }}</th><th scope="col">{{ locale.text("件数") }}</th></tr></thead><tbody>
 {% for client in clients %}{% if client.status %}<tr id="sync-{{ client.key }}"><th scope="row">{{ client.label }}</th><td data-label="{{ locale.text("生成先") }}"><code>{{ client.path }}</code></td><td data-label="{{ locale.text("リンク先") }}">{% if client.link_path.is_empty() %}<span class="muted">—</span>{% else %}<code>{{ client.link_path }}</code>{% endif %}</td><td data-label="{{ locale.text("件数") }}">{{ client.settings.exported }}</td></tr>
@@ -44,10 +44,10 @@
 <section class="panel stack" id="updates" data-updates data-csrf="{{ csrf }}" data-version="{{ version }}"><h2>{{ locale.text("アプリの更新") }}</h2>
 <p>{{ locale.text("現在のバージョン:") }} <strong>{{ version }}</strong></p>
 <p data-update-status role="status" aria-live="polite">{{ locale.text("更新を確認できます。") }}</p>
-{% if installer %}<form method="post" action="/settings/updates/auto" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}">
+{% if installer %}<form method="post" action="/settings/updates/auto" class="stack" data-save-on-change><input type="hidden" name="csrf" value="{{ csrf }}">
 <label class="checkbox"><input type="checkbox" name="auto_update" value="true" {% if auto_update %}checked{% endif %}> {{ locale.text("起動時に自動で更新する") }}</label>
 <p class="note">{{ locale.text("新しい版を自動で確認してダウンロードします。適用は次回の起動時です。確認は24時間に1回までです。") }}</p>
-<button type="submit" data-busy="{{ locale.text("保存中…") }}">{{ locale.text("保存") }}</button></form>{% endif %}
+<noscript><button type="submit" data-busy="{{ locale.text("保存中…") }}">{{ locale.text("保存") }}</button></noscript></form>{% endif %}
 <div class="actions"><button type="button" data-update-check>{{ locale.text("更新を確認") }}</button><button type="button" class="primary" data-update-install hidden>{{ locale.text("更新をインストール") }}</button></div>
 <p class="note">{{ locale.text("更新をインストールするとアプリを再起動します。編集中の内容を保存してから実行してください。") }}</p>
 </section>

@@ -55,12 +55,12 @@
   <div class="folder-actions">
     <details class="folder-secondary">
       <summary>{{ locale.text("表示名を変更") }}</summary>
-      <form method="post" action="/sources/name" class="stack">
+      <form method="post" action="/sources/name" class="stack" data-save-on-change>
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <input type="hidden" name="alias" value="{{ f.alias }}">
         <label>{{ locale.text("表示名") }}<input name="display_name" value="{{ f.display_name }}" aria-describedby="source-name-help"></label>
         <p class="note" id="source-name-help">{{ locale.text("画面上の名前だけを変更します。空欄で保存すると識別子に戻ります。") }}</p>
-        <div class="actions"><button type="submit">{{ locale.text("保存") }}</button></div>
+        <noscript><div class="actions"><button type="submit">{{ locale.text("保存") }}</button></div></noscript>
       </form>
     </details>
     {% if f.alias == directory.source_alias %}

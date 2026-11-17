@@ -100,6 +100,9 @@ async fn auto_update_setting_requires_csrf_and_is_installer_only() {
             .await
             .unwrap();
         assert!(body.contains("name=\"auto_update\""));
+        assert!(
+            body.contains("action=\"/settings/updates/auto\" class=\"stack\" data-save-on-change")
+        );
         assert!(!body.contains("name=\"auto_update\" value=\"true\" checked"));
     } else {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);

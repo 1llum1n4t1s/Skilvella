@@ -138,6 +138,21 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         .unwrap();
     assert!(body.contains("value=\"search\" selected"));
     assert!(body.contains("使い方"));
+    // 使い方と管理情報は、値を切り替えたときに送る。保存ボタンはJavaScriptなしのときだけ出す。
+    for action in [
+        format!("action=\"/skills/{id}/codex\""),
+        format!("action=\"/skills/{id}/metadata\""),
+    ] {
+        let start = body.find(&action).unwrap();
+        let form = &body[start..start + body[start..].find("</form>").unwrap()];
+        assert!(form.contains("data-save-on-change"), "{action}");
+        let button = form.find("<button type=\"submit\"").unwrap();
+        let noscript = form.find("<noscript>").unwrap();
+        assert!(
+            noscript < button && form[button..].contains("</noscript>"),
+            "{action}"
+        );
+    }
     assert!(!state.library.codex_settings().unwrap().enabled);
     assert!(body.contains("設定画面で選んだ同期先へ、同期に成功した場合に適用されます。"));
     assert!(body.contains("href=\"/settings#codex\""));
@@ -767,6 +782,12 @@ async fn sync_targets_collapse_undetected_clients_but_never_active_ones() {
     // 折りたたみと中のチェックボックスは、同期先を保存するフォームの内側にある（同じPOSTで送信される）。
     let form_start = body.find("action=\"/settings/codex\"").unwrap();
     let form = &body[form_start..form_start + body[form_start..].find("</form>").unwrap()];
+    assert!(form.contains("data-save-on-change"));
+    let save_button = form.find("<button type=\"submit\"").unwrap();
+    assert!(
+        form.find("<noscript>").unwrap() < save_button
+            && form[save_button..].contains("</noscript>")
+    );
     assert!(form.contains("data-client-more"));
     for key in ["codex", "grok", "cursor", "copilot", "devin"] {
         assert!(

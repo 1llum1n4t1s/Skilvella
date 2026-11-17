@@ -197,6 +197,15 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         .await
         .unwrap();
     assert!(body.contains("<span class=\"folder-label\">test</span>"));
+    let name_form_at = body.find("action=\"/sources/name\"").unwrap();
+    let name_form =
+        &body[name_form_at..name_form_at + body[name_form_at..].find("</form>").unwrap()];
+    assert!(name_form.contains("data-save-on-change"));
+    let name_button = name_form.find("<button type=\"submit\"").unwrap();
+    assert!(
+        name_form.find("<noscript>").unwrap() < name_button
+            && name_form[name_button..].contains("</noscript>")
+    );
     let initial = rpc(&client, &base_url, 1, "initialize", json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"integration-test","version":"1"}})).await;
     assert_eq!(initial["serverInfo"]["name"], "skilvella");
     let tools = rpc(&client, &base_url, 2, "tools/list", json!({})).await;

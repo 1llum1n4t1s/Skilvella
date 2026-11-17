@@ -25,6 +25,26 @@
   const t = (id, values = {}) => (Object.hasOwn(messages, id) ? messages[id] : id).replace(/\{(\w+)\}/g, (token, name) =>
     Object.hasOwn(values, name) ? values[name] : token);
   languageSelector?.addEventListener("change", () => languageSelector.form.requestSubmit());
+  // 設定の保存ボタンは出さない。チェック・選択は切り替えたとき、文字入力は確定したときに送る。
+  document.querySelectorAll("form[data-save-on-change]").forEach(form => {
+    const save = () => {
+      if (form.dataset.submitting === "true") return;
+      form.requestSubmit();
+    };
+    form.addEventListener("change", event => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+      if (target.type === "hidden" || target.disabled) return;
+      save();
+    });
+    form.addEventListener("keydown", event => {
+      if (event.key !== "Enter" || event.isComposing) return;
+      if (!(event.target instanceof HTMLInputElement)) return;
+      if (event.target.type === "checkbox" || event.target.type === "radio") return;
+      event.preventDefault();
+      save();
+    });
+  });
   const operationKey = "skilvella-policy-operation";
   async function refreshPolicyDisplay() {
     if (document.querySelector("form[data-editor]")) {
