@@ -85,7 +85,7 @@ ToolportではHTTPサーバーとして登録し、同じURLを指定します�
 | `load_skill` | IDを指定して `SKILL.md` 本文と参照ファイル一覧を取得 |
 | `read_skill_file` | スキル配下のUTF-8テキストを行単位で取得 |
 
-`load_skill` は `next` が null になるまで続きの引数を渡し、本文を連結してから指示に従ってください。一覧は通常1ページ100件・パス合計8 KiBまでですが、1件のパスが8 KiBを超える場合はそのパスを単独で返すため応答が大きくなります。スキルと必要な参照は一件ずつ取得してください。参照は `read_skill_file` で必要な行範囲の `next_text_offset` を最後まで取得し、さらに行が必要な場合だけ `next_start_line` を使います。同じ行範囲のバイトページはそのまま連結し、行範囲の間には改行を補って連結します。`next_text_offset` の続きでは `start_line` と `max_lines` を維持し、次の行範囲では `start_line` を `next_start_line` に設定して `text_offset` を 0 に戻します。改行は従来どおり正規化され、末尾改行は除かれます。続きには返された `revision` を `expected_revision` に指定します。途中で変更された場合は最初から取得し直します。
+`load_skill` は `next` が null になるまで続きの引数を渡し、本文を連結してから指示に従ってください。一覧は通常1ページ100件・パス合計8 KiBまでですが、1件のパスが8 KiBを超える場合はそのパスを単独で返すため応答が大きくなります。スキルと必要な参照は一件ずつ取得してください。参照は `read_skill_file` で必要な行範囲の `next_text_offset` を最後まで取得し、さらに行が必要な場合だけ `next_start_line` を使います。同じ行範囲のバイトページはそのまま連結し、行範囲の間には改行を補って連結します。`next_text_offset` の続きでは `start_line` と `max_lines` を維持し、次の行範囲では `start_line` を `next_start_line` に設定して `text_offset` を 0 に戻します。改行は従来どおり正規化され、末尾改行は除かれます。続きには返された `revision` を `expected_revision` に指定します。途中で変更された場合は最初から取得し直します。 `id` には `search_skills` が返すスキルIDを指定します。公開中のスキル名と完全一致し、一意であれば名前も受け付け、複数一致する名前には候補のIDを返します。`read_skill_file` の最初の呼び出しは `id` と `path` だけで足り、結果が途中で切れたときは `expected_revision` を含む `next` をそのまま渡して続けます。
 
 MCPは読み取り専用です。未公開・不正なfrontmatter・消失スキルの本文は取得できません。参照ファイルを実行する機能もありません。本文は最大2 MiB、参照テキストは最大1 MiBです。
 

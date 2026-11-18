@@ -57,7 +57,7 @@ fn files_page_end(files: &[String], offset: usize) -> usize {
 fn check_revision(expected: Option<&str>, actual: &str, continuation: bool) -> anyhow::Result<()> {
     anyhow::ensure!(
         !continuation || expected.is_some(),
-        "Continuation requires expected_revision"
+        "Continuation requires expected_revision: pass the revision returned by the first page of this same request (or call the tool again with the arguments in the previous response's next object). To start over, omit the offsets"
     );
     anyhow::ensure!(
         expected.is_none_or(|value| value == actual),
@@ -79,6 +79,7 @@ pub struct SearchArgs {
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct LoadArgs {
+    /// Skill id from search_skills. An exact published skill name is also accepted when it is unique; an ambiguous name returns candidate ids.
     pub id: String,
     /// UTF-8 byte offset in SKILL.md, from the previous next object.
     pub content_offset: Option<usize>,
@@ -89,6 +90,7 @@ pub struct LoadArgs {
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FileArgs {
+    /// Skill id from search_skills or load_skill. An exact published skill name is also accepted when it is unique.
     pub id: String,
     /// Relative path listed by load_skill.
     pub path: String,
@@ -96,9 +98,9 @@ pub struct FileArgs {
     pub start_line: Option<usize>,
     /// Default 200, maximum 500.
     pub max_lines: Option<usize>,
-    /// UTF-8 byte offset within this line window.
+    /// UTF-8 byte offset within this line window. Use only with next_text_offset from the previous response.
     pub text_offset: Option<usize>,
-    /// Revision returned by the first page; required for byte continuation.
+    /// The revision field of the previous response for this file; required whenever text_offset is greater than 0. Omit on the first read.
     pub expected_revision: Option<String>,
 }
 #[derive(Clone)]
@@ -121,7 +123,7 @@ impl SkillServer {
         }
     }
     #[tool(
-        description = "Search published skills by keywords. Returns summaries and IDs; load a match for instructions.",
+        description = "Search published skills by keywords. Returns summaries and IDs; pass a result's id to load_skill.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -149,7 +151,7 @@ impl SkillServer {
         )
     }
     #[tool(
-        description = "Load a published SKILL.md and file paths in pages. Follow next until null and concatenate content before acting. Read each needed reference one at a time with read_skill_file and retrieve every byte page of each needed line range before acting; advance to further lines only when needed.",
+        description = "Load a published SKILL.md and file paths in pages. id is the skill id from search_skills (a unique exact skill name also works). Follow next until null and concatenate content before acting. Read each needed reference one at a time with read_skill_file and retrieve every byte page of each needed line range before acting; advance to further lines only when needed.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -162,7 +164,8 @@ impl SkillServer {
         Parameters(args): Parameters<LoadArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         result(self.state.run(move |lib| {
-            let skill = lib.mcp_detail(&args.id)?;
+            let id = lib.resolve_published_key(&args.id)?;
+            let skill = lib.mcp_detail(&id)?;
             let content_offset = args.content_offset.unwrap_or(0);
             let files_offset = args.files_offset.unwrap_or(0);
             let revision = hash(std::iter::once(skill.revision.as_str()).chain(skill.files.iter().map(String::as_str)));
@@ -178,7 +181,7 @@ impl SkillServer {
         }).await)
     }
     #[tool(
-        description = "Read one needed reference at a time in line and UTF-8 byte pages. Concatenate byte pages directly; insert a newline between line windows. For next_text_offset keep start_line and max_lines unchanged; for next_start_line set start_line to it and reset text_offset to 0. Retain revision as expected_revision; retrieve every byte page of each needed line range before acting; advance to next_start_line only when more lines are needed. Never executes files.",
+        description = "Read one needed reference at a time in line and UTF-8 byte pages. The first read needs only id and path; do not pass text_offset or expected_revision then. When truncated, call again with the arguments in next (it carries expected_revision, required for every continuation). Concatenate byte pages directly; insert a newline between line windows. For next_text_offset keep start_line and max_lines unchanged; for next_start_line set start_line to it and reset text_offset to 0. Retain revision as expected_revision; retrieve every byte page of each needed line range before acting; advance to next_start_line only when more lines are needed. Never executes files.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -195,13 +198,22 @@ impl SkillServer {
                 .run(move |lib| {
                     let start = args.start_line.unwrap_or(1).max(1);
                     let max_lines = args.max_lines.unwrap_or(200).clamp(1, 500);
-                    let file = lib.read_file(&args.id, &args.path, start, max_lines)?;
+                    let id = lib.resolve_published_key(&args.id)?;
+                    let file = lib.read_file(&id, &args.path, start, max_lines)?;
                     let offset = args.text_offset.unwrap_or(0);
                     check_revision(args.expected_revision.as_deref(), &file.revision, offset > 0)?;
                     let (text, end) = page(&file.text, offset)?;
                     let next_text_offset = (end < file.text.len()).then_some(end);
                     let next_start_line = if next_text_offset.is_none() && start <= file.total_lines && max_lines <= file.total_lines - start { Some(start.saturating_add(max_lines)) } else { None };
-                    Ok(json!({"path":file.path,"text":text,"start_line":file.start_line,"total_lines":file.total_lines,"revision":file.revision,"truncated":next_text_offset.is_some() || next_start_line.is_some(),"next_text_offset":next_text_offset,"next_start_line":next_start_line}))
+                    // 続きの呼び出しにそのまま渡せる引数。版の一致検査のため revision を含める。
+                    let next = if let Some(text_offset) = next_text_offset {
+                        json!({"id":id,"path":file.path,"start_line":start,"max_lines":max_lines,"text_offset":text_offset,"expected_revision":file.revision})
+                    } else if let Some(line) = next_start_line {
+                        json!({"id":id,"path":file.path,"start_line":line,"max_lines":max_lines,"expected_revision":file.revision})
+                    } else {
+                        serde_json::Value::Null
+                    };
+                    Ok(json!({"path":file.path,"text":text,"start_line":file.start_line,"total_lines":file.total_lines,"revision":file.revision,"truncated":next_text_offset.is_some() || next_start_line.is_some(),"next_text_offset":next_text_offset,"next_start_line":next_start_line,"next":next}))
                 })
                 .await,
         )

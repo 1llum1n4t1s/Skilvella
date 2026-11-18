@@ -85,7 +85,7 @@ Toolport에서는 HTTP 서버로 등록하고 같은 URL을 지정하세요. Ski
 | `load_skill` | ID를 지정하여 `SKILL.md` 내용과 참조 파일 목록을 가져옵니다 |
 | `read_skill_file` | 스킬 아래의 UTF-8 텍스트를 줄 단위로 가져옵니다 |
 
-`load_skill`은 `next`가 null이 될 때까지 이어받기 인수를 계속 전달하고, 내용을 이어 붙인 뒤에 지시를 따르세요. 목록은 보통 페이지당 100개, 경로 합계 최대 8 KiB이지만, 경로 하나가 8 KiB를 넘으면 그 경로만 단독으로 반환되므로 응답이 커집니다. 스킬과 필요한 참조는 한 번에 하나씩 가져오세요. 참조는 `read_skill_file`로 필요한 줄 범위부터 끝까지 `next_text_offset`으로 가져오고, 줄이 더 필요할 때만 `next_start_line`을 사용하세요. 같은 줄 범위의 바이트 페이지는 그대로 이어 붙이고, 줄 범위 사이에서는 이어 붙일 때 줄바꿈을 넣습니다. `next_text_offset`으로 이어받을 때는 `start_line`과 `max_lines`를 유지하고, 다음 줄 범위로 넘어갈 때는 `start_line`을 `next_start_line`으로 설정하고 `text_offset`을 0으로 되돌립니다. 줄바꿈은 이전과 같이 정규화되며 끝의 줄바꿈은 제거됩니다. 이어받을 때는 반환된 `revision`을 `expected_revision`으로 지정하세요. 그 사이 파일이 바뀌었다면 처음부터 다시 가져오세요.
+`load_skill`은 `next`가 null이 될 때까지 이어받기 인수를 계속 전달하고, 내용을 이어 붙인 뒤에 지시를 따르세요. 목록은 보통 페이지당 100개, 경로 합계 최대 8 KiB이지만, 경로 하나가 8 KiB를 넘으면 그 경로만 단독으로 반환되므로 응답이 커집니다. 스킬과 필요한 참조는 한 번에 하나씩 가져오세요. 참조는 `read_skill_file`로 필요한 줄 범위부터 끝까지 `next_text_offset`으로 가져오고, 줄이 더 필요할 때만 `next_start_line`을 사용하세요. 같은 줄 범위의 바이트 페이지는 그대로 이어 붙이고, 줄 범위 사이에서는 이어 붙일 때 줄바꿈을 넣습니다. `next_text_offset`으로 이어받을 때는 `start_line`과 `max_lines`를 유지하고, 다음 줄 범위로 넘어갈 때는 `start_line`을 `next_start_line`으로 설정하고 `text_offset`을 0으로 되돌립니다. 줄바꿈은 이전과 같이 정규화되며 끝의 줄바꿈은 제거됩니다. 이어받을 때는 반환된 `revision`을 `expected_revision`으로 지정하세요. 그 사이 파일이 바뀌었다면 처음부터 다시 가져오세요. `id`에는 `search_skills`가 반환한 스킬 ID를 지정합니다. 게시된 스킬 이름과 정확히 일치하고 유일하면 이름도 받으며, 여러 개와 일치하는 이름에는 후보 ID를 반환합니다. `read_skill_file`의 첫 호출에는 `id`와 `path`만 필요하며, 결과가 잘리면 `expected_revision`이 이미 들어 있는 `next` 객체를 그대로 전달해 이어 갑니다.
 
 MCP는 읽기 전용입니다. 비공개 스킬, frontmatter가 잘못된 스킬, 누락된 스킬의 내용은 반환할 수 없습니다. 참조 파일을 실행하는 기능도 없습니다. 본문은 2 MiB, 참조 텍스트는 1 MiB로 제한됩니다.
 

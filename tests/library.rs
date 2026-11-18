@@ -955,6 +955,17 @@ fn literal_unicode_search_filters_and_path_boundaries() {
         )
         .unwrap();
     assert_eq!(duplicate.total, 2);
+    // 同名が複数あるときは名前では解決せず、候補のIDを返す。実IDはそのまま通る。
+    let duplicate_name = library.detail(&second, false).unwrap().summary.name;
+    let error = library
+        .resolve_published_key(&duplicate_name)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Ambiguous") && error.contains(&second),
+        "{error}"
+    );
+    assert_eq!(library.resolve_published_key(&second).unwrap(), second);
     library
         .create_skill("local", "alpha/child", &skill("nested", "yes"))
         .unwrap();

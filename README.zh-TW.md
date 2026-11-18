@@ -85,7 +85,7 @@ http://127.0.0.1:7465/mcp
 | `load_skill` | 指定 ID 以取得 `SKILL.md` 的內容與參考檔案清單 |
 | `read_skill_file` | 依行取得技能下的 UTF-8 文字 |
 
-對於 `load_skill`，請持續傳入接續引數直到 `next` 為 null，將內容串接起來，然後遵循其中的指示。清單通常每頁 100 筆，路徑總計最多 8 KiB，但如果單一路徑超過 8 KiB，則該路徑會單獨傳回，因此回應會變大。請一次取得一個技能及其所需的參考檔案。對於參考檔案，請使用 `read_skill_file`，以 `next_text_offset` 取得所需行範圍直到結尾，只有在需要更多行時才使用 `next_start_line`。同一行範圍的位元組分頁會原樣串接，而在串接不同行範圍時會插入換行。使用 `next_text_offset` 接續時，請保持 `start_line` 與 `max_lines` 不變；若要取得下一個行範圍，請將 `start_line` 設為 `next_start_line`，並將 `text_offset` 重設為 0。換行符號會如先前一樣被正規化，且結尾的換行會被移除。接續時，請將傳回的 `revision` 指定為 `expected_revision`。如果檔案在這期間已變更，請從頭重新取得。
+對於 `load_skill`，請持續傳入接續引數直到 `next` 為 null，將內容串接起來，然後遵循其中的指示。清單通常每頁 100 筆，路徑總計最多 8 KiB，但如果單一路徑超過 8 KiB，則該路徑會單獨傳回，因此回應會變大。請一次取得一個技能及其所需的參考檔案。對於參考檔案，請使用 `read_skill_file`，以 `next_text_offset` 取得所需行範圍直到結尾，只有在需要更多行時才使用 `next_start_line`。同一行範圍的位元組分頁會原樣串接，而在串接不同行範圍時會插入換行。使用 `next_text_offset` 接續時，請保持 `start_line` 與 `max_lines` 不變；若要取得下一個行範圍，請將 `start_line` 設為 `next_start_line`，並將 `text_offset` 重設為 0。換行符號會如先前一樣被正規化，且結尾的換行會被移除。接續時，請將傳回的 `revision` 指定為 `expected_revision`。如果檔案在這期間已變更，請從頭重新取得。 `id` 為 `search_skills` 傳回的技能 ID；若與已發布技能的名稱完全相符且唯一，也可使用名稱，名稱有多個相符時會傳回候選 ID。首次呼叫 `read_skill_file` 只需 `id` 與 `path`；結果被截斷時，請直接傳入已包含 `expected_revision` 的 `next` 物件繼續。
 
 MCP 是唯讀的。它無法傳回未公開技能、frontmatter 無效的技能或遺失技能的內容。也沒有執行參考檔案的功能。內容上限為 2 MiB，參考文字上限為 1 MiB。
 

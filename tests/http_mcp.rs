@@ -304,6 +304,33 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
 
     let file = rpc(&client, &base_url, 6, "tools/call", json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt","start_line":2,"max_lines":1}})).await;
     assert_eq!(file["structuredContent"]["text"], "second");
+    // 名前だけの指定でも、一意なら実IDへ解決して同じ結果を返す。
+    let by_name = rpc(
+        &client,
+        &base_url,
+        90,
+        "tools/call",
+        json!({"name":"load_skill","arguments":{"id":"rust-example"}}),
+    )
+    .await;
+    assert_ne!(by_name["isError"], true);
+    assert_eq!(by_name["structuredContent"]["id"], id);
+    let file_by_name = rpc(&client, &base_url, 91, "tools/call", json!({"name":"read_skill_file","arguments":{"id":"rust-example","path":"references/help.txt","start_line":2,"max_lines":1}})).await;
+    assert_eq!(file_by_name["structuredContent"]["text"], "second");
+    let unknown = rpc(
+        &client,
+        &base_url,
+        92,
+        "tools/call",
+        json!({"name":"load_skill","arguments":{"id":"no-such-skill"}}),
+    )
+    .await;
+    assert_eq!(unknown["isError"], true);
+    let message = unknown["structuredContent"]["error"].as_str().unwrap();
+    assert!(
+        message.contains("Skill not found") && message.contains("search_skills"),
+        "{message}"
+    );
     let large_content = format!(
         "---\nname: rust-example\ndescription: Build useful Rust tools\n---\n{}",
         "日本語".repeat(4000)
@@ -456,6 +483,31 @@ async fn browser_management_and_mcp_share_publication_and_live_files() {
         ),
         format!("{long_line}\nlast")
     );
+    // revision なしの継続は拒否し、エラー文が正しい呼び方を示す。
+    let no_revision = rpc(&client, &base_url, 93, "tools/call", json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt","start_line":2,"max_lines":1,"text_offset":3}})).await;
+    assert_eq!(no_revision["isError"], true);
+    let message = no_revision["structuredContent"]["error"].as_str().unwrap();
+    assert!(
+        message.contains("expected_revision") && message.contains("next"),
+        "{message}"
+    );
+    // 最初の応答の next をそのまま渡せば継続できる。
+    let first_page = rpc(&client, &base_url, 94, "tools/call", json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt","start_line":2,"max_lines":1}})).await;
+    let next = first_page["structuredContent"]["next"].clone();
+    assert!(next["text_offset"].as_u64().unwrap() > 0);
+    assert_eq!(
+        next["expected_revision"],
+        first_page["structuredContent"]["revision"]
+    );
+    let second_page = rpc(
+        &client,
+        &base_url,
+        95,
+        "tools/call",
+        json!({"name":"read_skill_file","arguments":next}),
+    )
+    .await;
+    assert_ne!(second_page["isError"], true);
     let bad_file = rpc(&client, &base_url, 65, "tools/call", json!({"name":"read_skill_file","arguments":{"id":id,"path":"references/help.txt","start_line":2,"max_lines":1,"text_offset":1,"expected_revision":revision}})).await;
     assert_eq!(bad_file["isError"], true);
     fs::write(

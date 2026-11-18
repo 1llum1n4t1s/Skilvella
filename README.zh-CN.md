@@ -85,7 +85,7 @@ http://127.0.0.1:7465/mcp
 | `load_skill` | 通过指定 ID 获取 `SKILL.md` 内容和参考文件列表 |
 | `read_skill_file` | 按行获取技能下的 UTF-8 文本 |
 
-对于 `load_skill`，请持续传入续取参数，直到 `next` 为 null，拼接内容后再按照其中的指示操作。列表通常每页 100 项，路径总量最多 8 KiB，但如果单个路径超过 8 KiB，则该路径会单独返回，因此响应会变大。请逐个获取技能及其所需的参考文件。对于参考文件，请使用 `read_skill_file` 获取所需行范围直到末尾的 `next_text_offset`，仅在需要更多行时才使用 `next_start_line`。同一行范围的字节分页按原样拼接，拼接不同行范围时会在其间插入换行。使用 `next_text_offset` 继续时，请保持 `start_line` 和 `max_lines` 不变；获取下一个行范围时，将 `start_line` 设为 `next_start_line`，并将 `text_offset` 重置为 0。换行符会像之前一样被规范化，末尾的换行符会被去掉。续取时，请将返回的 `revision` 指定为 `expected_revision`。如果文件在此期间发生了变化，请从头重新获取。
+对于 `load_skill`，请持续传入续取参数，直到 `next` 为 null，拼接内容后再按照其中的指示操作。列表通常每页 100 项，路径总量最多 8 KiB，但如果单个路径超过 8 KiB，则该路径会单独返回，因此响应会变大。请逐个获取技能及其所需的参考文件。对于参考文件，请使用 `read_skill_file` 获取所需行范围直到末尾的 `next_text_offset`，仅在需要更多行时才使用 `next_start_line`。同一行范围的字节分页按原样拼接，拼接不同行范围时会在其间插入换行。使用 `next_text_offset` 继续时，请保持 `start_line` 和 `max_lines` 不变；获取下一个行范围时，将 `start_line` 设为 `next_start_line`，并将 `text_offset` 重置为 0。换行符会像之前一样被规范化，末尾的换行符会被去掉。续取时，请将返回的 `revision` 指定为 `expected_revision`。如果文件在此期间发生了变化，请从头重新获取。 `id` 为 `search_skills` 返回的技能 ID；若与已发布技能的名称完全一致且唯一，也可使用名称，名称有多个匹配时会返回候选 ID。首次调用 `read_skill_file` 只需 `id` 和 `path`；结果被截断时，请直接传入已包含 `expected_revision` 的 `next` 对象继续。
 
 MCP 是只读的。它无法返回未公开的技能、frontmatter 无效的技能或缺失的技能的内容。也没有执行参考文件的功能。内容上限为 2 MiB，参考文本上限为 1 MiB。
 

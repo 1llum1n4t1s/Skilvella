@@ -3356,6 +3356,37 @@ impl Library {
             .and_then(|mut st| st.query_row([id], |_| Ok(())))
             .context("Skill not found")
     }
+    /// MCP入力の `id` を実IDへ解決する。実IDが一致すればそのまま使い、なければ公開中の
+    /// スキル名（完全一致）が1件のときだけそのIDを返す。複数一致は候補を示して拒否する。
+    /// 解決後の読み取りは通常のIDと同じ公開・パス検査を通る。
+    pub fn resolve_published_key(&self, key: &str) -> Result<String> {
+        let c = self.connection()?;
+        if c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM skills WHERE id=?1)",
+            [key],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Ok(key.to_owned());
+        }
+        let mut st = c.prepare("SELECT k.id,k.source,k.relative_path FROM skills k JOIN sources s ON s.alias=k.source WHERE s.active=1 AND k.published=1 AND k.missing=0 AND k.error IS NULL AND k.name=?1 AND k.name<>'' ORDER BY k.source,k.relative_path")?;
+        let rows: Vec<(String, String, String)> = st
+            .query_map([key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        match rows.as_slice() {
+            [] => bail!(
+                "Skill not found: no published skill has id or name '{key}'. Call search_skills and pass the returned id"
+            ),
+            [(id, _, _)] => Ok(id.clone()),
+            many => bail!(
+                "Ambiguous skill name '{key}': pass one of these ids as id: {}",
+                many.iter()
+                    .take(10)
+                    .map(|(id, source, path)| format!("{id} ({source}/{path})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
     fn locate(&self, c: &Connection, id: &str) -> Result<(PathBuf, PathBuf)> {
         // 一括操作・不在削除のループから呼ばれるため prepare_cached で再利用する。
         // 準備の失敗も従来の query_row と同じく "Skill not found" の文脈で返す。
