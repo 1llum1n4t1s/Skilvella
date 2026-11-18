@@ -271,5 +271,17 @@
   "クライアント": "Client",
   "生成先": "Zielordner",
   "リンク先": "Linkort",
-  "件数": "Einträge"
+  "件数": "Einträge",
+  "フォルダーの場所を変更": "Ordnerort ändern",
+  "新しい場所（絶対パス）": "Neuer Ort (absoluter Pfad)",
+  "フォルダーを別の場所へ移動した場合に、登録の場所だけを付け替えます。ファイルは移動しません。同じフォルダーとして、公開状態・使い方・履歴を引き継ぎます。": "Verwenden Sie dies, wenn Sie den Ordner verschoben haben. Nur der registrierte Ort wird aktualisiert; Dateien werden nicht verschoben. Veröffentlichung, Verwendung und Verlauf bleiben als derselbe Ordner erhalten.",
+  "場所を変更": "Ort ändern",
+  "このフォルダーを読み取れません。別の場所へ移動した場合は「フォルダーの場所を変更」で新しい場所を指定し、不要な場合は「管理から外す」を選んでください。": "Dieser Ordner kann nicht gelesen werden. Wenn Sie ihn verschoben haben, geben Sie unter „Ordnerort ändern“ den neuen Ort an. Wenn Sie ihn nicht mehr brauchen, wählen Sie „Verwaltung beenden“.",
+  "フォルダーの場所を変更しました。": "Der Ordnerort wurde geändert.",
+  "場所を変更できませんでした: {detail}。以前の設定は保持されています。": "Der Ort konnte nicht geändert werden: {detail}. Vorherige Einstellungen bleiben erhalten.",
+  "読み取れないフォルダーがあります。場所を変更するか、管理から外すと同期を再開できます:": "Einige Ordner können nicht gelesen werden. Ändern Sie ihren Ort oder beenden Sie ihre Verwaltung, um die Synchronisierung fortzusetzen:",
+  "この場所は「{name}」として管理中です。移動先に使うには、先に「{name}」を管理から外してください。": "Dieser Ort wird bereits als „{name}“ verwaltet. Um ihn als neuen Ort zu verwenden, beenden Sie zuerst die Verwaltung von „{name}“.",
+  "フォルダーを読み取れません": "Ordner kann nicht gelesen werden",
+  "フォルダーを移動しただけの場合は、公開状態・使い方・履歴を引き継げる「フォルダーの場所を変更」を使ってください。ここで切り替えると、別のフォルダーとして扱います。": "Wenn Sie den Ordner nur verschoben haben, verwenden Sie „Ordnerort ändern“, damit Veröffentlichung, Verwendung und Verlauf erhalten bleiben. Ein Wechsel hier behandelt ihn als anderen Ordner.",
+  "フォルダー自体を読み取れない場合は、そのフォルダーの画面で場所を変更するか、管理から外してください:": "Wenn der Ordner selbst nicht gelesen werden kann, ändern Sie auf der Seite des Ordners seinen Ort oder beenden Sie die Verwaltung:"
 }

@@ -95,6 +95,7 @@ pub fn router() -> Router<AppState> {
         .route("/sources/add", post(add_source))
         .route("/sources/name", post(set_source_name))
         .route("/sources/remove", post(remove_source))
+        .route("/sources/location", post(relocate_source))
         .route("/sources/directory", post(set_directory))
         .route("/dialog/folder", post(pick_folder))
         .route("/scan", post(scan))
@@ -130,6 +131,24 @@ struct SettingsPage {
     hidden_count: String,
     /// 状態の表に1行以上あるか（有効またはエラーありのクライアントがあるか）。
     has_status: bool,
+    /// 読み取れないフォルダー。同期の停止の警告から、対処できるフォルダー画面へ案内する。
+    unavailable_folders: Vec<UnavailableFolder>,
+}
+/// 同期停止の警告から案内する、読み取れないフォルダー1件。
+struct UnavailableFolder {
+    url: String,
+    name: String,
+}
+/// 走査時に保存した印から、読み取れないフォルダーを集める（ファイルシステムは調べない）。
+fn unavailable_folders(sources: &[Source]) -> Vec<UnavailableFolder> {
+    sources
+        .iter()
+        .filter(|source| source.unavailable)
+        .map(|source| UnavailableFolder {
+            url: folder_url(&source.alias),
+            name: source.display_name.clone(),
+        })
+        .collect()
 }
 /// 設定画面の同期先1件分。パスは表示用に整形済み。
 struct ClientSyncView {
@@ -160,7 +179,7 @@ async fn settings(Extension(locale): Extension<Locale>, State(state): State<AppS
     let result = state
         .run(|lib| {
             let detected = lib.detected_clients()?;
-            SkillClient::ALL
+            let clients = SkillClient::ALL
                 .into_iter()
                 .map(|client| {
                     let settings = lib.client_settings(client)?;
@@ -174,15 +193,17 @@ async fn settings(Extension(locale): Extension<Locale>, State(state): State<AppS
                         settings,
                     })
                 })
-                .collect::<anyhow::Result<Vec<_>>>()
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok((clients, unavailable_folders(&lib.sources()?)))
         })
         .await;
     // Libraryとは別のJSONから読む。読めない場合も既定値（ON）で表示する。
     let auto_update = crate::update::auto::load_settings(state.library.data_dir()).auto_update;
     match result {
-        Ok(clients) => render(
+        Ok((clients, unavailable_folders)) => render(
             locale,
             SettingsPage {
+                unavailable_folders,
                 locale,
                 csrf: state.csrf.to_string(),
                 version: env!("CARGO_PKG_VERSION"),
@@ -721,7 +742,7 @@ impl Notice {
             "skill-created" => {
                 "スキルを作成しました。公開状態は一覧または管理情報で確認・変更できます。"
             }
-            "scan" | "directory-saved" | "folder-added" => {
+            "scan" | "directory-saved" | "folder-added" | "folder-relocated" => {
                 let summary = locale.format(
                     "スキャン完了: {count}件を登録、エラー{errors}件、見つからないスキル{missing}件。",
                     &[("count", &self.indexed.to_string()), ("errors", &self.errors.to_string()), ("missing", &self.missing.to_string())],
@@ -729,6 +750,7 @@ impl Notice {
                 let prefix = match self.message.as_str() {
                     "directory-saved" => locale.text("管理対象フォルダーの設定を保存しました。"),
                     "folder-added" => locale.text("フォルダーを追加しました。"),
+                    "folder-relocated" => locale.text("フォルダーの場所を変更しました。"),
                     _ => return summary,
                 };
                 let separator = if locale.language() == "ja" { "" } else { " " };
@@ -795,6 +817,11 @@ struct IndexPage {
     /// 既定フォルダーの場所を変更するフォームの値と、失敗後に開いておくか。
     directory_path: String,
     directory_editing: bool,
+    /// フォルダーの場所を変更するフォームの値と、失敗後に開いておくか。
+    relocate_path: String,
+    relocate_editing: bool,
+    /// 読み取れないフォルダー（同期停止の警告の案内用）。
+    unavailable_folders: Vec<UnavailableFolder>,
     codex: CodexSyncSettings,
     message: String,
     /// 失敗の通知は警告として表示する。
@@ -946,6 +973,7 @@ fn repository_page_url(selection: &RepositorySelection, query: &SearchQuery) -> 
 struct LibraryForms {
     add_path: String,
     directory_draft: Option<String>,
+    relocate_draft: Option<String>,
 }
 async fn index(
     Extension(locale): Extension<Locale>,
@@ -1066,6 +1094,10 @@ async fn library_page(
                 })
                 .collect();
             let total = sources.iter().map(|s| s.skill_count).sum();
+            let relocate_editing = forms.relocate_draft.is_some();
+            // 古い場所は入力の助けにならないため、失敗後の入力値だけを戻す。
+            let relocate_path = forms.relocate_draft.unwrap_or_default();
+            let unavailable_folders = unavailable_folders(&sources);
             let directory_editing = forms.directory_draft.is_some();
             let directory_path = forms
                 .directory_draft
@@ -1094,6 +1126,9 @@ async fn library_page(
                     add_path: forms.add_path,
                     directory_path,
                     directory_editing,
+                    relocate_path,
+                    relocate_editing,
+                    unavailable_folders,
                     codex,
                     message,
                     failed,
@@ -1219,6 +1254,10 @@ fn folder_error_text(locale: Locale, fallback: &str, error: anyhow::Error) -> St
             "「{name}」（{path}）と親子関係にあるため追加できません。同じスキルを二重に読み込まないよう、どちらか一方だけを管理してください。",
             &[("name", name), ("path", &display_path(path))],
         ),
+        Some(FolderError::RelocationTargetManaged { name }) => locale.format(
+            "この場所は「{name}」として管理中です。移動先に使うには、先に「{name}」を管理から外してください。",
+            &[("name", name)],
+        ),
         Some(FolderError::OverlapsData) => locale
             .text("Skilvellaのデータフォルダーと重なるフォルダーは追加できません。")
             .to_owned(),
@@ -1290,6 +1329,68 @@ async fn remove_source(
             redirect("/", "source-removed")
         }
         Err(e) => failure(locale, e),
+    }
+}
+#[derive(Deserialize)]
+struct LocationForm {
+    csrf: String,
+    alias: String,
+    #[serde(default)]
+    path: String,
+}
+/// 管理中フォルダーの登録の場所だけを付け替える（ファイルは移動しない）。
+///
+/// 識別子を保つため、公開状態・使い方・履歴は引き継がれる。失敗時はフォルダー画面へ戻し、
+/// 入力した場所を保持する。
+async fn relocate_source(
+    Extension(locale): Extension<Locale>,
+    State(state): State<AppState>,
+    Form(form): Form<LocationForm>,
+) -> Response {
+    if let Some(response) = csrf_error(locale, &state, &form.csrf) {
+        return response;
+    }
+    let path = form.path.trim().to_owned();
+    let alias = form.alias.clone();
+    let result = if path.is_empty() {
+        Err(anyhow::anyhow!(
+            locale.text("フォルダーを選んでください。").to_owned()
+        ))
+    } else {
+        state
+            .run_mut(move |lib| lib.relocate_source(&alias, std::path::Path::new(&path)))
+            .await
+    };
+    match result {
+        Ok(report) => {
+            state.rescan.notify_one();
+            redirect(
+                &folder_url(&form.alias),
+                &scan_notice("folder-relocated", report),
+            )
+        }
+        Err(error) => {
+            library_page(
+                locale,
+                &state,
+                SearchQuery {
+                    source: form.alias,
+                    ..Default::default()
+                },
+                RepositorySelection::default(),
+                folder_error_text(
+                    locale,
+                    "場所を変更できませんでした: {detail}。以前の設定は保持されています。",
+                    error,
+                ),
+                true,
+                LibraryForms {
+                    relocate_draft: Some(form.path),
+                    ..Default::default()
+                },
+            )
+            .await
+        }
     }
 }
 /// 「参照…」ボタンから、OS標準のフォルダー選択ダイアログを開く。
@@ -1623,6 +1724,8 @@ struct DetailPage {
     commands: Vec<(String, String)>,
     /// 同期先が1つ以上有効か（コマンドがない理由の案内に使う）。
     clients_enabled: bool,
+    /// 読み取れないフォルダー（同期停止の警告の案内用）。
+    unavailable_folders: Vec<UnavailableFolder>,
     preview: String,
     tag_text: String,
     message: String,
@@ -1689,11 +1792,20 @@ async fn detail_page(
                 library_url,
                 commands,
                 !clients.is_empty(),
+                unavailable_folders(&lib.sources()?),
             ))
         })
         .await
     {
-        Ok((mut detail, source_label, codex, library_url, commands, clients_enabled)) => {
+        Ok((
+            mut detail,
+            source_label,
+            codex,
+            library_url,
+            commands,
+            clients_enabled,
+            unavailable_folders,
+        )) => {
             let dirty = draft.is_some();
             if let Some((content, revision)) = draft {
                 detail.content = content;
@@ -1712,6 +1824,7 @@ async fn detail_page(
                     detail,
                     commands,
                     clients_enabled,
+                    unavailable_folders,
                     preview,
                     tag_text,
                     message,

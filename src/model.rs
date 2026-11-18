@@ -108,6 +108,9 @@ pub struct Source {
     pub error_count: usize,
     pub native_discovery: bool,
     pub native_discovery_unknown: bool,
+    /// 最後の走査でフォルダーを開けなかった（移動・削除・切断など）。表示にだけ使い、
+    /// 描画のたびにファイルシステムを調べないよう、走査時に保存した値を読む。
+    pub unavailable: bool,
 }
 
 impl Source {
@@ -229,11 +232,17 @@ pub enum FolderError {
     Overlaps { name: String, path: String },
     /// Skilvellaのデータフォルダーと重なる。
     OverlapsData,
+    /// 場所の変更先が、別の有効なフォルダーとして管理中。先にそちらを管理から外す必要がある。
+    RelocationTargetManaged { name: String },
 }
 
 impl std::fmt::Display for FolderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RelocationTargetManaged { name } => write!(
+                f,
+                "The new location is already managed as \"{name}\"; remove that folder first"
+            ),
             Self::AlreadyRegistered { name } => {
                 write!(f, "This folder is already managed as \"{name}\"")
             }

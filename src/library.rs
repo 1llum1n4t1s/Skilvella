@@ -636,13 +636,29 @@ mod codex_index {
             let mut count = 0;
             if enabled {
                 // 接続できないソースを削除済みと判断しない。
-                let mut sources = c.prepare("SELECT path FROM sources WHERE active=1")?;
-                for source in sources.query_map([], |r| r.get::<_, String>(0))? {
-                    let source = PathBuf::from(source?);
-                    reject_links(&source)?;
-                    fs::read_dir(&source).with_context(|| {
-                        format!("Skill source unavailable: {}", source.display())
-                    })?;
+                // 全ソースを確認して「開けなかった」印を確定してから、従来どおり最初の失敗で止める
+                // （画面が再スキャンなしでも対処先を示せるように、同期の経路でも記録する）。
+                let listed = {
+                    let mut sources = c.prepare("SELECT alias,path FROM sources WHERE active=1")?;
+                    sources
+                        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                };
+                let mut unavailable = None;
+                for (alias, source) in listed {
+                    let source = PathBuf::from(source);
+                    let opened = reject_links(&source).and_then(|_| {
+                        fs::read_dir(&source).map(|_| ()).with_context(|| {
+                            format!("Skill source unavailable: {}", super::plain_path(&source))
+                        })
+                    });
+                    Self::record_source_availability(c, &alias, opened.is_err())?;
+                    if let Err(error) = opened {
+                        unavailable.get_or_insert(error);
+                    }
+                }
+                if let Some(error) = unavailable {
+                    return Err(error);
                 }
                 let finder = format!(
                     "---\nname: skilvella-search\ndescription: Search the published Skilvella skill library on demand.\n---\nUse the Skilvella MCP search_skills tool to find relevant skills, then load_skill with the returned id. Fetch references only with read_skill_file after loading.\n\n{MCP_ACCESS}"
@@ -2135,6 +2151,10 @@ use std::{
 const CONTENT_LIMIT: u64 = 2 * 1024 * 1024;
 const FILE_LIMIT: u64 = 1024 * 1024;
 const SOURCE_DISPLAY_NAME_PREFIX: &str = "source_display_name:";
+/// 最後の走査でフォルダー自体を開けなかったソースの印（`source_unavailable:<alias>`）。
+/// 走査の操作ロック内でだけ書き、画面の描画では読むだけにする（描画のたびに
+/// 切断中のドライブを調べて固まるのを避ける）。
+const SOURCE_UNAVAILABLE_PREFIX: &str = "source_unavailable:";
 
 struct WriteGuard<'a> {
     _file: fs::File,
@@ -2590,7 +2610,7 @@ impl Library {
         // 表示名も同じ一覧クエリで取り、取得元ごとにsettingsを読み直さない。
         let mut statement = c.prepare(
             "SELECT s.alias,s.path,coalesce(k.skill_count,0),coalesce(k.error_count,0),
-                    coalesce(d.value,s.alias)
+                    coalesce(d.value,s.alias),u.value IS NOT NULL
              FROM sources s
              LEFT JOIN (
                  SELECT source,sum(CASE WHEN missing=0 THEN 1 ELSE 0 END) AS skill_count,
@@ -2598,20 +2618,25 @@ impl Library {
                  FROM skills GROUP BY source
              ) k ON k.source=s.alias
              LEFT JOIN settings d ON d.key=(?1 || s.alias)
+             LEFT JOIN settings u ON u.key=(?2 || s.alias)
              WHERE s.active=1 ORDER BY s.alias",
         )?;
         let mut sources = statement
-            .query_map([SOURCE_DISPLAY_NAME_PREFIX], |r| {
-                Ok(Source {
-                    alias: r.get(0)?,
-                    display_name: r.get(4)?,
-                    path: r.get(1)?,
-                    skill_count: r.get::<_, i64>(2)? as usize,
-                    error_count: r.get::<_, i64>(3)? as usize,
-                    native_discovery: false,
-                    native_discovery_unknown: false,
-                })
-            })?
+            .query_map(
+                [SOURCE_DISPLAY_NAME_PREFIX, SOURCE_UNAVAILABLE_PREFIX],
+                |r| {
+                    Ok(Source {
+                        alias: r.get(0)?,
+                        display_name: r.get(4)?,
+                        path: r.get(1)?,
+                        skill_count: r.get::<_, i64>(2)? as usize,
+                        error_count: r.get::<_, i64>(3)? as usize,
+                        native_discovery: false,
+                        native_discovery_unknown: false,
+                        unavailable: r.get(5)?,
+                    })
+                },
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for source in &mut sources {
             match Self::is_native_root(c, Path::new(&source.path)) {
@@ -2624,6 +2649,23 @@ impl Library {
             }
         }
         Ok(sources)
+    }
+    /// 読み取れないフォルダーの印を、値が変わるときだけ書く（変化のない同期・走査でDBを更新しない）。
+    /// 走査と入口同期の両方が、開けたかどうかをここへ記録する。
+    fn record_source_availability(c: &Connection, alias: &str, unavailable: bool) -> Result<()> {
+        let key = format!("{SOURCE_UNAVAILABLE_PREFIX}{alias}");
+        let marked = c
+            .query_row("SELECT 1 FROM settings WHERE key=?1", [&key], |_| Ok(()))
+            .optional()?
+            .is_some();
+        match (unavailable, marked) {
+            (true, false) => put(c, &key, "1")?,
+            (false, true) => {
+                c.execute("DELETE FROM settings WHERE key=?1", [&key])?;
+            }
+            _ => {}
+        }
+        Ok(())
     }
     fn source_display_name_on(c: &Connection, alias: &str) -> Result<String> {
         Ok(c.query_row(
@@ -2688,13 +2730,10 @@ impl Library {
         self.register_source(None, path)
     }
 
-    fn register_source(
-        &self,
-        requested: Option<&str>,
-        path: &Path,
-    ) -> Result<(String, ScanReport)> {
-        let _guard = self.write_guard()?;
-        self.ensure_no_pending_migration()?;
+    /// 登録・場所の変更が共通で行う、フォルダー自体の検査（絶対パス・リンク拒否・存在・
+    /// ディレクトリ・UTF-8・データフォルダーとの重なり）。正規化したパスとその文字列を返す。
+    /// 別の管理中フォルダーとの重複・親子関係は、行の読み込みと同じ接続で各操作が検査する。
+    fn checked_source_root(&self, path: &Path) -> Result<(PathBuf, String)> {
         ensure!(path.is_absolute(), "Directory must be absolute");
         reject_links(path)?;
         let root = path
@@ -2709,6 +2748,17 @@ impl Library {
         if root.starts_with(data) || data.starts_with(&root) {
             return Err(FolderError::OverlapsData.into());
         }
+        Ok((root, root_text))
+    }
+
+    fn register_source(
+        &self,
+        requested: Option<&str>,
+        path: &Path,
+    ) -> Result<(String, ScanReport)> {
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
+        let (root, root_text) = self.checked_source_root(path)?;
         let mut c = self.connection()?;
         let tx = c.transaction()?;
         let rows = {
@@ -2723,17 +2773,11 @@ impl Library {
             .collect::<rusqlite::Result<Vec<_>>>()?
         };
         let root_key = path_key(&root);
-        // 保存済みのパスは表記揺れ（大文字小文字・\\?\ 接頭辞など）を正規化して比べる。
-        // 一時的に読めないフォルダーは保存値のまま比べる。
-        let canonical = |stored: &str| {
-            Path::new(stored)
-                .canonicalize()
-                .unwrap_or_else(|_| PathBuf::from(stored))
-        };
         let mut reuse = None;
         for (old_alias, old_path, active) in &rows {
-            let old_root = canonical(old_path);
-            let same = path_key(&old_root) == root_key;
+            let old_root = canonical_stored(old_path);
+            let conflict = source_conflict(&root, &root_key, &old_root);
+            let same = matches!(conflict, Some(SourceConflict::Same));
             let explicit = requested.is_some_and(|alias| alias == old_alias);
             if explicit {
                 ensure!(same, "Alias already belongs to another directory");
@@ -2750,7 +2794,7 @@ impl Library {
                 if requested.is_none() && reuse.is_none() {
                     reuse = Some(old_alias.clone());
                 }
-            } else if *active && (root.starts_with(&old_root) || old_root.starts_with(&root)) {
+            } else if *active && conflict.is_some() {
                 return Err(FolderError::Overlaps {
                     name: Self::source_display_name_on(&tx, old_alias)?,
                     path: old_root.to_string_lossy().into_owned(),
@@ -2795,12 +2839,78 @@ impl Library {
         tx.commit()?;
         Ok((alias, report))
     }
+    /// 管理中のフォルダーの登録の場所だけを、新しい場所へ付け替える。ファイルは移動しない。
+    ///
+    /// 利用者がフォルダーを別の場所へ移した後に、識別子を保ったまま登録を追従させる。
+    /// 識別子・公開状態・使い方・履歴・表示名はそのまま引き継ぎ、相対パスが同じスキルは
+    /// 同じIDのまま再走査で見つかる。検査は登録と同じ（`checked_source_root`）に加え、
+    /// 変更先が別の有効なフォルダーと同じ・親子関係なら拒否する（先に管理から外す）。
+    /// 既定フォルダーなら、既定フォルダーの設定も手動指定の新しい場所へ揃える。
+    pub fn relocate_source(&self, alias: &str, path: &Path) -> Result<ScanReport> {
+        let _guard = self.write_guard()?;
+        self.ensure_no_pending_migration()?;
+        let (root, root_text) = self.checked_source_root(path)?;
+        let mut c = self.connection()?;
+        let tx = c.transaction()?;
+        ensure!(
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sources WHERE alias=?1 AND active=1)",
+                [alias],
+                |r| r.get::<_, bool>(0),
+            )?,
+            "Source not found"
+        );
+        let rows = {
+            let mut stmt =
+                tx.prepare("SELECT alias,path FROM sources WHERE active=1 AND alias<>?1")?;
+            stmt.query_map([alias], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let root_key = path_key(&root);
+        // 登録と同じ判定（`source_conflict`）を、自分自身の旧行を除いた有効な行へ適用する。
+        for (other, stored) in rows {
+            let other_root = canonical_stored(&stored);
+            let Some(conflict) = source_conflict(&root, &root_key, &other_root) else {
+                continue;
+            };
+            let name = Self::source_display_name_on(&tx, &other)?;
+            return Err(match conflict {
+                SourceConflict::Same => FolderError::RelocationTargetManaged { name },
+                SourceConflict::Overlap => FolderError::Overlaps {
+                    name,
+                    path: other_root.to_string_lossy().into_owned(),
+                },
+            }
+            .into());
+        }
+        tx.execute(
+            "UPDATE sources SET path=?2 WHERE alias=?1 AND active=1",
+            params![alias, root_text],
+        )?;
+        let mut settings = Self::directory_on(&tx)?;
+        if settings.source_alias == alias {
+            // 既定フォルダーの設定が古い場所を指したままにならないよう、手動指定として揃える。
+            settings.mode = "custom".into();
+            settings.path = root_text.clone();
+            settings.custom_path = root_text;
+            Self::save_directory(&tx, &settings)?;
+        }
+        let report = self.scan_on(&tx)?;
+        tx.commit()?;
+        Ok(report)
+    }
     pub fn remove_source(&self, alias: &str) -> Result<()> {
         let _guard = self.write_guard()?;
         self.ensure_no_pending_migration()?;
         let mut c = self.connection()?;
         let tx = c.transaction()?;
         tx.execute("UPDATE sources SET active=0 WHERE alias=?1", [alias])?;
+        tx.execute(
+            "DELETE FROM settings WHERE key=?1",
+            [format!("{SOURCE_UNAVAILABLE_PREFIX}{alias}")],
+        )?;
         let mut settings = Self::directory_on(&tx)?;
         if settings.source_alias == alias {
             settings.mode = "disabled".into();
@@ -2852,6 +2962,12 @@ impl Library {
                     }
                 }
             }
+            // 走査が失敗したときだけ、フォルダー自体を開けないのか（移動・消失・切断）を確かめて印を保存する。
+            // 部分的な読み取り失敗（子フォルダーの権限など）は対象外にし、入口同期の停止条件
+            // （`export_codex` の `read_dir`）と同じ基準で判定する。
+            let unavailable =
+                result.is_err() && (reject_links(&root).is_err() || fs::read_dir(&root).is_err());
+            Self::record_source_availability(tx, &source.alias, unavailable)?;
             // 部分読取失敗でも、既知の生成入口の旧索引を原本として残さない。
             // ループ内の固定SQLは prepare_cached で接続ごとに1回だけ準備する（実行順・トランザクションは不変）。
             for marker in &owned_codex {
@@ -4286,6 +4402,43 @@ fn read_text(path: &Path, limit: u64) -> Result<String> {
     ensure!(text.len() as u64 <= limit, "File exceeds size limit");
     ensure!(!text.contains('\0'), "Binary files are not supported");
     Ok(text)
+}
+/// 保存済みのパスは表記揺れ（大文字小文字・\\?\ 接頭辞など）を正規化して比べる。
+/// 一時的に読めないフォルダーは保存値のまま比べる。
+fn canonical_stored(stored: &str) -> PathBuf {
+    Path::new(stored)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(stored))
+}
+/// 登録・場所の変更が共通で使う、別の管理中フォルダーとの関係。
+enum SourceConflict {
+    /// 同じフォルダー。
+    Same,
+    /// 親子関係（片方が他方の内側）。
+    Overlap,
+}
+fn source_conflict(root: &Path, root_key: &str, other: &Path) -> Option<SourceConflict> {
+    if path_key(other) == root_key {
+        Some(SourceConflict::Same)
+    } else if root.starts_with(other) || other.starts_with(root) {
+        Some(SourceConflict::Overlap)
+    } else {
+        None
+    }
+}
+/// エラー文に出すパス。Windowsの \\?\ 接頭辞を外す。
+fn plain_path(path: &Path) -> String {
+    let text = path.display().to_string();
+    #[cfg(windows)]
+    {
+        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{unc}");
+        }
+        if let Some(plain) = text.strip_prefix(r"\\?\") {
+            return plain.to_owned();
+        }
+    }
+    text
 }
 fn reject_links(path: &Path) -> Result<()> {
     let absolute = if path.is_absolute() {

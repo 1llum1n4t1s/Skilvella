@@ -122,3 +122,25 @@ async fn startup_offline_source_is_rewatched_after_explicit_rescan() {
     task.0.abort();
     let _ = (&mut task.0).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relocated_source_is_watched_at_its_new_location() {
+    let (state, source) = fixture();
+    let mut task = WatchTask(watch::start(state.clone()));
+    // 利用者が元のフォルダーを移動し、登録の場所だけを付け替える（ファイルは動かさない）。
+    let moved = source.with_file_name("source-moved");
+    fs::rename(&source, &moved).unwrap();
+    let alias = "fixture";
+    state
+        .run_mut(move |library| library.relocate_source(alias, &moved))
+        .await
+        .unwrap();
+    state.rescan.notify_one();
+    wait_for_index(&state, "initialwatchtoken", false, &task).await;
+    // 新しい場所の外部編集が、明示再スキャンなしの実ファイルイベントで反映される。
+    let moved = source.with_file_name("source-moved");
+    external_edit(&state, &moved, "relocatedeventtoken", &task).await;
+    assert!(!indexed(&state, "initialwatchtoken", false).await);
+    task.0.abort();
+    let _ = (&mut task.0).await;
+}

@@ -37,7 +37,7 @@
 {# 状態は有効またはエラーありのクライアントだけを表にする。狭い画面ではCSSで行ごとの縦並びにする。 #}
 {% if has_status %}<table class="client-status" data-client-status><thead><tr><th scope="col">{{ locale.text("クライアント") }}</th><th scope="col">{{ locale.text("生成先") }}</th><th scope="col">{{ locale.text("リンク先") }}</th><th scope="col">{{ locale.text("件数") }}</th></tr></thead><tbody>
 {% for client in clients %}{% if client.status %}<tr id="sync-{{ client.key }}"><th scope="row">{{ client.label }}</th><td data-label="{{ locale.text("生成先") }}"><code>{{ client.path }}</code></td><td data-label="{{ locale.text("リンク先") }}">{% if client.link_path.is_empty() %}<span class="muted">—</span>{% else %}<code>{{ client.link_path }}</code>{% endif %}</td><td data-label="{{ locale.text("件数") }}">{{ client.settings.exported }}</td></tr>
-{% if !client.settings.last_error.is_empty() %}<tr class="client-error"><td colspan="4"><div class="notice warning" role="status"><p>{{ locale.text("同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。") }}</p><p>{{ client.label }} · {{ locale.text("同期エラー:") }} {{ client.settings.last_error }}</p></div></td></tr>
+{% if !client.settings.last_error.is_empty() %}<tr class="client-error"><td colspan="4"><div class="notice warning" role="status"><p>{{ locale.text("同期が停止しています。保存した設定はこの同期先へまだ反映されていません。以前の候補や自動選択が残っている可能性があります。") }}</p><p>{{ client.label }} · {{ locale.text("同期エラー:") }} {{ client.settings.last_error }}</p>{% include "sync_unavailable.html" %}</div></td></tr>
 {% endif %}{% endif %}{% endfor %}</tbody></table>{% endif %}
 <p class="note">{{ locale.text("MCP公開とは別の設定です。正常な同期後に非公開スキルの入口を外します。MCPは非公開の本文を返しません。本文の原本は複製しません。") }}</p>
 </section>

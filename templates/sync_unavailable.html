@@ -1,0 +1,1 @@
+{% if !unavailable_folders.is_empty() %}<p class="sync-unavailable">{{ locale.text("読み取れないフォルダーがあります。場所を変更するか、管理から外すと同期を再開できます:") }} {% for f in unavailable_folders %}<a href="{{ f.url }}">{{ f.name }}</a>{% if !loop.last %} · {% endif %}{% endfor %}</p>{% endif %}

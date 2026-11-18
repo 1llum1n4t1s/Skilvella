@@ -271,5 +271,17 @@
   "クライアント": "Client",
   "生成先": "Destination",
   "リンク先": "Emplacement des liens",
-  "件数": "Entrées"
+  "件数": "Entrées",
+  "フォルダーの場所を変更": "Modifier l'emplacement du dossier",
+  "新しい場所（絶対パス）": "Nouvel emplacement (chemin absolu)",
+  "フォルダーを別の場所へ移動した場合に、登録の場所だけを付け替えます。ファイルは移動しません。同じフォルダーとして、公開状態・使い方・履歴を引き継ぎます。": "À utiliser si vous avez déplacé le dossier. Seul l'emplacement enregistré est mis à jour ; aucun fichier n'est déplacé. L'état de publication, l'utilisation et l'historique sont conservés pour le même dossier.",
+  "場所を変更": "Modifier l'emplacement",
+  "このフォルダーを読み取れません。別の場所へ移動した場合は「フォルダーの場所を変更」で新しい場所を指定し、不要な場合は「管理から外す」を選んでください。": "Ce dossier est illisible. Si vous l'avez déplacé, indiquez son nouvel emplacement dans « Modifier l'emplacement du dossier ». S'il est inutile, choisissez « Ne plus gérer ».",
+  "フォルダーの場所を変更しました。": "L'emplacement du dossier a été modifié.",
+  "場所を変更できませんでした: {detail}。以前の設定は保持されています。": "Impossible de modifier l'emplacement : {detail}. Les réglages précédents sont conservés.",
+  "読み取れないフォルダーがあります。場所を変更するか、管理から外すと同期を再開できます:": "Certains dossiers sont illisibles. Modifiez leur emplacement ou cessez de les gérer pour reprendre la synchronisation :",
+  "この場所は「{name}」として管理中です。移動先に使うには、先に「{name}」を管理から外してください。": "Cet emplacement est déjà géré sous le nom « {name} ». Pour l'utiliser comme nouvel emplacement, cessez d'abord de gérer « {name} ».",
+  "フォルダーを読み取れません": "Dossier illisible",
+  "フォルダーを移動しただけの場合は、公開状態・使い方・履歴を引き継げる「フォルダーの場所を変更」を使ってください。ここで切り替えると、別のフォルダーとして扱います。": "Si vous avez seulement déplacé le dossier, utilisez « Modifier l'emplacement du dossier » pour conserver l'état de publication, l'utilisation et l'historique. Changer ici le traite comme un autre dossier.",
+  "フォルダー自体を読み取れない場合は、そのフォルダーの画面で場所を変更するか、管理から外してください:": "Si le dossier lui-même est illisible, modifiez son emplacement ou cessez de le gérer depuis la page du dossier :"
 }
