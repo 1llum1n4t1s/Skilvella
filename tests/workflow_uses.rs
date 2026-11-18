@@ -1,8 +1,10 @@
 //! GitHub Actions の `uses:` はコミット SHA に固定する。
 //!
-//! タグ参照は署名 Action（`1llum1n4t1s/Sigilune@v1`、558324f）と
-//! `actions/checkout@v7.0.1`・`Swatinem/rust-cache@v2.9.3`（830769d）で繰り返された。
-//! 文書へ「SHA で指定する」と書いたあとも、検査がなければ次の `uses:` はタグのまま通る。
+//! タグ参照は署名 Action と `actions/checkout@v7.0.1`・`Swatinem/rust-cache@v2.9.3`（830769d）で
+//! 繰り返された。文書へ「SHA で指定する」と書いたあとも、検査がなければ次の `uses:` はタグのまま通る。
+//!
+//! 例外は自作の署名 Action `1llum1n4t1s/Sigilune@v1` の完全一致だけ。この移動タグは、Sigilune が
+//! その版の配信に成功した commit へだけ動かす運用で、第三者 Action は SHA 固定のまま。
 
 use std::{fs, path::Path};
 
@@ -30,21 +32,51 @@ fn repository_workflows_pin_actions_to_commit_shas() {
 }
 
 #[test]
-fn rejects_the_tag_refs_corrected_in_558324f_and_830769d() {
+fn rejects_the_tag_refs_corrected_in_830769d() {
     let past = "\
       - uses: actions/checkout@v7.0.1
       - uses: Swatinem/rust-cache@v2.9.3
-        uses: 1llum1n4t1s/Sigilune@v1
         # actions/checkout@v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 ";
     let errors = workflow_use_errors(".github/workflows/ci.yml", past);
-    assert_eq!(errors.len(), 3, "{errors:?}");
+    assert_eq!(errors.len(), 2, "{errors:?}");
     assert!(errors[0].contains(".github/workflows/ci.yml:1:"));
     assert!(errors[0].contains("actions/checkout@v7.0.1"));
     assert!(errors[0].contains("40-character commit SHA"));
     assert!(errors[1].contains("Swatinem/rust-cache@v2.9.3"));
-    assert!(errors[2].contains("1llum1n4t1s/Sigilune@v1"));
+}
+
+#[test]
+fn allows_only_the_exact_own_moving_tag_of_sigilune() {
+    let allowed = "\
+      - uses: 1llum1n4t1s/Sigilune@v1
+        uses: \"1llum1n4t1s/Sigilune@v1\" # 配信成功済みの移動タグ
+";
+    let errors = workflow_use_errors(".github/workflows/release.yml", allowed);
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let rejected = [
+        "1llum1n4t1s/Sigilune@main",
+        "1llum1n4t1s/Sigilune@v1.1",
+        "1llum1n4t1s/Sigilune@v1.1.4",
+        "1llum1n4t1s/Sigilune@v2",
+        "1llum1n4t1s/Sigilune@V1",
+        "1llum1n4t1s/Sigilune@v1-rc",
+        "1llum1n4t1s/Sigilune/sub@v1",
+        "1llum1n4t1s/Sigilune",
+        "someone-else/Sigilune@v1",
+        "1llum1n4t1s/Other@v1",
+        "actions/checkout@v1",
+        "Swatinem/rust-cache@v1",
+    ];
+    for reference in rejected {
+        let text = format!("      - uses: {reference}\n");
+        let errors = workflow_use_errors(".github/workflows/release.yml", &text);
+        assert_eq!(errors.len(), 1, "{reference} must be rejected: {errors:?}");
+        assert!(errors[0].contains(reference), "{errors:?}");
+        assert!(errors[0].contains("40-character commit SHA"), "{errors:?}");
+    }
 }
 
 fn workflow_files() -> Vec<std::path::PathBuf> {
@@ -92,7 +124,7 @@ fn workflow_use_errors(file: &str, text: &str) -> Vec<String> {
             continue;
         }
         errors.push(format!(
-            "{file}:{line_number}: `uses: {reference}` is a branch or tag. Pin a 40-character commit SHA, for example `uses: actions/checkout@<40-hex-sha> # vX.Y.Z`. Moving tags already shipped as actions/checkout@v7.0.1, Swatinem/rust-cache@v2.9.3, and 1llum1n4t1s/Sigilune@v1"
+            "{file}:{line_number}: `uses: {reference}` is a branch or tag. Pin a 40-character commit SHA, for example `uses: actions/checkout@<40-hex-sha> # vX.Y.Z`. Moving tags already shipped as actions/checkout@v7.0.1 and Swatinem/rust-cache@v2.9.3. Only the exact `1llum1n4t1s/Sigilune@v1` is allowed"
         ));
     }
     errors
@@ -107,8 +139,12 @@ fn uses_reference(line: &str) -> Option<&str> {
     (!reference.is_empty()).then_some(reference)
 }
 
+/// 自作の署名 Action だけは、配信が成功した commit にだけ動かす移動タグ `v1` で参照する。
+/// 完全一致だけを許し、`Sigilune@main`・`Sigilune@v1.1`・他者の `@v1` は許さない。
+const OWN_MOVING_TAG_ACTION: &str = "1llum1n4t1s/Sigilune@v1";
+
 fn is_commit_pinned(reference: &str) -> bool {
-    if reference.starts_with("./") {
+    if reference.starts_with("./") || reference == OWN_MOVING_TAG_ACTION {
         return true;
     }
     let Some((repository, revision)) = reference.rsplit_once('@') else {

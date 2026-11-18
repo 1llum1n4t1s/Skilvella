@@ -1,14 +1,14 @@
 name: Release
 
 # Skilvella の配布物（ZIP版・macOS版・Windows インストーラー）を GitHub Actions でビルド・検証・署名し、
-# Cloudflare R2 (https://skilvella.kagayoi.com) へ配信する。タグも GitHub Release も使わない。
+# Cloudflare R2 (https://skilvella.kagayoi.com) へ配信する。GitHub Release は使わない。
 # 配布の入口は R2 だけで、アプリ内更新も README の導線もここを読む。
 #
-# - 起動: release/<Cargo.toml の版> ブランチへの push（/vava が push すると始まる）。
-#   手動実行 (workflow_dispatch) は、同じ release/<版> ブランチを指定した再実行にだけ使う
-#   （R2 に同じ版があれば内容が同一のときだけ成功し、違えば上書きせず失敗する）。
+# - 起動: main のコミットに付けた軽量タグ v<Cargo.toml の版> の push（/vava がタグを push すると始まる）。
+#   手動実行 (workflow_dispatch) は、同じタグを指定した再実行にだけ使う（gh workflow run release.yml --ref v<版>。
+#   R2 に同じ版があれば内容が同一のときだけ成功し、違えば上書きせず失敗する）。
 #   skip_upload を付けると、ビルド・署名・検証だけ行い R2 へ配信しない（成果物は Actions に残る）。
-#   GitHub のブランチフィルタは glob（正規表現ではない）。release/1.1.9 のような名前に一致する。
+#   GitHub のタグフィルタは glob（正規表現ではない）。移動タグ v1 や v1.2.3-rc では起動しない。
 # - 構成: guard → (portable-windows / portable-macos / installer) → verify → update-test-macos → publish。
 #     portable-*  ZIP版・macOS版のアーカイブを作る。macOS は GitHub 提供の macos-latest (Apple Silicon)。Secrets も Environment も渡さない。
 #     installer   Windows Setup を署名して作る（Sigilune・Certum のクラウド鍵）。署名用 Secrets は梱包・署名の step だけ。
@@ -21,10 +21,10 @@ name: Release
 # - 更新回帰の起点: 公開中の portable/latest.json の版。無ければ（初回の移行版）::notice を出してスキップ、
 #   候補以上なら（再実行）スキップ。1.1.8 以前は GitHub しか見ないため、公開版を起点にできない。
 # - Secrets（SIGILUNE_EMAIL / SIGILUNE_TOTP_URI / CLOUDFLARE_API_TOKEN）は Environment "release" にだけ置く
-#   （release/* ブランチだけ許可）。
+#   （版タグ v[0-9]*.[0-9]*.[0-9]* だけ許可）。
 on:
   push:
-    branches: ['release/**']
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
     inputs:
       skip_upload:
@@ -42,7 +42,7 @@ concurrency:
 
 jobs:
   guard:
-    # release/<版> ブランチと Cargo.toml の版が一致しなければ止める（別の版を誤って配信しない）。
+    # タグ v<版> が Cargo.toml の版と一致し、main の祖先の軽量タグでなければ止める（別の版を誤って配信しない）。
     if: github.repository == '1llum1n4t1s/Skilvella'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -55,17 +55,28 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: ブランチと版を確認
+      - name: タグと版を確認
         id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           # [package] の version を直接読む（toolchain の導入前）。
           version="$(sed -n '/^\[package\]/,/^\[/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p}' Cargo.toml | head -n 1)"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "could not read the Cargo version: $version" >&2; exit 1; }
-          if [[ "$GITHUB_REF_TYPE" != "branch" || "$GITHUB_REF_NAME" != "release/$version" ]]; then
-            echo "ref $GITHUB_REF_NAME does not match release/$version" >&2
-            exit 1
-          fi
+          # タグであり、v<Cargo.toml の版> と一致すること（無条件）。
+          [[ "$GITHUB_REF_TYPE" == "tag" ]] || { echo "::error::タグ以外では配信しない: $GITHUB_REF"; exit 1; }
+          [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "::error::版タグの形ではない: $GITHUB_REF_NAME"; exit 1; }
+          [[ "$GITHUB_REF_NAME" == "v$version" ]] || { echo "::error::ref $GITHUB_REF_NAME does not match v$version"; exit 1; }
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          # 軽量タグで、いまもこの commit を指すこと。
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type+" "+.object.sha')" == "commit $GITHUB_SHA" ]] \
+            || { echo "::error::タグが $GITHUB_SHA を指す軽量タグではない"; exit 1; }
+          # 既定ブランチの祖先であること（depth=1 の checkout では判定できないので compare API を使う）。
+          default="$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)"
+          cmp="$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...$default?per_page=1" --jq '.status+" "+(.behind_by|tostring)')"
+          [[ "$cmp" == "ahead 0" || "$cmp" == "identical 0" ]] || { echo "::error::$default の祖先ではない ($cmp)"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   portable-windows:
@@ -223,7 +234,7 @@ jobs:
 
       - name: Sigilune を導入
         id: sigilune
-        uses: 1llum1n4t1s/Sigilune@b2142b4d1084ec2a5b0a18e83cea7e886406b389 # v1.1.4
+        uses: 1llum1n4t1s/Sigilune@v1
 
       - name: 梱包・署名
         env:

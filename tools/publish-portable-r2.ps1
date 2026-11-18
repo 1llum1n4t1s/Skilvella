@@ -5,8 +5,8 @@ ZIP版・macOS版（ポータブル版）の配布物を Cloudflare R2（skilvel
 portable/ 配下へ配信する。
 
 .DESCRIPTION
-release.yml（release/* ブランチの push）の publish ジョブから、Windows インストーラー側の
-publish-windows-installer-r2.ps1 と段階を交互に呼ぶ。GitHub Release もタグも使わない。
+release.yml（版タグ v<版> の push）の publish ジョブから、Windows インストーラー側の
+publish-windows-installer-r2.ps1 と段階を交互に呼ぶ。GitHub Release は使わない。
 
 置き場（バケット直下の portable/）:
   portable/<版>/Skilvella-windows-x86_64.zip      版付き・不変（immutable）
