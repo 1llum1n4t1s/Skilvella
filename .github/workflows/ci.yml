@@ -1,7 +1,8 @@
 name: CI
 on:
   push:
-    branches: ['**']
+    # main への push と pull_request だけで検証する（他のブランチは PR で確かめる）。配信は main の版タグ（release.yml）で行うため release/** は不要。
+    branches: [main]
   pull_request:
 
 permissions:

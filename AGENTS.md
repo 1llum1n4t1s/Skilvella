@@ -5,7 +5,7 @@ SkilvellaはRust製のローカルスキル管理アプリです。構造・デ�
 ## 開発と検証
 
 - `rust-toolchain.toml` に固定されたRustを使用し、依存解決は `Cargo.lock` に従ってください。OS別のビルド要件は [開発手順](docs/DEVELOPMENT.md#開発) を参照してください。
-- コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。[CI](.github/workflows/ci.yml) はWindows・Linux・macOS（Apple Silicon の `macos-latest`）のGitHub提供ランナーを使い、フォークからのプルリクエストでは検証ジョブをスキップします。CIは依存クレートのビルド結果をキャッシュし、同じブランチへ続けて push したときは古い run を取り消します（版タグの push では起動しません）。ワークフローの `uses:` はタグではなく commit SHA に固定し、更新時も SHA で指定してください（例外は自作の署名 Action `1llum1n4t1s/Sigilune@v1` の完全一致だけで、この移動タグは Sigilune が配信に成功した commit にだけ動かされます）。それ以外のタグやブランチのままの `uses:` は `tests/workflow_uses.rs` が失敗させます。
+- コード変更時は、CIと同じ次の確認をリポジトリルートで実行してください。[CI](.github/workflows/ci.yml) はWindows・Linux・macOS（Apple Silicon の `macos-latest`）のGitHub提供ランナーを使い、フォークからのプルリクエストでは検証ジョブをスキップします。CIは main への push とプルリクエストで起動し（他のブランチは PR で検証、版タグの push では起動しません）、依存クレートのビルド結果をキャッシュし、同じブランチへ続けて push したときは古い run を取り消します。ワークフローの `uses:` はタグではなく commit SHA に固定し、更新時も SHA で指定してください（例外は自作の署名 Action `1llum1n4t1s/Sigilune@v1` の完全一致だけで、この移動タグは Sigilune が配信に成功した commit にだけ動かされます）。それ以外のタグやブランチのままの `uses:` は `tests/workflow_uses.rs` が失敗させます。
 
 ```sh
 cargo fmt --all --check

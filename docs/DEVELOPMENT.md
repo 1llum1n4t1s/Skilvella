@@ -61,7 +61,7 @@ MCPの固定3ツールと検索拡張の制約は [採用した構成の理由�
 
 Host / Origin・CSRF・プレビュー・`Referrer-Policy` の制約は [重要な不変条件](../DESIGN.md#重要な不変条件)、監視と手動再スキャンの役割は [採用した構成の理由とトレードオフ](../DESIGN.md#採用した構成の理由とトレードオフ) を参照してください。
 
-GitHub ActionsはWindows / macOS / Linuxでformat・Clippy・テストを確認します。リリースビルド（`cargo build --release --locked`）は時間がかかるため、CIでは実行しません（配信タグの `release.yml` が配信前に行います）。フォークからのプルリクエストでは検証ジョブをスキップします。配布物のビルド・検証・署名・R2への配信は、main のコミットに付けた軽量タグ `v<版>` のpushで始まる `.github/workflows/release.yml` が行います（[配布物の作成と検証](#配布物の作成と検証)・[Windowsインストーラーの追加配布](#windowsインストーラーの追加配布)）。
+GitHub Actions（main への push とプルリクエストで起動）はWindows / macOS / Linuxでformat・Clippy・テストを確認します。リリースビルド（`cargo build --release --locked`）は時間がかかるため、CIでは実行しません（配信タグの `release.yml` が配信前に行います）。フォークからのプルリクエストでは検証ジョブをスキップします。配布物のビルド・検証・署名・R2への配信は、main のコミットに付けた軽量タグ `v<版>` のpushで始まる `.github/workflows/release.yml` が行います（[配布物の作成と検証](#配布物の作成と検証)・[Windowsインストーラーの追加配布](#windowsインストーラーの追加配布)）。
 
 ## 配布物の作成と検証
 
