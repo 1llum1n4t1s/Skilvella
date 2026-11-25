@@ -8,9 +8,9 @@ on:
 permissions:
   contents: read
 
-# 同じブランチへ続けて push したとき、古い run を取り消して最新の検証だけを走らせる（版タグの push では CI を起動しない）。
+# 同じ PR へ続けて push したとき、古い run を取り消す。main への push は run ごとに独立して完走する（版タグの push では CI を起動しない）。
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
