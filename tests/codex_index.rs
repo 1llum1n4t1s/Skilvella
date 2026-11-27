@@ -968,3 +968,233 @@ fn broken_policy_of_a_published_skill_fails_the_export() {
     assert!(library.sync_codex_entries().is_err());
     assert!(!library.codex_settings().unwrap().last_error.is_empty());
 }
+
+/// 入口のfrontmatter（先頭の `---` と閉じ `---` の間）をYAMLとして再解析する。
+fn entry_frontmatter(text: &str) -> saphyr::YamlOwned {
+    use saphyr::LoadableYamlNode;
+    let body = text.strip_prefix("---\n").expect("starts with frontmatter");
+    let end = body.find("\n---\n").expect("closed frontmatter");
+    let mut docs = saphyr::YamlOwned::load_from_str(&body[..end]).expect("valid YAML");
+    assert_eq!(docs.len(), 1);
+    docs.remove(0)
+}
+
+/// 原本のfrontmatterを差し替えて再走査し、公開・全クライアントへ再生成する。
+fn rewrite_source(base: &std::path::Path, library: &Library, frontmatter: &str) {
+    fs::write(
+        base.join("source/one/SKILL.md"),
+        format!("---\nname: original\ndescription: A useful skill\n{frontmatter}---\nPRIVATE ORIGINAL BODY\n"),
+    )
+    .unwrap();
+    library.scan().unwrap();
+    library.sync_codex_entries().unwrap();
+}
+
+fn claude_entry_text(base: &std::path::Path) -> String {
+    fs::read_to_string(base.join("home/.claude/skilvella/skills/original/SKILL.md")).unwrap()
+}
+
+#[test]
+fn claude_entry_inherits_only_allowed_frontmatter_and_other_clients_do_not() {
+    let (base, library, id) = setup();
+    let home = base.join("home");
+    let devin = skilvella::library::default_devin_config_dir(&home);
+    fs::create_dir_all(&devin).unwrap();
+    publish(&library, &id, true);
+    library.set_codex_policy(&id, false, true).unwrap();
+    library
+        .set_clients_enabled(&[
+            (SkillClient::Claude, true),
+            (SkillClient::Grok, true),
+            (SkillClient::Cursor, true),
+            (SkillClient::Copilot, true),
+            (SkillClient::Devin, true),
+        ])
+        .unwrap();
+    library.set_codex_enabled(true).unwrap();
+    rewrite_source(
+        &base,
+        &library,
+        "context: fork\nagent: Explore\nbackground: true\nmodel: opus\neffort: high\nargument-hint: \"[topic]\"\npaths:\n  - src/**\n  - docs/**\nallowed-tools: Read\nhooks:\n  PreToolUse: []\ndisable-model-invocation: false\nuser-invocable: false\n",
+    );
+
+    let claude = claude_entry_text(&base);
+    assert!(
+        claude.contains("context: \"fork\"\nagent: \"Explore\"\n"),
+        "{claude}"
+    );
+    assert!(!claude.contains("PRIVATE ORIGINAL BODY"));
+    assert!(claude.contains("`ARGUMENTS:`"));
+    // 自動選択の停止行は最後に残り、原本の `disable-model-invocation: false` は通さない。
+    assert!(
+        claude.contains("disable-model-invocation: true\n---\n"),
+        "{claude}"
+    );
+    for dropped in ["allowed-tools", "hooks", "user-invocable", "PreToolUse"] {
+        assert!(!claude.contains(dropped), "{dropped}: {claude}");
+    }
+    let doc = entry_frontmatter(&claude);
+    let get = |key: &str| doc.as_mapping_get(key);
+    assert_eq!(get("context").and_then(|v| v.as_str()), Some("fork"));
+    assert_eq!(get("agent").and_then(|v| v.as_str()), Some("Explore"));
+    assert_eq!(get("background").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(get("model").and_then(|v| v.as_str()), Some("opus"));
+    assert_eq!(get("effort").and_then(|v| v.as_str()), Some("high"));
+    assert_eq!(
+        get("argument-hint").and_then(|v| v.as_str()),
+        Some("[topic]")
+    );
+    let paths: Vec<_> = get("paths")
+        .and_then(|v| v.as_sequence())
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(paths, ["src/**", "docs/**"]);
+    assert_eq!(
+        get("disable-model-invocation").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(doc.as_mapping().unwrap().len(), 10);
+
+    // 他のクライアントの入口は従来どおり（引き継ぎなし）。
+    let others = [
+        home.join(".agents/skills/skilvella/original/SKILL.md"),
+        home.join(".grok/skills/skilvella/original/SKILL.md"),
+        home.join(".cursor/skills/skilvella/original/SKILL.md"),
+        home.join(".copilot/skilvella/skills/original/SKILL.md"),
+        devin.join("skilvella/skills/original/SKILL.md"),
+    ];
+    for path in others {
+        let text = fs::read_to_string(&path).unwrap();
+        for key in [
+            "context:",
+            "agent:",
+            "model:",
+            "effort:",
+            "paths:",
+            "argument-hint:",
+            "background:",
+        ] {
+            assert!(!text.contains(key), "{key} in {}: {text}", path.display());
+        }
+        assert!(!text.contains("PRIVATE ORIGINAL BODY"));
+        assert!(text.contains("`ARGUMENTS:`"));
+    }
+
+    // 原本から context を消すと、再生成で context と、それに依存する agent・background も消える。
+    rewrite_source(
+        &base,
+        &library,
+        "agent: Explore\nbackground: true\nmodel: opus\n",
+    );
+    let claude = claude_entry_text(&base);
+    assert!(
+        !claude.contains("context:")
+            && !claude.contains("agent:")
+            && !claude.contains("background:"),
+        "{claude}"
+    );
+    assert!(
+        claude.contains("model: \"opus\"\ndisable-model-invocation: true\n---\n"),
+        "{claude}"
+    );
+}
+
+#[test]
+fn claude_entry_drops_invalid_inherited_values_without_stopping_generation() {
+    let (base, library, id) = setup();
+    publish(&library, &id, true);
+    library.set_codex_policy(&id, false, true).unwrap();
+    library
+        .set_clients_enabled(&[(SkillClient::Claude, true)])
+        .unwrap();
+
+    // 型不正・入れ子・制御文字・許可外の値は、そのキーだけ捨てる。
+    rewrite_source(
+        &base,
+        &library,
+        "context: fork\nagent: \"a\\nb\"\nbackground: \"yes\"\nmodel:\n  x: 1\neffort: ultra\nargument-hint: \"[issue]\"\npaths:\n  - a\n  - x: 1\n",
+    );
+    let claude = claude_entry_text(&base);
+    let doc = entry_frontmatter(&claude);
+    let keys: Vec<_> = doc
+        .as_mapping()
+        .unwrap()
+        .keys()
+        .filter_map(|k| k.as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "name",
+            "description",
+            "context",
+            "argument-hint",
+            "disable-model-invocation"
+        ],
+        "{claude}"
+    );
+
+    // context が fork 以外なら agent・background も出さない。
+    rewrite_source(
+        &base,
+        &library,
+        "context: inline\nagent: Explore\nbackground: true\npaths: src/**\neffort: max\n",
+    );
+    let claude = claude_entry_text(&base);
+    assert!(
+        !claude.contains("context:")
+            && !claude.contains("agent:")
+            && !claude.contains("background:"),
+        "{claude}"
+    );
+    assert!(
+        claude
+            .contains("effort: \"max\"\npaths: \"src/**\"\ndisable-model-invocation: true\n---\n"),
+        "{claude}"
+    );
+    assert!(library.sync_summary().unwrap().last_error.is_empty());
+}
+
+#[test]
+fn claude_entry_inherits_with_automatic_selection_and_quotes_special_values() {
+    let (base, library, id) = setup();
+    publish(&library, &id, true);
+    // 自動選択＋コマンド候補（停止行なし）。
+    library.set_codex_policy(&id, true, true).unwrap();
+    library
+        .set_clients_enabled(&[(SkillClient::Claude, true)])
+        .unwrap();
+    rewrite_source(
+        &base,
+        &library,
+        "context: fork\nagent: Explore\nargument-hint: 'a: \"b\" # c'\n",
+    );
+    let claude = claude_entry_text(&base);
+    assert!(!claude.contains("disable-model-invocation"), "{claude}");
+    assert!(claude.contains("`ARGUMENTS:`") && claude.contains("it has none."));
+    let doc = entry_frontmatter(&claude);
+    assert_eq!(
+        doc.as_mapping_get("context").and_then(|v| v.as_str()),
+        Some("fork")
+    );
+    assert_eq!(
+        doc.as_mapping_get("agent").and_then(|v| v.as_str()),
+        Some("Explore")
+    );
+    assert_eq!(
+        doc.as_mapping_get("argument-hint").and_then(|v| v.as_str()),
+        Some("a: \"b\" # c")
+    );
+
+    // 非文字（U+FFFF）を含む値は捨てる。
+    rewrite_source(
+        &base,
+        &library,
+        "context: fork\nagent: \"\u{ffff}\"\nmodel: opus\n",
+    );
+    let claude = claude_entry_text(&base);
+    assert!(!claude.contains("agent:"), "{claude}");
+    assert!(claude.contains("model: \"opus\"\n---\n"), "{claude}");
+}

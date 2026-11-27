@@ -36,6 +36,8 @@ mod codex_index {
     struct Entry {
         name: String,
         description: String,
+        /// Claude Code の入口へ引き継ぐfrontmatter行（空、または改行終わりの行の連結）。
+        claude_frontmatter: String,
         source: String,
         relative_path: String,
     }
@@ -728,8 +730,14 @@ mod codex_index {
                         description
                     };
                     let description: String = description.chars().take(1024).collect();
+                    // 原本のfrontmatterの一部は Claude Code の入口だけへ引き継ぐ（他クライアントは不変）。
+                    let inherited = if client == SkillClient::Claude {
+                        entry.claude_frontmatter.as_str()
+                    } else {
+                        ""
+                    };
                     let text = format!(
-                        "---\nname: {}\ndescription: {}\n---\nUse Skilvella MCP load_skill with the fixed id {} before following this skill. Read references only through read_skill_file with this id.\n\n{MCP_ACCESS}",
+                        "---\nname: {}\ndescription: {}\n{inherited}---\nUse Skilvella MCP load_skill with the fixed id {} before following this skill. Read references only through read_skill_file with this id. If this invocation came with arguments (Claude Code appends them as a final `ARGUMENTS:` line), use them as the loaded skill's arguments: fill its argument placeholders, or treat them as its input if it has none.\n\n{MCP_ACCESS}",
                         serde_json::to_string(&name)?,
                         serde_json::to_string(&description)?,
                         serde_json::to_string(&id)?
@@ -902,6 +910,7 @@ mod codex_index {
             Ok(Some(Entry {
                 name,
                 description,
+                claude_frontmatter: claude_frontmatter(&content),
                 source,
                 relative_path,
             }))
@@ -1305,6 +1314,66 @@ mod codex_index {
             }
             None => text,
         }
+    }
+
+    /// 空でなく制御文字を含まない文字列だけを受け入れる。
+    fn plain_text(value: Option<&str>) -> Option<&str> {
+        value.filter(|v| {
+            !v.is_empty()
+                && !v
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '\u{fffe}' | '\u{ffff}'))
+        })
+    }
+
+    /// 原本のfrontmatterのうち、Claude Code の入口へ引き継ぐ許可リストの項目だけを
+    /// `key: <JSON>\n` の行で返す。値は解析結果を型確認して書き直し、原本の行は写さない。
+    /// `agent` と `background` は `context: fork` のときだけ出す。型不正・入れ子の値はそのキーだけ捨てる。
+    /// 解析できない原本は空文字を返す（入口の生成は止めない）。
+    fn claude_frontmatter(content: &str) -> String {
+        use saphyr::LoadableYamlNode;
+        let Ok(yaml) = super::frontmatter_yaml(content) else {
+            return String::new();
+        };
+        let Ok(docs) = saphyr::Yaml::load_from_str(&yaml) else {
+            return String::new();
+        };
+        let [doc] = docs.as_slice() else {
+            return String::new();
+        };
+        let get = |key: &str| doc.as_mapping_get(key);
+        let text = |key: &str| plain_text(get(key).and_then(|v| v.as_str()));
+        let fork = get("context").and_then(|v| v.as_str()) == Some("fork");
+        let quote = |value: Option<&str>| value.and_then(|v| serde_json::to_string(v).ok());
+        let paths = get("paths").and_then(|v| match v.as_sequence() {
+            Some(items) if !items.is_empty() => items
+                .iter()
+                .map(|item| plain_text(item.as_str()))
+                .collect::<Option<Vec<_>>>()
+                .and_then(|items| serde_json::to_string(&items).ok()),
+            Some(_) => None,
+            None => quote(plain_text(v.as_str())),
+        });
+        let effort =
+            text("effort").filter(|v| matches!(*v, "low" | "medium" | "high" | "xhigh" | "max"));
+        let background = get("background").and_then(|v| v.as_bool());
+        // 出力順は固定。値はすべて検証済みの文字列・真偽値・文字列配列のJSON表記。
+        let values = [
+            ("context", fork.then(|| "\"fork\"".to_owned())),
+            ("agent", quote(text("agent").filter(|_| fork))),
+            (
+                "background",
+                background.filter(|_| fork).map(|v| v.to_string()),
+            ),
+            ("model", quote(text("model"))),
+            ("effort", quote(effort)),
+            ("argument-hint", quote(text("argument-hint"))),
+            ("paths", paths),
+        ];
+        values
+            .into_iter()
+            .filter_map(|(key, value)| value.map(|v| format!("{key}: {v}\n")))
+            .collect()
     }
 
     /// リンク名として安全な1階層の名前だけを受け入れる（記録の改ざん対策）。
@@ -4319,7 +4388,8 @@ fn yaml_exceeds_nesting_limit(yaml: &str) -> bool {
     }
     false
 }
-fn parse(content: &str) -> Result<(String, String)> {
+/// `SKILL.md` 先頭のfrontmatter本文（区切り `---` は含まない）を切り出し、入れ子の深さを検査する。
+fn frontmatter_yaml(content: &str) -> Result<String> {
     let mut lines = content.lines();
     ensure!(
         lines.next().map(|s| s.trim_start_matches('\u{feff}')) == Some("---"),
@@ -4342,6 +4412,10 @@ fn parse(content: &str) -> Result<(String, String)> {
         !yaml_exceeds_nesting_limit(&yaml),
         "YAMLヘッダーの入れ子が深すぎます（上限{YAML_NESTING_LIMIT}段）。項目の階層を浅くしてください"
     );
+    Ok(yaml)
+}
+fn parse(content: &str) -> Result<(String, String)> {
+    let yaml = frontmatter_yaml(content)?;
     let docs = saphyr::Yaml::load_from_str(&yaml).map_err(|error| {
         // YAMLから除いた先頭の「---」を補い、SKILL.md上の位置を表示する。
         let line = error.marker().line() + 1;

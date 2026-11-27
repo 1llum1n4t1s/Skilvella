@@ -108,6 +108,8 @@ MCP公開だけでは、エージェントが同じスキルを標準探索し�
 
 Claude Codeは `~/.claude/skills` の直下1階層しか探索しないため、入口を探索外へ置いてスキルごとにリンクを張ります。`~/.claude/skills` に同名の既存スキルやリンクがある場合は上書きせず、同期エラーとして名前を表示します。旧版の案内に沿って `~/.claude/skills/<name>` から `~/.agents/skills/skilvella/<name>` へ手作業で張ったリンクは、同期対象の名前に限りClaude Code用の入口へ張り替えて管理を引き継ぎます。同期対象外の名前のリンクには触れません（Codexを無効にすると参照先がなくなります）。Claude Code向けの同期を無効にすると、Skilvellaが作成・引き継いだリンクだけを外します。`~/.claude/skills` 自体を管理フォルダーに登録している場合は同期しません。
 
+Claude Codeの入口だけは、原本の `SKILL.md` のfrontmatterの一部のキーも引き継ぎます。そのため、`context: fork`（と `agent: Explore` などの `agent`）を持つスキルを入口経由で呼んでも、サブエージェントとしてfork実行できます。引き継ぐのは `context`（`fork` のみ）、`agent` と `background`（`context: fork` のときだけ）、`model`、`effort`（`low`・`medium`・`high`・`xhigh`・`max`）、`argument-hint`、`paths` です。値は型を検査し、不正なキーだけを捨てます。権限やセッション全体を変えるキー（`allowed-tools`・`disallowed-tools`・`hooks`）のほか、`shell`・`arguments`・`when_to_use`・`license` なども引き継ぎません。`disable-model-invocation` と `user-invocable` はSkilvellaの「使い方」の設定に従います。他のクライアントの入口は変わりません。呼び出しに引数があれば、入口は読み込んだスキルへの入力として使うようエージェントに伝えます。
+
 GitHub Copilot（Copilot CLIは `~/.copilot/skills/<name>/SKILL.md` だけを探索）とDevinも同じリンク方式・同じ規則です。同名の既存エントリは上書きせず、Skilvellaが作成したリンクだけを外し、リンク置き場が管理フォルダーと重なる場合は同期しません。手作業で張ったCodex入口へのリンクを引き継ぐのはClaude Codeだけです。Copilot CLIで `disable-model-invocation` が効くかと、Devinの探索の深さは未確認です。
 
 Cursorは `~/.agents/skills` と `~/.claude/skills`、GitHub Copilotは `~/.agents/skills`、Devinは `~/.agents/skills` と `~/.copilot/skills` も読むため、複数のクライアントを有効にすると同じ入口が重複して表示されることがあります。
