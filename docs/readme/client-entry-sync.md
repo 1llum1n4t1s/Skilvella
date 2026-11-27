@@ -15,15 +15,12 @@ Part of [Automatic selection and command suggestions](invocation-entries.md).
 
 `<Devin config>` is `%APPDATA%\devin` on Windows and `~/.config/devin` on macOS and Linux (`XDG_CONFIG_HOME` is not used). GitHub Copilot always uses `~/.copilot` (`COPILOT_HOME` is ignored).
 
-## Claude Code
+## Linked entries
 
-Claude Code searches only one level directly under `~/.claude/skills`, so entries sit elsewhere and a link is made per skill. An existing skill or link with the same name there is not overwritten and is shown as a sync error. A hand-made link to the Codex entry (old guidance) is re-pointed and taken over, only for names that are sync targets. Disabling sync removes only links Skilvella created or took over. If `~/.claude/skills` is itself a managed folder, no sync is done. For carried-over keys, see [frontmatter carry-over](claude-frontmatter-carryover.md).
-
-## GitHub Copilot and Devin
-
-Same rules as Claude Code links: same-name entries are not overwritten, only links Skilvella created are removed, and the link folder must not be a managed folder. The Copilot CLI finds only `~/.copilot/skills/<name>/SKILL.md`. Whether it honors `disable-model-invocation`, and how deep Devin searches, are unconfirmed. The official docs do not say whether the Copilot CLI applies a skill's `user-invocable: false` (VS Code officially does), so with "Automatic selection only" `/name` may remain in the CLI.
+Claude Code, GitHub Copilot, and Devin get one link per skill; same-name entries are not overwritten and only links Skilvella created are removed. Details: [Linked client entries](client-link-entries.md).
 
 ## Overlapping discovery paths
 
 - Cursor reads `~/.agents/skills` and `~/.claude/skills`; GitHub Copilot reads `~/.agents/skills`; Devin reads `~/.agents/skills` and `~/.copilot/skills`. The same entry may appear more than once.
-- Grok also reads `~/.agents/skills` and `~/.claude/skills`, preferring `~/.grok/skills`, then `~/.agents/skills`, then `~/.claude/skills`. Codex entries stop automatic selection with `agents/openai.yaml`, so in Grok even "Command suggestions only" skills are selected automatically. Select Grok as a target if you use it. Likewise, `~/.agents/skills` is also read by Grok and by GitHub Copilot in VS Code, so if you select Codex as a target, the command of an "Automatic selection only" skill may be visible there (the Codex entry cannot hide it).
+- Grok also reads `~/.agents/skills` and `~/.claude/skills` (after `~/.grok/skills`). Codex entries stop automatic selection only via `agents/openai.yaml`, so Grok selects even "Command suggestions only" skills automatically; select Grok as a target if you use it.
+- With Codex selected, Grok and GitHub Copilot in VS Code may show the command of an "Automatic selection only" skill from `~/.agents/skills`.
