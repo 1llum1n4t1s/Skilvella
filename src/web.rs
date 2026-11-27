@@ -2041,14 +2041,20 @@ async fn create(
 }
 // 生HTMLを無効にし、スキル本文の画像読込とリンク遷移も防ぐ。
 fn markdown(content: &str) -> String {
-    use comrak::{Arena, Options, format_html, nodes::NodeValue, parse_document};
+    use comrak::{
+        Arena, Options, format_html,
+        nodes::{NodeEmph, NodeValue},
+        parse_document,
+    };
     let arena = Arena::new();
     let options = Options::default();
     let root = parse_document(&arena, content, &options);
     for node in root.descendants() {
         let mut data = node.data.borrow_mut();
         match &data.value {
-            NodeValue::Image(_) | NodeValue::Link(_) => data.value = NodeValue::Emph,
+            NodeValue::Image(_) | NodeValue::Link(_) => {
+                data.value = NodeValue::Emph(NodeEmph::default())
+            }
             _ => {}
         }
     }

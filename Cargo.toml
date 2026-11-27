@@ -42,7 +42,7 @@ required-features = ["release-update-test"]
 anyhow = "1"
 askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 axum = { version = "0.8.9", default-features = false, features = ["form", "http1", "json", "query", "tokio"] }
-comrak = { version = "0.59.0", default-features = false }
+comrak = { version = "1.0.0", default-features = false }
 notify = "8"
 rcgen = { version = "0.14", default-features = false, features = ["pem", "ring"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
