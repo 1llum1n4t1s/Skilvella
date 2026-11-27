@@ -68,6 +68,7 @@ const CLIENT_KEYS: &[(&str, &str)] = &[
     ),
     ("eligible", "対象:"),
     ("selected", "{count}件選択"),
+    ("bulk-tab-count", "一括変更（{count}）"),
     (
         "repositories-selected",
         "{groups}取得元選択 · 対象{count}件",

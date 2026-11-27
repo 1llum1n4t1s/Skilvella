@@ -1049,3 +1049,58 @@ async fn skill_pages_show_invocation_commands_matching_exported_entries() {
     assert!(!detail.contains("class=\"command\""));
     assert!(detail.contains("「自動選択のみ」のため、選んだ同期先にはコマンドがありません。"));
 }
+
+#[tokio::test]
+async fn library_tabs_switch_between_search_and_bulk_forms() {
+    let root = common::isolated_root("library-tabs");
+    let home = root.join("home");
+    let source = root.join("source");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(source.join("example")).unwrap();
+    fs::write(
+        source.join("example/SKILL.md"),
+        "---\nname: example\ndescription: Example skill\n---\nBody\n",
+    )
+    .unwrap();
+    let library = Library::open_for_user(&root.join("data"), &home, None).unwrap();
+    library.add_source("test", &source).unwrap();
+    let state = AppState::new(library);
+    let server = common::HttpServer::start(state).await;
+    let client = common::no_redirect_client();
+    let get = |path: &str| {
+        let url = format!("{}{path}", server.base);
+        let client = client.clone();
+        async move { client.get(url).send().await.unwrap().text().await.unwrap() }
+    };
+
+    let body = get("/").await;
+    assert_eq!(body.matches("role=\"tablist\"").count(), 1);
+    assert_eq!(body.matches("role=\"tab\"").count(), 2);
+    assert_eq!(body.matches("role=\"tabpanel\"").count(), 2);
+    // タブ操作はJavaScriptで出す。無効なときは両方の欄を従来どおり表示する。
+    assert!(body.contains("aria-label=\"表示する操作\" data-library-tablist hidden>"));
+    for (tab, panel) in [
+        ("search", "library-panel-search"),
+        ("bulk", "library-panel-bulk"),
+    ] {
+        let tab_id = format!("library-tab-{tab}");
+        assert!(body.contains(&format!("id=\"{tab_id}\"")));
+        assert!(body.contains(&format!("aria-controls=\"{panel}\"")));
+        assert!(body.contains(&format!("id=\"{panel}\" aria-labelledby=\"{tab_id}\"")));
+    }
+    assert!(
+        body.contains("id=\"library-tab-search\" class=\"library-tab\" aria-selected=\"true\"")
+    );
+    assert!(body.contains("id=\"library-tab-bulk\" class=\"library-tab\" aria-selected=\"false\""));
+    assert!(!body.contains("data-library-panel=\"search\" hidden"));
+    let search_panel = body.find("data-library-panel=\"search\"").unwrap();
+    let bulk_panel = body.find("data-library-panel=\"bulk\"").unwrap();
+    let search_form = body.find("class=\"search-panel\"").unwrap();
+    let bulk_form = body.find("id=\"bulk-form\"").unwrap();
+    assert!(search_panel < search_form && search_form < bulk_panel && bulk_panel < bulk_form);
+
+    // 該当するスキルがないときは一括変更がないため、タブも出さない。
+    let empty = get("/?q=no-such-skill-keyword").await;
+    assert!(empty.contains("class=\"search-panel\""));
+    assert!(!empty.contains("role=\"tablist\"") && !empty.contains("id=\"bulk-form\""));
+}

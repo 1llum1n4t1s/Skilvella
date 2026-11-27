@@ -260,8 +260,42 @@
   const selectAll = document.getElementById("select-all");
   let policyPending = false;
   let policyUncertain = false;
+  // 検索と一括変更はタブで切り替える。JavaScriptが無効なときは両方を表示する。
+  const tabList = document.querySelector("[data-library-tablist]");
+  const tabs = tabList ? [...tabList.querySelectorAll("[data-library-tab]")] : [];
+  const bulkTab = tabList?.querySelector("[data-library-tab=bulk]");
+  const bulkTabLabel = bulkTab?.textContent ?? "";
+  const tabStorageKey = "skilvella-library-tab";
+  function selectTab(name, focus = false) {
+    for (const tab of tabs) {
+      const active = tab.dataset.libraryTab === name;
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+      document.getElementById(tab.getAttribute("aria-controls")).hidden = !active;
+      if (active && focus) tab.focus();
+    }
+    try { sessionStorage.setItem(tabStorageKey, name); } catch { /* 保存できなくてもタブは切り替える。 */ }
+  }
+  if (tabs.length) {
+    let remembered = null;
+    try { remembered = sessionStorage.getItem(tabStorageKey); } catch { /* 保存値なしで開始する。 */ }
+    tabList.hidden = false;
+    selectTab(tabs.some(tab => tab.dataset.libraryTab === remembered) ? remembered : "search");
+    tabList.addEventListener("click", event => {
+      const tab = event.target instanceof Element ? event.target.closest("[data-library-tab]") : null;
+      if (tab) selectTab(tab.dataset.libraryTab);
+    });
+    tabList.addEventListener("keydown", event => {
+      const current = tabs.indexOf(document.activeElement);
+      const target = { ArrowRight: current + 1, ArrowLeft: current - 1, Home: 0, End: tabs.length - 1 }[event.key];
+      if (current < 0 || target === undefined) return;
+      event.preventDefault();
+      selectTab(tabs[(target + tabs.length) % tabs.length].dataset.libraryTab, true);
+    });
+  }
   function selectionChanged() {
     const count = checks.filter(input => input.checked).length;
+    if (bulkTab) bulkTab.textContent = count > 0 ? t("bulk-tab-count", { count }) : bulkTabLabel;
     const label = document.getElementById("selection-count");
     if (label) label.textContent = t("selected", { count });
     const submit = document.getElementById("bulk-submit");
