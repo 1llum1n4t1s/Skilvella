@@ -9,5 +9,6 @@
 ## Windowsインストーラー（Setup）
 
 - `tools/pack-windows-installer.ps1` で梱包し、公開用の署名は `-Sign`（Sigilune）で行ってください。
+- Setup に同梱する README.md は、README.md をコピーせず `skilvella-release readme <ソースのSHA> <出力ファイル>` で書き出してください（ZIP版の README.txt と同じリンクの書き換え）。CIでは署名用Secretsのない前の step で、本体と同じ `--target`・`--target-dir` に `skilvella-release`（`release-tools` 機能）もビルドしておいてください。
 - 公開用は `.github/workflows/release.yml`（main のコミットに付けた軽量タグ `v<版>` の push で起動）で作り、署名用Secretsを梱包・署名のstep、R2用の `CLOUDFLARE_API_TOKEN` を配信のstep以外へ渡さないでください。
 - Setup版の自動更新は [app-update.md](app-update.md) のとおりで、配信は `tools/publish-windows-installer-r2.ps1` でR2へ行います。版付きの成果物は既存オブジェクトを上書きしないでください。手順は [Windowsインストーラーの追加配布](../DEVELOPMENT.md#windowsインストーラーの追加配布) を参照してください。

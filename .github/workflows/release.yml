@@ -9,11 +9,11 @@ name: Release
 #   R2 に同じ版があれば内容が同一のときだけ成功し、違えば上書きせず失敗する）。
 #   skip_upload を付けると、ビルド・署名・検証だけ行い R2 へ配信しない（成果物は Actions に残る）。
 #   GitHub のタグフィルタは glob（正規表現ではない）。移動タグ v1 や v1.2.3-rc では起動しない。
-# - 構成: guard → (portable-windows / portable-macos / installer) → verify → update-test-macos → publish。
+# - 構成: guard → (portable-windows / portable-macos / installer) → verify → (update-test-windows / update-test-macos) → publish。
 #     portable-*  ZIP版・macOS版のアーカイブを作る。macOS は GitHub 提供の macos-latest (Apple Silicon)。Secrets も Environment も渡さない。
 #     installer   Windows Setup を署名して作る（Sigilune・Certum のクラウド鍵）。署名用 Secrets は梱包・署名の step だけ。
-#     verify      両アーカイブから SHA256SUMS.txt を作り、自動更新と同じ実装で検証し、Windows で更新回帰を通す。
-#     update-test-macos  同じ3ファイルで Apple Silicon Mac の更新回帰を通す。
+#     verify      両アーカイブから SHA256SUMS.txt を作り、自動更新と同じ実装で検証する。
+#     update-test-windows / update-test-macos  verify の3ファイルで、Windows x64 と Apple Silicon Mac の更新回帰を並行して通す。
 #     publish     何もビルドせず、ここまでの成果物だけを R2 へ配信する。CLOUDFLARE_API_TOKEN は配信の step だけ。
 # - 配信の順序（公開物の整合を保つ）: 入力・bucket・zone の確認 → 不変物（portable/<版>/*、nupkg、版付き Setup）
 #   → 公開 URL でハッシュ照合 → 固定名（Setup・assets.win.json・RELEASES・portable の固定名3つ）
@@ -144,16 +144,8 @@ jobs:
         with:
           persist-credentials: false
 
+      # 配布物はキャッシュを使わず、毎回まっさらな target/ から作る。
       - run: rustup show
-
-      # 依存クレートのビルド結果を GitHub のキャッシュへ保存する（ci.yml と同じ設定）。
-      # cache-bin は必ず無効にする。有効だと後処理の「Cleaning cargo/bin」が、
-      # 共有している CARGO_HOME/bin の rustup 本体を消し（セルフホストランナーで実際に起きた）、以後のジョブが rustup・cargo を実行できなくなる。
-      - name: ビルドキャッシュ
-        # Swatinem/rust-cache@v2.9.3
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
-        with:
-          cache-bin: "false"
 
       - name: 本体と配布ツールをビルド
         run: cargo build --locked --release --features release-tools --bin skilvella --bin skilvella-release
@@ -231,6 +223,10 @@ jobs:
           "CARGO_TARGET_FOR_PACK=$target" >> $env:GITHUB_ENV
           cargo build --locked --release --target x86_64-pc-windows-msvc --target-dir $target --features windows-installer --bin skilvella
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Setup に同梱する README.md の相対リンクを絶対URLへ直す skilvella-release も、ここでビルドする。
+          # features が違うため本体のビルドとは分け、本体の features を変えない。
+          cargo build --locked --release --target x86_64-pc-windows-msvc --target-dir $target --features release-tools --bin skilvella-release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Sigilune を導入
         id: sigilune
@@ -262,7 +258,7 @@ jobs:
 
   verify:
     # 両アーカイブを集めて SHA256SUMS.txt を作り、自動更新と同じ実装 (verify_archive) で検証する。
-    # 更新回帰（公開済みの前の版 → 今回の最終配布物への更新と再起動）は Windows でここ、Mac は update-test-macos で通す。
+    # 更新回帰（公開済みの前の版 → 今回の最終配布物への更新と再起動）は Windows は update-test-windows、Mac は update-test-macos で通す（ここでは行わない）。
     needs: [guard, portable-windows, portable-macos]
     runs-on: windows-latest
     timeout-minutes: 60
@@ -317,6 +313,33 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  update-test-windows:
+    # Windows x64 での更新回帰。verify が作った最終配布物（portable-dist）を使い、update-test-macos と並行に動く。Secrets と Environment は渡さない。
+    needs: [guard, verify]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: リポジトリをチェックアウト
+        # actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Rust を準備
+        run: |
+          rustup toolchain install --no-self-update
+          if ($LASTEXITCODE -ne 0) { throw "rustup toolchain install failed ($LASTEXITCODE)" }
+
+      - name: 配布物を取得
+        # actions/download-artifact@v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: portable-dist
+          path: ${{ runner.temp }}/portable-dist
+
       - name: 更新回帰の起点を決める
         id: origin
         shell: bash
@@ -351,10 +374,16 @@ jobs:
 
       - run: rustup show
 
+      # main の CI（ci.yml の check ジョブ）が保存した macOS のキャッシュを読むだけにする（shared-key を揃え、保存はしない）。
+      # 版タグの ref に保存しても次の版からは使えず、毎回の保存だけが積み上がるため。
+      # cache-bin は必ず無効にする。有効だと後処理の「Cleaning cargo/bin」が、
+      # 共有している CARGO_HOME/bin の rustup 本体を消し、以後のジョブが rustup・cargo を実行できなくなる。
       - name: ビルドキャッシュ
-        # Swatinem/rust-cache@v2.9.3。cache-bin を無効にする理由は portable-macos を参照。
+        # Swatinem/rust-cache@v2.9.3
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
+          shared-key: "check"
+          save-if: "false"
           cache-bin: "false"
 
       - name: 配布物を取得
@@ -382,7 +411,7 @@ jobs:
 
   publish:
     # ここまでの成果物だけを R2 へ配信する（ビルドしない）。全ジョブが成功し、skip_upload でないときだけ動く。
-    needs: [guard, portable-windows, portable-macos, installer, verify, update-test-macos]
+    needs: [guard, portable-windows, portable-macos, installer, verify, update-test-windows, update-test-macos]
     if: inputs.skip_upload != true
     runs-on: windows-latest
     timeout-minutes: 60

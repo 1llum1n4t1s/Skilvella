@@ -87,13 +87,13 @@ cargo test --locked --features release-update-test --test release_update -- <起
 
 ### Windowsインストーラーの追加配布
 
-Windows x64で、固定版のVelopack CLI 1.2.161（`velopack` crateと同じ版）とRustのビルド環境を使います。Windowsのチャネルは `win`、パッケージの発行元は `Kagayoi` です。空の作業用ディレクトリをGit作業ツリー外に用意し、リポジトリルートで次を実行します。
+Windows x64で、固定版のVelopack CLI 1.2.161（`velopack` crateと同じ版）とRustのビルド環境を使います。Windowsのチャネルは `win`、パッケージの発行元は `Kagayoi` です。同梱する README.md のリンクを `git rev-parse HEAD` のコミットへ向けるため、Gitの作業ツリーと `git` コマンドも必要です。空の作業用ディレクトリをGit作業ツリー外に用意し、リポジトリルートで次を実行します。
 
 ```powershell
 pwsh -NoProfile -File ./tools/pack-windows-installer.ps1 -WorkDirectory D:\work\skilvella-installer
 ```
 
-このコマンドは動作確認用の未署名Setupを生成します。公開用は `-Sign` を追加し、[Sigilune](https://github.com/1llum1n4t1s/Sigilune)（Certum SimplySignのクラウド鍵をsigntoolの `/dlib` で使うCLI）で署名します。SimplySign Desktopは不要で、手元では事前に `sigilune setup` でCertumアカウントを登録します（実行ファイルは `SIGILUNE_EXE` → PATH → `%USERPROFILE%\.local\Sigilune\bin` の順に探します）。Taskmetryと同じコード署名証明書とCertumのタイムスタンプを使い、SHA-256で署名します。スクリプトはSetupのAuthenticode署名・署名者（CN）・タイムスタンプを検証してからSHA-256を表示します。
+このコマンドは動作確認用の未署名Setupを生成します。`-CargoTargetDirectory` を省略すると、作業用ディレクトリ内の target に本体と合わせて `skilvella-release`（`release-tools` 機能）もビルドします。指定した場合はビルドせず、その中の `x86_64-pc-windows-msvc/release/skilvella-release.exe` を使います（同じソースから事前にビルドしておきます）。公開用は `-Sign` を追加し、[Sigilune](https://github.com/1llum1n4t1s/Sigilune)（Certum SimplySignのクラウド鍵をsigntoolの `/dlib` で使うCLI）で署名します。SimplySign Desktopは不要で、手元では事前に `sigilune setup` でCertumアカウントを登録します（実行ファイルは `SIGILUNE_EXE` → PATH → `%USERPROFILE%\.local\Sigilune\bin` の順に探します）。Taskmetryと同じコード署名証明書とCertumのタイムスタンプを使い、SHA-256で署名します。スクリプトはSetupのAuthenticode署名・署名者（CN）・タイムスタンプを検証してからSHA-256を表示します。
 
 公開用Setupは通常GitHub Actionsの「Release」（`.github/workflows/release.yml`）の `installer` ジョブで作ります。main のコミットに付けた軽量タグ `v<Cargo.tomlの版>` をpushすると始まり（手動実行は同じタグを指定した再実行にだけ使います）、そのタグのソースをビルドし、同じスクリプトで署名した一式を、ZIP版・macOS版と合わせて `publish` ジョブがCloudflare R2（`skilvella.kagayoi.com`、バケット `skilvella-updates`）へ配信します（`tools/publish-windows-installer-r2.ps1`。Taskmetry・Shisui・Lumin4tiと同じ方式で、同梱の `R2Distribution.Common.ps1` と `R2Transfer.Core.cs` は同一のコピーです）。版付きの成果物（nupkg・版付きSetup）は新規作成のみで既存オブジェクトを上書きせず、同名がある場合は内容のハッシュを照合して不一致なら失敗します。固定名（Setup・`releases.win.json`・`assets.win.json`・`RELEASES`）は最新を指すため置き換え、manifestは最後に置きます。固定名のURLはキャッシュを破棄します。承認待ちはありません。配信の順序は、不変物（`portable/<版>/*`・nupkg・版付きSetup）→ 公開URLでのハッシュ照合 → 固定名（Setup・`assets.win.json`・`RELEASES`・`portable/` の固定名3つ）→ `releases.win.json` → `portable/latest.json` → 固定名だけのpurgeです。`tools/publish-windows-installer-r2.ps1` と `tools/publish-portable-r2.ps1` は `-Stage`（Immutable・Fixed・Manifest／Latest）で段階ごとに呼びます。公開中の `portable/latest.json` がより新しい版なら、固定名と `latest.json` は更新しません（後退防止）。更新回帰の起点は公開中の `portable/latest.json` の版で、未公開（最初の移行版）または候補以上（再実行）なら明示的にスキップします（`tools/resolve-update-origin.sh`）。
 

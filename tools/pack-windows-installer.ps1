@@ -14,6 +14,8 @@ param(
     [switch] $Sign,
     # 省略時は作業ディレクトリ内の target。CIは署名用Secretsを渡さない前段のstepで同じ条件の
     # cargo build を済ませ、その出力先を渡す（このスクリプトのcargo buildは再コンパイルしない）。
+    # skilvella-release（release-tools）も同じソースから前段で同じ出力先へビルドしておくこと
+    # （渡したときはビルドせず、古い exe が残っていると古い README を同梱する）。
     [string] $CargoTargetDirectory
 )
 
@@ -82,7 +84,19 @@ try {
     # ZIP配布用のビルドと分離し、Velopackのフックを持つ本体だけを梱包する。
     cargo build --locked --release --target x86_64-pc-windows-msvc --target-dir $build --features windows-installer --bin skilvella
     Copy-Item -LiteralPath (Join-Path $build 'x86_64-pc-windows-msvc/release/skilvella.exe') -Destination $payload
-    Copy-Item -LiteralPath (Join-Path $repo 'LICENSE'), (Join-Path $repo 'README.md'), (Join-Path $repo 'CHANGELOG.md') -Destination $payload
+    Copy-Item -LiteralPath (Join-Path $repo 'LICENSE'), (Join-Path $repo 'CHANGELOG.md') -Destination $payload
+    # README.md の相対リンクは、インストール先ではリンク先の文書が無く読めない。
+    # ZIP版の README.txt と同じ書き換え（その版のソースを指す絶対URL）を skilvella-release で行い、README.md の名前で同梱する。
+    # 署名用Secretsのある段ではコンパイルしない。-CargoTargetDirectory を渡すときは、前段で
+    # `cargo build --features release-tools --bin skilvella-release` を済ませておく。
+    $release = Join-Path $build 'x86_64-pc-windows-msvc/release/skilvella-release.exe'
+    if (!$CargoTargetDirectory) {
+        cargo build --locked --release --target x86_64-pc-windows-msvc --target-dir $build --features release-tools --bin skilvella-release
+    }
+    if (!(Test-Path -LiteralPath $release -PathType Leaf)) { throw "Build skilvella-release before packing: $release" }
+    $sha = (git rev-parse HEAD | Out-String).Trim()
+    if ($sha -notmatch '^[0-9a-f]{40}$') { throw 'Expected a full Git commit SHA from git rev-parse HEAD.' }
+    & $release readme $sha (Join-Path $payload 'README.md')
     # packIdは既存のデータフォルダー (%LOCALAPPDATA%\Skilvella) と分ける。
     $packOptions = @(
         '--packId', 'SkilvellaApp',
