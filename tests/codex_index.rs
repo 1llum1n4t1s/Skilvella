@@ -88,7 +88,14 @@ fn explicit_automatic_search_only_and_publication_preserve_the_original() {
             .unwrap()
             .contains("true")
     );
-    assert!(library.set_codex_policy(&id, true, false).is_err());
+    // 自動選択のみは許可する。Codexはyamlで暗黙呼び出しを許可し、入口は残る。
+    library.set_codex_policy(&id, true, false).unwrap();
+    assert!(
+        fs::read_to_string(entry(&base, &id).join("agents/openai.yaml"))
+            .unwrap()
+            .contains("allow_implicit_invocation: true")
+    );
+    library.set_codex_policy(&id, true, true).unwrap();
     assert_eq!(library.codex_settings().unwrap().exported, 1);
     library.set_codex_policy(&id, false, false).unwrap();
     assert!(!entry(&base, &id).exists());
@@ -969,6 +976,83 @@ fn broken_policy_of_a_published_skill_fails_the_export() {
     assert!(!library.codex_settings().unwrap().last_error.is_empty());
 }
 
+#[test]
+fn automatic_only_hides_commands_only_where_supported() {
+    let (base, library, id) = setup();
+    let home = base.join("home");
+    let devin = skilvella::library::default_devin_config_dir(&home);
+    publish(&library, &id, true);
+    library
+        .set_clients_enabled(&[
+            (SkillClient::Claude, true),
+            (SkillClient::Grok, true),
+            (SkillClient::Cursor, true),
+            (SkillClient::Copilot, true),
+            (SkillClient::Devin, true),
+        ])
+        .unwrap();
+    library.set_codex_enabled(true).unwrap();
+    library.set_codex_policy(&id, true, false).unwrap();
+    assert!(library.sync_summary().unwrap().last_error.is_empty());
+
+    let read = |path: PathBuf| fs::read_to_string(path.join("original/SKILL.md")).unwrap();
+    let claude_store = home.join(".claude/skilvella/skills");
+    let copilot_store = home.join(".copilot/skilvella/skills");
+    for (label, store) in [
+        ("claude", claude_store.clone()),
+        ("grok", home.join(".grok/skills/skilvella")),
+        ("copilot", copilot_store.clone()),
+    ] {
+        let text = read(store);
+        assert!(
+            text.contains(
+                "user-invocable: false
+---
+"
+            ),
+            "{label}: {text}"
+        );
+        assert!(
+            !text.contains("disable-model-invocation"),
+            "{label}: {text}"
+        );
+        assert!(!text.contains("triggers:"), "{label}: {text}");
+    }
+    for (label, store) in [
+        ("cursor", home.join(".cursor/skills/skilvella")),
+        ("devin", devin.join("skilvella/skills")),
+    ] {
+        let text = read(store);
+        for appended in ["user-invocable", "disable-model-invocation", "triggers:"] {
+            assert!(!text.contains(appended), "{label}: {text}");
+        }
+    }
+    assert!(
+        fs::read_to_string(entry(&base, &id).join("agents/openai.yaml"))
+            .unwrap()
+            .contains("allow_implicit_invocation: true")
+    );
+    assert!(is_link(&home.join(".claude/skills/original")));
+    assert!(is_link(&home.join(".copilot/skills/original")));
+    assert!(is_link(&devin.join("skills/original")));
+    let db = rusqlite::Connection::open(base.join("data/library.sqlite3")).unwrap();
+    let stored: String = db
+        .query_row(
+            "SELECT value FROM settings WHERE key=?1",
+            [format!("codex_policy:{id}")],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, r#"{"automatic":true,"command":false}"#);
+
+    // 検索のみへ戻すと、すべての入口が外れる。
+    library.set_codex_policy(&id, false, false).unwrap();
+    assert!(!entry(&base, &id).exists());
+    assert!(!claude_store.join("original").exists());
+    assert!(!copilot_store.join("original").exists());
+    assert!(!home.join(".claude/skills/original").exists());
+}
+
 /// 入口のfrontmatter（先頭の `---` と閉じ `---` の間）をYAMLとして再解析する。
 fn entry_frontmatter(text: &str) -> saphyr::YamlOwned {
     use saphyr::LoadableYamlNode;
@@ -1015,7 +1099,7 @@ fn claude_entry_inherits_only_allowed_frontmatter_and_other_clients_do_not() {
     rewrite_source(
         &base,
         &library,
-        "context: fork\nagent: Explore\nbackground: true\nmodel: opus\neffort: high\nargument-hint: \"[topic]\"\npaths:\n  - src/**\n  - docs/**\nallowed-tools: Read\nhooks:\n  PreToolUse: []\ndisable-model-invocation: false\nuser-invocable: false\n",
+        "context: fork\nagent: Explore\nbackground: true\nmodel: opus\neffort: high\nargument-hint: \"[topic]\"\npaths:\n  - src/**\n  - docs/**\nallowed-tools: Read\nhooks:\n  PreToolUse: []\ndisable-model-invocation: false\nuser-invocable: true\n",
     );
 
     let claude = claude_entry_text(&base);
@@ -1235,6 +1319,22 @@ fn assert_legacy(claude: &str) {
     assert!(claude.contains("load_skill with the fixed id"), "{claude}");
     assert!(!claude.contains("Skilvella embedded"), "{claude}");
     assert!(claude.ends_with(LEGACY_TAIL), "{claude}");
+}
+
+#[test]
+fn fork_claude_entry_automatic_only_adds_one_user_invocable_false() {
+    let (base, library, id) = embed_setup();
+    library.set_codex_policy(&id, true, false).unwrap();
+    rewrite_body(&base, &library, "context: fork\n", "EMBED ME\n");
+    let claude = claude_entry_text(&base);
+    assert!(claude.contains("EMBED ME"), "{claude}");
+    assert!(!claude.contains("load_skill with the fixed id"), "{claude}");
+    assert_eq!(
+        claude.matches("user-invocable: false").count(),
+        1,
+        "{claude}"
+    );
+    assert!(!claude.contains("disable-model-invocation"), "{claude}");
 }
 
 #[test]

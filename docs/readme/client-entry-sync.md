@@ -5,11 +5,13 @@ Part of [Automatic selection and command suggestions](invocation-entries.md).
 | Sync target | Entry location | How it is exposed to discovery | Automatic selection control |
 | --- | --- | --- | --- |
 | Codex | `~/.agents/skills/skilvella/<name>` | Real files (Codex searches nested folders) | `agents/openai.yaml` |
-| Claude Code | `~/.claude/skilvella/skills/<name>` | A link to `~/.claude/skills/<name>` (junction on Windows, symlink elsewhere) | `disable-model-invocation` |
-| Grok | `~/.grok/skills/skilvella/<name>` | Real files (Grok searches nested folders) | `disable-model-invocation` |
+| Claude Code | `~/.claude/skilvella/skills/<name>` | A link to `~/.claude/skills/<name>` (junction on Windows, symlink elsewhere) | `disable-model-invocation`, `user-invocable` |
+| Grok | `~/.grok/skills/skilvella/<name>` | Real files (Grok searches nested folders) | `disable-model-invocation`, `user-invocable` |
 | Cursor | `~/.cursor/skills/skilvella/<name>` | Real files (Cursor searches nested folders but may not follow links) | `disable-model-invocation` |
-| GitHub Copilot | `~/.copilot/skilvella/skills/<name>` | A link to `~/.copilot/skills/<name>` | `disable-model-invocation` |
+| GitHub Copilot | `~/.copilot/skilvella/skills/<name>` | A link to `~/.copilot/skills/<name>` | `disable-model-invocation`, `user-invocable` |
 | Devin | `<Devin config>/skilvella/skills/<name>` | A link to `<Devin config>/skills/<name>` | `triggers: [user]` |
+
+`user-invocable: false` is written only for "Automatic selection only" (the skill leaves the `/` menu but can still be selected automatically). Codex, Cursor, and Devin cannot hide the command, so they get the same entry as "Automatic selection + command suggestions" (Codex: `allow_implicit_invocation: true` in `agents/openai.yaml`).
 
 `<Devin config>` is `%APPDATA%\devin` on Windows and `~/.config/devin` on macOS and Linux (`XDG_CONFIG_HOME` is not used). GitHub Copilot always uses `~/.copilot` (`COPILOT_HOME` is ignored).
 
@@ -19,9 +21,9 @@ Claude Code searches only one level directly under `~/.claude/skills`, so entrie
 
 ## GitHub Copilot and Devin
 
-Same rules as Claude Code links: same-name entries are not overwritten, only links Skilvella created are removed, and the link folder must not be a managed folder. The Copilot CLI finds only `~/.copilot/skills/<name>/SKILL.md`. Whether it honors `disable-model-invocation`, and how deep Devin searches, are unconfirmed.
+Same rules as Claude Code links: same-name entries are not overwritten, only links Skilvella created are removed, and the link folder must not be a managed folder. The Copilot CLI finds only `~/.copilot/skills/<name>/SKILL.md`. Whether it honors `disable-model-invocation`, and how deep Devin searches, are unconfirmed. The official docs do not say whether the Copilot CLI applies a skill's `user-invocable: false` (VS Code officially does), so with "Automatic selection only" `/name` may remain in the CLI.
 
 ## Overlapping discovery paths
 
 - Cursor reads `~/.agents/skills` and `~/.claude/skills`; GitHub Copilot reads `~/.agents/skills`; Devin reads `~/.agents/skills` and `~/.copilot/skills`. The same entry may appear more than once.
-- Grok also reads `~/.agents/skills` and `~/.claude/skills`, preferring `~/.grok/skills`, then `~/.agents/skills`, then `~/.claude/skills`. Codex entries stop automatic selection with `agents/openai.yaml`, so in Grok even "Command suggestions only" skills are selected automatically. Select Grok as a target if you use it.
+- Grok also reads `~/.agents/skills` and `~/.claude/skills`, preferring `~/.grok/skills`, then `~/.agents/skills`, then `~/.claude/skills`. Codex entries stop automatic selection with `agents/openai.yaml`, so in Grok even "Command suggestions only" skills are selected automatically. Select Grok as a target if you use it. Likewise, `~/.agents/skills` is also read by Grok and by GitHub Copilot in VS Code, so if you select Codex as a target, the command of an "Automatic selection only" skill may be visible there (the Codex entry cannot hide it).

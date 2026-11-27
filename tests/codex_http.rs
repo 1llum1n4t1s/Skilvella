@@ -199,6 +199,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
     for (mode, automatic, command) in [
         ("command", false, true),
         ("automatic", true, true),
+        ("automatic_only", true, false),
         ("search", false, false),
     ] {
         assert_eq!(
@@ -219,6 +220,12 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
             .await
             .unwrap();
         assert!(body.contains(&format!("value=\"{mode}\" selected")));
+        let select_start = body.find("<select name=\"mode\"").unwrap();
+        let select_end = body[select_start..].find("</select>").unwrap() + select_start;
+        assert_eq!(
+            body[select_start..select_end].matches("selected").count(),
+            1
+        );
         let policy = state.library.codex_policy(&id).unwrap();
         assert_eq!((policy.automatic, policy.command), (automatic, command));
     }
@@ -276,8 +283,8 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         let end = body[start..].find("</tr>").unwrap() + start;
         body[start..end].to_owned()
     };
-    assert!(row(&listing, &id).contains("value=\"command\" checked"));
-    assert!(row(&listing, second).contains("value=\"search\" checked"));
+    assert!(row(&listing, &id).contains("value=\"command\" selected"));
+    assert!(row(&listing, second).contains("value=\"search\" selected"));
     let inline_url = format!(
         "{base}/skills/{second}/codex?repository_source=test&repository=&q=two%20words&tag=a%2Bb&offset=50"
     );
@@ -304,7 +311,22 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         .text()
         .await
         .unwrap();
-    assert!(row(&listing, second).contains("value=\"automatic\" checked"));
+    assert!(row(&listing, second).contains("value=\"automatic\" selected"));
+    let aria = row(&listing, second);
+    assert!(aria.contains("<select name=\"mode\" aria-label=\"使い方: second\">"));
+    state.library.set_codex_policy(second, true, false).unwrap();
+    let listing = client
+        .get(format!("{base}/?repository_source=test&repository="))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let only = row(&listing, second);
+    assert!(only.contains("value=\"automatic_only\" selected"));
+    assert!(!only.contains("value=\"automatic\" selected"));
+    assert_eq!(only.matches("selected").count(), 1);
     assert_eq!(
         common::form_post(&client, &inline_url)
             .header("accept", "application/json")
@@ -348,7 +370,8 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
         .nth(1)
         .and_then(|rest| rest.split("</form>").next())
         .unwrap();
-    assert!(!mode_form.contains(" checked"));
+    assert_eq!(mode_form.matches(" selected").count(), 1);
+    assert!(mode_form.contains("value=\"\" disabled selected"));
     assert_eq!(
         common::form_post(&client, format!("{base}/skills/{untouched}/codex"))
             .header("accept", "application/json")
@@ -367,6 +390,7 @@ async fn codex_forms_validate_requests_and_preserve_modes() {
     for (mode, automatic, command) in [
         ("command", false, true),
         ("automatic", true, true),
+        ("automatic_only", true, false),
         ("search", false, false),
     ] {
         let response = common::form_post(&client, &bulk_url)
@@ -989,4 +1013,39 @@ async fn skill_pages_show_invocation_commands_matching_exported_entries() {
     assert!(!alpha.contains("class=\"command\""));
     assert!(alpha.contains("同期先が選ばれていないため、コマンドはありません。"));
     assert!(!get("/".into()).await.contains("data-skill-commands"));
+
+    // 「自動選択のみ」は、コマンドを隠せるClaude Codeの `/name` を一覧・詳細に出さない。
+    let alpha_id = id_of("alpha");
+    state
+        .library
+        .set_codex_policy(&alpha_id, true, false)
+        .unwrap();
+    state
+        .library
+        .set_clients_enabled(&[(SkillClient::Codex, true), (SkillClient::Claude, true)])
+        .unwrap();
+    let list = get("/".into()).await;
+    let alpha_row = list
+        .split("id=\"skill-")
+        .find(|row| row.starts_with(&alpha_id))
+        .unwrap();
+    assert!(alpha_row.contains("data-skill-commands hidden"));
+    let automatic_only = alpha_row
+        .split("data-skill-commands-automatic-only")
+        .nth(1)
+        .and_then(|rest| rest.split("</div>").next())
+        .unwrap();
+    assert!(!automatic_only.starts_with(" hidden"));
+    assert!(automatic_only.contains(">$alpha</code>"));
+    assert!(!automatic_only.contains(">/alpha</code>"));
+    let detail = get(format!("/skills/{alpha_id}")).await;
+    assert!(detail.contains(">$alpha</code>"));
+    assert!(!detail.contains(">/alpha</code>"));
+    state
+        .library
+        .set_clients_enabled(&[(SkillClient::Codex, false), (SkillClient::Claude, true)])
+        .unwrap();
+    let detail = get(format!("/skills/{alpha_id}")).await;
+    assert!(!detail.contains("class=\"command\""));
+    assert!(detail.contains("「自動選択のみ」のため、選んだ同期先にはコマンドがありません。"));
 }

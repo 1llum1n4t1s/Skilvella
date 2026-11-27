@@ -78,6 +78,13 @@ impl SkillClient {
         }
     }
 
+    /// 自動選択のみ（コマンドなし）のとき、frontmatterの `user-invocable: false` で
+    /// / メニューから隠せるか。Claude Code・Grok・GitHub Copilotだけが対応し、
+    /// Codex・Cursor・Devinには隠す手段がない。
+    pub fn hides_automatic_only_command(self) -> bool {
+        matches!(self, Self::Claude | Self::Grok | Self::Copilot)
+    }
+
     /// 入口名からクライアントで入力する呼び出しコマンドを作る。
     /// Codexはスキルを `$name` で明示し、他のクライアントは `/name` で呼び出す。
     pub fn command(self, name: &str) -> String {

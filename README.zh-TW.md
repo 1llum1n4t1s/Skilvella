@@ -98,11 +98,13 @@ MCP 是唯讀的。它無法傳回未公開技能、frontmatter 無效的技能�
 | 同步目標 | 入口位置 | 公開給探索的方式 | 自動選擇控制 |
 | --- | --- | --- | --- |
 | Codex | `~/.agents/skills/skilvella/<name>` | 實際檔案（Codex 會搜尋巢狀資料夾） | `agents/openai.yaml` |
-| Claude Code | `~/.claude/skilvella/skills/<name>` | 指向 `~/.claude/skills/<name>` 的連結（Windows 上為連接點，macOS 與 Linux 上為符號連結） | `disable-model-invocation` |
-| Grok | `~/.grok/skills/skilvella/<name>` | 實際檔案（Grok 會搜尋巢狀資料夾） | `disable-model-invocation` |
+| Claude Code | `~/.claude/skilvella/skills/<name>` | 指向 `~/.claude/skills/<name>` 的連結（Windows 上為連接點，macOS 與 Linux 上為符號連結） | `disable-model-invocation`、`user-invocable` |
+| Grok | `~/.grok/skills/skilvella/<name>` | 實際檔案（Grok 會搜尋巢狀資料夾） | `disable-model-invocation`、`user-invocable` |
 | Cursor | `~/.cursor/skills/skilvella/<name>` | 實際檔案（Cursor 會搜尋巢狀資料夾，但可能不跟隨連結） | `disable-model-invocation` |
-| GitHub Copilot | `~/.copilot/skilvella/skills/<name>` | 指向 `~/.copilot/skills/<name>` 的連結 | `disable-model-invocation` |
+| GitHub Copilot | `~/.copilot/skilvella/skills/<name>` | 指向 `~/.copilot/skills/<name>` 的連結 | `disable-model-invocation`、`user-invocable` |
 | Devin | `<Devin 設定>/skilvella/skills/<name>` | 指向 `<Devin 設定>/skills/<name>` 的連結 | `triggers: [user]` |
+
+只有在「僅自動選擇」時才會寫入 `user-invocable: false`（技能會從 `/` 選單中消失，但仍可被自動選擇）。Codex、Cursor 與 Devin 無法隱藏命令，因此它們會得到與「自動選擇＋命令候選」相同的入口（Codex：`agents/openai.yaml` 中的 `allow_implicit_invocation: true`）。
 
 `<Devin 設定>` 在 Windows 上為 `%APPDATA%\devin`，在 macOS 與 Linux 上為 `~/.config/devin`（不使用 `XDG_CONFIG_HOME`）。GitHub Copilot 一律使用 `~/.copilot`，不遵循 `COPILOT_HOME`。
 
@@ -110,13 +112,13 @@ Claude Code 只會搜尋 `~/.claude/skills` 正下方的一層，因此入口會
 
 只有 Claude Code 的入口還會沿用原始 `SKILL.md` 的部分 frontmatter 鍵，因此設定了 `context: fork`（以及 `agent`，如 `agent: Explore`）的技能透過入口呼叫時，同樣可以作為子代理 fork 執行。沿用的鍵為 `context`（僅 `fork`）、`agent` 與 `background`（僅在 `context: fork` 時）、`model`、`effort`（`low`、`medium`、`high`、`xhigh`、`max`）、`argument-hint` 與 `paths`。值會進行型別檢查，只捨棄無效的鍵。會變更權限或整個工作階段的鍵（`allowed-tools`、`disallowed-tools`、`hooks`）不會沿用，`shell`、`when_to_use`、`license` 等也不會沿用；`disable-model-invocation` 與 `user-invocable` 遵循 Skilvella 中「用法」的設定。其他用戶端的入口維持不變。如果呼叫帶有參數，入口會告知代理將參數作為已載入技能的輸入。僅對設定了 `context: fork` 的技能，入口會直接嵌入原始 `SKILL.md` 的內文，以取代透過 MCP 讀取內文的提示，並同時沿用 `arguments`。如果內文包含以 `!` 開頭的動態指令或 `CLAUDE_SKILL_DIR`、整個入口超過 2 MiB，或內文為空，則不會嵌入，仍使用原有的提示。由於 `~/.claude/skills` 也會被 Cursor 與 Grok 讀取，嵌入的內文對它們同樣可見。
 
-GitHub Copilot（Copilot CLI 只會尋找 `~/.copilot/skills/<name>/SKILL.md`）與 Devin 也使用相同的連結方式與規則：不覆寫同名的既有項目，只移除 Skilvella 建立的連結，連結資料夾與受管理資料夾重疊時不同步。只有 Claude Code 會接手手動建立、指向 Codex 入口的連結。Copilot CLI 是否遵循 `disable-model-invocation`，以及 Devin 的搜尋深度，尚未確認。
+GitHub Copilot（Copilot CLI 只會尋找 `~/.copilot/skills/<name>/SKILL.md`）與 Devin 也使用相同的連結方式與規則：不覆寫同名的既有項目，只移除 Skilvella 建立的連結，連結資料夾與受管理資料夾重疊時不同步。只有 Claude Code 會接手手動建立、指向 Codex 入口的連結。Copilot CLI 是否遵循 `disable-model-invocation`，以及 Devin 的搜尋深度，尚未確認。官方文件並未說明 Copilot CLI 是否套用技能的 `user-invocable: false`（VS Code 官方支援），因此在「僅自動選擇」下，CLI 中可能仍保留 `/name`。
 
 Cursor 也會讀取 `~/.agents/skills` 與 `~/.claude/skills`，GitHub Copilot 會讀取 `~/.agents/skills`，Devin 會讀取 `~/.agents/skills` 與 `~/.copilot/skills`，因此啟用多個用戶端時，同一入口可能重複顯示。
 
-Grok 也會讀取 Codex（`~/.agents/skills`）與 Claude Code（`~/.claude/skills`）的探索路徑，對於同名技能，優先順序為 `~/.grok/skills`、`~/.agents/skills`、`~/.claude/skills`。Codex 的入口會以 `agents/openai.yaml` 停止自動選擇，因此在 Grok 中，即使是「僅命令候選」的技能也會被自動選擇。如果你使用 Grok，請選取 Grok 作為同步目標。
+Grok 也會讀取 Codex（`~/.agents/skills`）與 Claude Code（`~/.claude/skills`）的探索路徑，對於同名技能，優先順序為 `~/.grok/skills`、`~/.agents/skills`、`~/.claude/skills`。Codex 的入口會以 `agents/openai.yaml` 停止自動選擇，因此在 Grok 中，即使是「僅命令候選」的技能也會被自動選擇。如果你使用 Grok，請選取 Grok 作為同步目標。同樣地，`~/.agents/skills` 也會被 Grok 與 VS Code 中的 GitHub Copilot 讀取，因此如果選取 Codex 作為同步目標，「僅自動選擇」技能的命令可能會在這些用戶端中可見（Codex 的入口無法隱藏它）。
 
-請在各技能的詳細頁面，或使用清單中的「用法」來選擇模式。在清單中可以確認目前的模式並就地切換。MCP 不會傳回未公開技能的內容，且在同步成功之後，也會移除它們的候選入口。
+請在各技能的詳細頁面，或使用清單中的「用法」下拉選單來選擇模式。在清單中可以確認目前的模式並就地切換（批次操作使用同一個下拉選單）。MCP 不會傳回未公開技能的內容，且在同步成功之後，也會移除它們的候選入口。
 
 如果你在清單中儲存進行期間按下瀏覽器的上一頁按鈕或重新載入，Skilvella 會先確認儲存結果，再顯示最新設定。因連線中斷而未被接受的請求會被取消，並在畫面上顯示確認結果。
 
@@ -124,15 +126,20 @@ Grok 也會讀取 Codex（`~/.agents/skills`）與 Claude Code（`~/.claude/skil
 | --- | --- | --- |
 | 僅搜尋（預設） | 不傳遞 | 不顯示 |
 | 僅命令候選 | 不傳遞 | 顯示 |
+| 僅自動選擇 | 傳遞 | 用戶端允許時隱藏 |
 | 自動選擇＋命令候選 | 傳遞 | 顯示 |
 
-對於顯示命令候選的技能，各同步目標的呼叫命令（Codex 為 `$name`，其他用戶端為 `/name`）會顯示在清單中的技能名稱下方，以及詳細頁面的「用法」下。如果名稱包含小寫字母、數字與 `-` 以外的字元，則會變成 `skill-<id 的前 8 個字元>`，而如果存在同名的已公開技能，則會變成 `<name>-<id 的前 8 個字元>`，因此請使用所顯示的命令。沒有命令時，詳細頁面會顯示原因（僅搜尋、未選擇同步目標、未公開或讀取錯誤）。在清單中從未公開切換為已公開的技能，其命令會在重新載入後出現。
+對於顯示命令候選的技能，各同步目標的呼叫命令（Codex 為 `$name`，其他用戶端為 `/name`）會顯示在清單中的技能名稱下方，以及詳細頁面的「用法」下。在「僅自動選擇」下，只會顯示無法隱藏命令的用戶端的命令（例如會顯示 Codex 的 `$name`，但不顯示 Claude Code 的 `/name`）。如果名稱包含小寫字母、數字與 `-` 以外的字元，則會變成 `skill-<id 的前 8 個字元>`，而如果存在同名的已公開技能，則會變成 `<name>-<id 的前 8 個字元>`，因此請使用所顯示的命令。沒有命令時，詳細頁面會顯示原因（僅搜尋、僅自動選擇因而沒有命令、未選擇同步目標、未公開或讀取錯誤）。在清單中從未公開切換為已公開的技能，其命令會在重新載入後出現。
 
 在清單中勾選技能，在批次操作下選擇「用法」，然後按下「套用至所選項目」，即可一次變更多個技能的模式。「不變更」會保留目前的模式。你也可以同時變更公開狀態與標籤。
 
 在「所有技能」下開啟「依來源批次設定」，可以選取多個來源，並以「套用至所選來源」一併變更公開狀態與用法。其範圍是執行時已註冊的所有頁面上的技能，不會沿用於之後新增的技能。預先檢查的數量依據掃描索引，且不包含遺失與錯誤的項目。結果會顯示已更新的數量與被排除的數量。公開時會重新檢查檔案，若因遺失、無法讀取、無效等原因而無法重新驗證，則所有項目的設定儲存都會被取消。設定會以單一交易儲存，原始技能不會改變。
 
-Codex 沒有「啟用自動選擇但在候選中隱藏」的獨立設定，因此 Skilvella 提供三種對應的模式。即使採用自動選擇，它也不會隨時保有原始內容的完整複本；內容會在需要時從 MCP 取得。未顯示在候選中的技能，可以使用僅限明確呼叫的 `$skilvella-search` 搜尋。你也可以直接使用 MCP 的 `search_skills`。
+「僅自動選擇」會在 Claude Code、Grok 與 GitHub Copilot 的入口中以 `user-invocable: false` 隱藏命令（技能會從 `/` 選單中消失，但模型仍可自動選擇它）。Codex、Cursor 與 Devin 無法隱藏命令，因此它們的入口與「自動選擇＋命令候選」相同（Codex 為 `agents/openai.yaml` 中的 `allow_implicit_invocation: true`）。儲存的值仍是原有的 `{"automatic":true,"command":false}`，沒有新的儲存格式，也不需要遷移。
+
+原始內容的完整複本不會被隨時保有；內容會在需要時從 MCP 取得。未顯示在候選中的技能，可以使用僅限明確呼叫的 `$skilvella-search` 搜尋。你也可以直接使用 MCP 的 `search_skills`。
+
+如果退回舊版本，這些入口會在該版本下一次同步時被移除，結果與「僅搜尋」相同。舊版本的清單會為這類技能顯示「設定未知。請選擇使用方式。」，其詳細頁面的選擇框中顯示「自動選擇＋命令候選」，但除非你變更，否則不會儲存。
 
 用法模式對所有同步目標通用。入口位置如上表所示。當你將技能設為未公開或變更其模式時，不再需要的產物會被移到探索路徑之外（位於 `~/.agents`、`~/.claude`、`~/.grok`、`~/.cursor`、`~/.copilot` 與 `<Devin 設定>` 正下方的 `skilvella-staging` / `skilvella-retired`）。如果偵測到未知檔案或手動編輯，則不會覆寫，並在設定頁面顯示同步錯誤。如果因磁碟空間不足或強制結束而留下不完整的暫存檔案，它會停止並保護既有的正常索引。請檢查所顯示路徑的內容後再重試。停用整合會從探索路徑中移除它所擁有的入口。同步停止期間，先前的候選與自動選擇設定可能會殘留。原始檔案、公開狀態與編輯歷史紀錄不會改變。如果 Codex 的候選顯示沒有更新，請重新開啟候選選單或重新啟動 Codex。Claude Code 即使在執行中的工作階段，也會反映對 `~/.claude/skills` 的變更，但如果你是在工作階段開始之後才建立 `~/.claude/skills` 本身，請執行 `/reload-skills`。已載入現有對話中的內容無法移除。
 

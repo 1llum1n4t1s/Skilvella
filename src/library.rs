@@ -439,7 +439,7 @@ mod codex_index {
         /// 管理画面に表示する呼び出しコマンド名（id → 入口名）。
         ///
         /// 入口を生成できる状態（有効なフォルダー・公開・存在・読み取りエラーなし）のスキルだけを返す。
-        /// 使い方の設定は含めず判定しないため、画面側で「検索のみ」のときは表示を隠す
+        /// 使い方の設定は含めず判定しないため、画面側で「検索のみ」「自動選択のみ」のときは表示を隠す
         /// （一覧は再読込せずに使い方を切り替えるため、名前は常に渡しておく）。
         /// 索引の名前は原本と同じ `parse` で得ており、リビジョンが一致する限り入口生成時の名前と等しい。
         pub(crate) fn skill_commands(&self, ids: &[String]) -> Result<BTreeMap<String, String>> {
@@ -472,10 +472,6 @@ mod codex_index {
             Ok(clients)
         }
         pub fn set_codex_policy(&self, id: &str, automatic: bool, command: bool) -> Result<()> {
-            ensure!(
-                !automatic || command,
-                "Automatic invocation requires a visible command"
-            );
             let _guard = self.write_guard()?;
             self.ensure_no_pending_migration()?;
             let c = self.connection()?;
@@ -679,7 +675,7 @@ mod codex_index {
                 );
                 desired.insert(
                     "skilvella-search/SKILL.md".into(),
-                    frontmatter_policy(client, finder, false),
+                    frontmatter_policy(client, finder, false, true),
                 );
                 if invocation_control(client) == InvocationControl::OpenAiYaml {
                     desired.insert(
@@ -713,10 +709,10 @@ mod codex_index {
                         .map(serde_json::from_str)
                         .transpose()?
                         .unwrap_or_default();
-                    if !policy.command {
+                    if !policy.command && !policy.automatic {
                         continue;
                     }
-                    // コマンドを出すスキルだけ原本を読む（従来どおりポリシー判定の後）。
+                    // 入口を生成するスキル（自動選択のみを含む「検索のみ」以外）だけ原本を読む（従来どおりポリシー判定の後）。
                     let Some(mut entry) = Self::codex_entry(row, client == SkillClient::Claude)?
                     else {
                         continue;
@@ -767,7 +763,7 @@ mod codex_index {
                                 e.frontmatter,
                                 EMBEDDED_PREAMBLE.replace("{}", &id_json)
                             );
-                            frontmatter_policy(client, text, policy.automatic)
+                            frontmatter_policy(client, text, policy.automatic, policy.command)
                         })
                         .filter(|text| text.len() as u64 <= CONTENT_LIMIT);
                     let text = match embedded {
@@ -777,7 +773,7 @@ mod codex_index {
                                 "---\nname: {}\ndescription: {}\n{inherited}---\nUse Skilvella MCP load_skill with the fixed id {} before following this skill. Read references only through read_skill_file with this id. If this invocation came with arguments (Claude Code appends them as a final `ARGUMENTS:` line), use them as the loaded skill's arguments: fill its argument placeholders, or treat them as its input if it has none.\n\n{MCP_ACCESS}",
                                 name_json, description_json, id_json
                             );
-                            frontmatter_policy(client, text, policy.automatic)
+                            frontmatter_policy(client, text, policy.automatic, policy.command)
                         }
                     };
                     desired.insert(format!("{name}/SKILL.md"), text);
@@ -1339,18 +1335,27 @@ mod codex_index {
         name
     }
 
-    /// Codexの `agents/openai.yaml` の代わりに、frontmatterで自動選択を止める
-    /// （手動の `/name` 呼び出しは残る）。Claude Code・Grok・Cursor・GitHub Copilotは
-    /// `disable-model-invocation: true`、Devinは `triggers: [user]` を加える。
-    /// 自動選択を許可する場合は何も加えず、各クライアントの既定（自動選択あり）に任せる。
-    fn frontmatter_policy(client: SkillClient, text: String, automatic: bool) -> String {
-        if automatic {
-            return text;
-        }
-        let line = match invocation_control(client) {
-            InvocationControl::OpenAiYaml => return text,
-            InvocationControl::DisableModelInvocation => "disable-model-invocation: true\n",
-            InvocationControl::UserTriggers => "triggers: [user]\n",
+    /// Codexの `agents/openai.yaml` の代わりに、frontmatterで使い方を制御する。
+    /// - 自動選択とコマンドの両方: 何も加えず、各クライアントの既定に任せる。
+    /// - コマンドのみ（手動の `/name` 呼び出しは残る）: Claude Code・Grok・Cursor・GitHub Copilotは
+    ///   `disable-model-invocation: true`、Devinは `triggers: [user]` を加える。
+    /// - 自動選択のみ: `SkillClient::hides_automatic_only_command` のクライアントは
+    ///   `user-invocable: false` で / メニューから隠す。隠す手段がないクライアントは何も加えない。
+    fn frontmatter_policy(
+        client: SkillClient,
+        text: String,
+        automatic: bool,
+        command: bool,
+    ) -> String {
+        let line = match (automatic, command) {
+            (true, true) | (false, false) => return text,
+            (true, false) if client.hides_automatic_only_command() => "user-invocable: false\n",
+            (true, false) => return text,
+            (false, true) => match invocation_control(client) {
+                InvocationControl::OpenAiYaml => return text,
+                InvocationControl::DisableModelInvocation => "disable-model-invocation: true\n",
+                InvocationControl::UserTriggers => "triggers: [user]\n",
+            },
         };
         // 生成文は必ず `---\n...\n---\n` で始まるため、閉じ区切りの直前へ1行加える。
         match text[3..].find("\n---\n") {
@@ -3971,12 +3976,6 @@ impl Library {
         add_tags: &[String],
         codex: Option<CodexSkillPolicy>,
     ) -> Result<()> {
-        if let Some(policy) = &codex {
-            ensure!(
-                !policy.automatic || policy.command,
-                "Automatic invocation requires a visible command"
-            );
-        }
         let _guard = self.write_guard()?;
         self.ensure_no_pending_migration()?;
         let additions = normalize_tags(add_tags)?;
@@ -4041,12 +4040,6 @@ impl Library {
             published.is_some() || codex.is_some(),
             "変更する設定を選択してください。"
         );
-        if let Some(policy) = &codex {
-            ensure!(
-                !policy.automatic || policy.command,
-                "Automatic invocation requires a visible command"
-            );
-        }
         let _guard = self.write_guard()?;
         self.ensure_no_pending_migration()?;
         let c = self.connection()?;

@@ -6,5 +6,5 @@ First register and verify Skilvella with a client that uses [MCP connection](mcp
 
 - Entry locations, link methods, and overlapping discovery paths for each client: [Invocation entries per client](client-entry-sync.md).
 - Frontmatter keys carried over to the Claude Code entry: [Claude Code frontmatter carry-over](claude-frontmatter-carryover.md).
-- Usage modes (search only, command suggestions, automatic selection), invocation commands, and bulk changes: [Usage modes and bulk changes](usage-modes-and-bulk.md).
+- Usage modes (search only, command suggestions only, automatic selection only, automatic selection + command suggestions), invocation commands, and bulk changes: [Usage modes and bulk changes](usage-modes-and-bulk.md).
 - Cleanup, sync errors, and reflecting changes in clients: [Entry sync cleanup and errors](entry-sync-maintenance.md).

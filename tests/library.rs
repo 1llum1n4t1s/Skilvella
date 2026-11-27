@@ -262,18 +262,6 @@ fn repository_bulk_rejects_invalid_scopes_and_rolls_back_stale_publication() {
             .bulk_repository_settings(std::slice::from_ref(&selected), None, None)
             .is_err()
     );
-    assert!(
-        library
-            .bulk_repository_settings(
-                std::slice::from_ref(&selected),
-                None,
-                Some(CodexSkillPolicy {
-                    automatic: true,
-                    command: false
-                })
-            )
-            .is_err()
-    );
     for invalid in [
         repository_scope("unknown", "repo"),
         repository_scope("local", "unknown"),
@@ -360,6 +348,29 @@ fn repository_bulk_rejects_invalid_scopes_and_rolls_back_stale_publication() {
             .is_err()
     );
     unchanged();
+
+    // 自動選択のみ（automatic=true, command=false）は有効な設定として保存される。
+    let (base, library, _source) = repository_bulk_fixture();
+    let db = rusqlite::Connection::open(base.join("data/library.sqlite3")).unwrap();
+    library
+        .bulk_repository_settings(
+            &[repository_scope("local", "repo")],
+            None,
+            Some(CodexSkillPolicy {
+                automatic: true,
+                command: false,
+            }),
+        )
+        .unwrap();
+    assert!(
+        db.query_row(
+            "SELECT count(*) FROM settings WHERE key LIKE 'codex_policy:%'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap()
+            > 0
+    );
 }
 
 #[test]

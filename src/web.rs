@@ -320,7 +320,7 @@ struct CodexPolicyForm {
     operation: String,
 }
 // フォームで受理する値と、一覧で選択済みとして表示する値の対応を共有する。
-const CODEX_MODES: [(&str, CodexSkillPolicy); 3] = [
+const CODEX_MODES: [(&str, CodexSkillPolicy); 4] = [
     (
         "search",
         CodexSkillPolicy {
@@ -333,6 +333,13 @@ const CODEX_MODES: [(&str, CodexSkillPolicy); 3] = [
         CodexSkillPolicy {
             automatic: false,
             command: true,
+        },
+    ),
+    (
+        "automatic_only",
+        CodexSkillPolicy {
+            automatic: true,
+            command: false,
         },
     ),
     (
@@ -802,6 +809,8 @@ struct IndexPage {
     commands: BTreeMap<String, String>,
     /// 呼び出し入口の同期が有効なクライアント。
     clients: Vec<SkillClient>,
+    /// 「自動選択のみ」でもコマンドを隠せないクライアント。
+    automatic_only_clients: Vec<SkillClient>,
     current_query: String,
     sources: Vec<Source>,
     folders: Vec<FolderView>,
@@ -834,6 +843,10 @@ impl IndexPage {
     /// 使い方が「検索のみ」の行も返し、表示の切替は画面側（`data-command-visible`）で行う。
     fn skill_commands(&self, id: &str) -> Vec<(String, String)> {
         command_list(&self.clients, self.commands.get(id))
+    }
+    /// 「自動選択のみ」の行に出すコマンド。コマンドを隠せるクライアントは除く。
+    fn skill_commands_automatic_only(&self, id: &str) -> Vec<(String, String)> {
+        command_list(&self.automatic_only_clients, self.commands.get(id))
     }
     fn policy_mode(&self, id: &str) -> &'static str {
         let Some(Some(policy)) = self.policies.get(id) else {
@@ -1050,6 +1063,11 @@ async fn library_page(
             error_count,
             directory,
         )) => {
+            let automatic_only_clients = clients
+                .iter()
+                .copied()
+                .filter(|client| !client.hides_automatic_only_command())
+                .collect::<Vec<_>>();
             let reset = if !selection.repository_source.is_empty() {
                 repository_url(&selection.repository_source, &selection.repository)
             } else if !query.source.is_empty() {
@@ -1116,6 +1134,7 @@ async fn library_page(
                     policies,
                     commands,
                     clients,
+                    automatic_only_clients,
                     current_query,
                     sources,
                     folders,
@@ -1724,6 +1743,8 @@ struct DetailPage {
     commands: Vec<(String, String)>,
     /// 同期先が1つ以上有効か（コマンドがない理由の案内に使う）。
     clients_enabled: bool,
+    /// 「自動選択のみ」で、選んだ同期先がすべてコマンドを隠すため表示できないか。
+    automatic_only_hidden: bool,
     /// 読み取れないフォルダー（同期停止の警告の案内用）。
     unavailable_folders: Vec<UnavailableFolder>,
     preview: String,
@@ -1780,11 +1801,19 @@ async fn detail_page(
             let codex = lib.sync_summary()?;
             let clients = lib.enabled_clients()?;
             let names = lib.skill_commands(std::slice::from_ref(&key))?;
-            let commands = if detail.codex_policy.command {
-                command_list(&clients, names.get(&key))
+            let policy = &detail.codex_policy;
+            let shown = clients
+                .iter()
+                .copied()
+                .filter(|client| policy.command || !client.hides_automatic_only_command())
+                .collect::<Vec<_>>();
+            let commands = if policy.command || policy.automatic {
+                command_list(&shown, names.get(&key))
             } else {
                 Vec::new()
             };
+            let automatic_only_hidden =
+                policy.automatic && !policy.command && !clients.is_empty() && shown.is_empty();
             Ok((
                 detail,
                 source_label,
@@ -1792,6 +1821,7 @@ async fn detail_page(
                 library_url,
                 commands,
                 !clients.is_empty(),
+                automatic_only_hidden,
                 unavailable_folders(&lib.sources()?),
             ))
         })
@@ -1804,6 +1834,7 @@ async fn detail_page(
             library_url,
             commands,
             clients_enabled,
+            automatic_only_hidden,
             unavailable_folders,
         )) => {
             let dirty = draft.is_some();
@@ -1824,6 +1855,7 @@ async fn detail_page(
                     detail,
                     commands,
                     clients_enabled,
+                    automatic_only_hidden,
                     unavailable_folders,
                     preview,
                     tag_text,

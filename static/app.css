@@ -225,8 +225,7 @@ table { border-collapse: collapse; width: 100%; text-align: left; }
 .table-wrap .states { min-width: 0; }
 .codex-mode-cell { min-width: 150px; }
 .codex-mode-options { display: grid; gap: 7px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.codex-mode-options label { flex-direction: row; align-items: flex-start; gap: 7px; font-size: 12px; font-weight: 500; line-height: 1.35; }
-.codex-mode-options input { flex: 0 0 auto; margin: 0; }
+.codex-mode-options select { width: 100%; max-width: 100%; min-width: 0; font-size: 12px; text-overflow: ellipsis; }
 .client-targets { min-width: 0; margin: 0; padding: 0; border: 0; }
 .client-targets legend { padding: 0; font-weight: 600; }
 /* このPCで見つからなかった同期先。消さずに折りたたむ（同じフォームで送信される）。 */

@@ -293,10 +293,13 @@
   function refreshCommands(form) {
     const row = form.closest("tr");
     const block = row?.querySelector("[data-skill-commands]");
-    if (!block) return;
-    const mode = row.querySelector('.codex-policy-form input[name="mode"]:checked')?.value;
+    const automaticOnlyBlock = row?.querySelector("[data-skill-commands-automatic-only]");
+    if (!block && !automaticOnlyBlock) return;
+    const mode = row.querySelector('.codex-policy-form select[name="mode"]')?.value;
     const published = row.querySelector('.publish-form input[name="published"]:checked')?.value;
-    block.hidden = !mode || mode === "search" || published !== "true";
+    // 「自動選択のみ」はコマンドを隠せるクライアントを除いた別の欄を見せる。
+    if (block) block.hidden = !mode || mode === "search" || mode === "automatic_only" || published !== "true";
+    if (automaticOnlyBlock) automaticOnlyBlock.hidden = mode !== "automatic_only" || published !== "true";
   }
   function policyStatus(form, key) {
     form.dataset.policyStatus = key;
@@ -304,7 +307,7 @@
   }
   policyForms.forEach(form => {
     form.addEventListener("change", async event => {
-      if (!(event.target instanceof HTMLInputElement) || event.target.name !== "mode") return;
+      if (!(event.target instanceof HTMLSelectElement) || event.target.name !== "mode") return;
       if (policyPending) return;
       const selected = event.target;
       const hadFocus = form.contains(document.activeElement);
@@ -314,7 +317,7 @@
         sessionStorage.setItem(operationKey, JSON.stringify({ id: operation, complete: false }));
       } catch {
         policyUncertain = true;
-        form.querySelectorAll('input[name="mode"]').forEach(input => { input.checked = false; });
+        selected.value = "";
         policyForms.forEach(item => { item.querySelector("fieldset").disabled = true; });
         document.getElementById("policy-uncertain-warning").hidden = false;
         selectionChanged();
@@ -354,7 +357,7 @@
         uncertain = true;
         policyUncertain = true;
         form.dataset.policyUncertain = "true";
-        form.querySelectorAll('input[name="mode"]').forEach(input => { input.checked = false; });
+        selected.value = "";
         policyStatus(form, "policy-unconfirmed");
         document.getElementById("policy-uncertain-warning").hidden = false;
       } finally {

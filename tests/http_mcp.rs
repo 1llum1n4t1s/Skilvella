@@ -686,7 +686,11 @@ async fn directory_settings_forms_and_icons_work_over_http() {
             && page.contains("action=\"/sources/directory\"")
             && page.contains("data-folder-browse")
     );
-    assert!(!page.contains("<select name=\"mode\""));
+    // 一覧の使い方は各スキル行の select だけで、旧移行フォームなどの mode select は無い。
+    assert_eq!(
+        page.matches("<select name=\"mode\"").count(),
+        page.matches("class=\"codex-policy-form\"").count()
+    );
     assert!(!page.contains("/sources/migrate") && !page.contains("name=\"destination\""));
     assert_eq!(
         common::post_form(
