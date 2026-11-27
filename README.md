@@ -28,7 +28,7 @@ Register `http://127.0.0.1:7465/mcp` with a Streamable HTTP client (read-only). 
 
 ## Automatic selection and command suggestions
 
-Sync invocation entries to six clients from "Settings": [overview](docs/readme/invocation-entries.md), [per-client entries](docs/readme/client-entry-sync.md), [cleanup and errors](docs/readme/entry-sync-maintenance.md), [Claude Code frontmatter carry-over](docs/readme/claude-frontmatter-carryover.md).
+Sync invocation entries to six clients from "Settings": [overview](docs/readme/invocation-entries.md), [per-client entries](docs/readme/client-entry-sync.md), [cleanup and errors](docs/readme/entry-sync-maintenance.md), [Claude Code frontmatter carry-over](docs/readme/claude-frontmatter-carryover.md), [body embedding for `context: fork`](docs/readme/fork-body-embedding.md).
 
 <a id="display-settings"></a>
 

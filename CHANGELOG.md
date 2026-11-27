@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- 原本 `SKILL.md` が `context: fork` の場合、Claude Code 向けの呼び出し入口に、`load_skill` で読み込む案内の代わりに原本の本文をそのまま埋め込むようにしました。フォーク先のエージェントが案内を無視して本文を読まないことを防ぎます。`arguments` も引き継ぎます。本文に `!` による動的コマンドや `CLAUDE_SKILL_DIR` を含む場合、本文が空の場合、入口が 2 MiB を超える場合は従来の案内のままです。参照ファイルは引き続き `read_skill_file` で読みます。
+
 ## 1.1.15 - 2026-11-27
 
 - Claude Code 向けの呼び出し入口が、原本 `SKILL.md` の frontmatter のうち許可したキー（`context` は `fork` のみ、`agent` と `background` は `context: fork` のときだけ、`model`、`effort`、`argument-hint`、`paths`）を引き継ぐようになりました。これで `context: fork` と `agent: Explore` などを持つスキルを Claude Code の入口から呼んだときも、指定したサブエージェントで別に実行されます。値は型を確かめ、不正なキーだけ捨てます。権限やセッション全体を変える `allowed-tools`・`hooks` などと、「使い方」設定と重なる `disable-model-invocation`・`user-invocable` は引き継ぎません。Codex・Grok・Cursor・GitHub Copilot・Devin の入口は変わりません。
