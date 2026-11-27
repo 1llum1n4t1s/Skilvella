@@ -38,8 +38,15 @@ mod codex_index {
         description: String,
         /// Claude Code の入口へ引き継ぐfrontmatter行（空、または改行終わりの行の連結）。
         claude_frontmatter: String,
+        /// `context: fork` の Claude Code 入口へ原本本文を埋め込む場合だけ持つ。
+        embedded: Option<Embedded>,
         source: String,
         relative_path: String,
+    }
+    /// 入口へ埋め込む原本本文と、埋め込み版の入口が引き継ぐfrontmatter行（`arguments` を含む）。
+    struct Embedded {
+        body: String,
+        frontmatter: String,
     }
     /// 入口生成に必要な索引の列（`export_codex` の主クエリ1本で読む）。
     struct EntryRow {
@@ -51,6 +58,11 @@ mod codex_index {
 
     // 個別の入口と検索の入口で、直接接続・集約接続の案内を共通化する。
     const MCP_ACCESS: &str = "MCP tool access: use the connected Skilvella tools directly when available, including their advertised namespace. If Toolport is available, use toolport_search_tools to discover each required capability (query: load_skill, read_skill_file, or search_skills), then invoke the exact returned tool name with toolport_call_tool, passing the tool parameters inside arguments. Do not guess a server prefix or treat a tool missing from the initial tool list as a disconnected MCP. If the Toolport helpers are deferred, discover them in the available tool inventory first. Only report MCP as unavailable after tool discovery or an actual MCP request fails; include that failure. Load one skill at a time; follow load_skill next until null and concatenate all content before acting. Read each needed reference one at a time with read_skill_file, retrieving every byte page of each needed line range before acting and using next_start_line only when more lines are needed; concatenate byte pages directly and insert a newline between line windows; keep start_line and max_lines unchanged for next_text_offset, then set start_line to next_start_line and reset text_offset to 0; pass returned revisions on continuation. Never replace MCP retrieval with local skill files.\n";
+
+    /// 本文を埋め込む入口の前置き文（`{}` は固定idのJSON表記）。`$` を含めない。
+    const EMBEDDED_PREAMBLE: &str = "Skilvella embedded the published skill with the fixed id {} below. Do not read it again with load_skill. The files this skill refers to (relative links, references, scripts) are not in this folder; read them with read_skill_file using this id.";
+    /// 本文を埋め込む入口の末尾注記。`MCP_ACCESS` から load_skill の手順を除いた版。`$` を含めない。
+    const EMBEDDED_NOTES: &str = "If a final `ARGUMENTS:` line follows, use it as this skill's input.\nMCP tool access: use the connected Skilvella tools directly when available, including their advertised namespace. If Toolport is available, use toolport_search_tools to discover the required capability (query: read_skill_file), then invoke the exact returned tool name with toolport_call_tool, passing the tool parameters inside arguments. Do not guess a server prefix or treat a tool missing from the initial tool list as a disconnected MCP. If the Toolport helpers are deferred, discover them in the available tool inventory first. Only report MCP as unavailable after tool discovery or an actual MCP request fails; include that failure. Read each needed reference one at a time with read_skill_file, retrieving every byte page of each needed line range before acting and using next_start_line only when more lines are needed; concatenate byte pages directly and insert a newline between line windows; keep start_line and max_lines unchanged for next_text_offset, then set start_line to next_start_line and reset text_offset to 0; pass returned revisions on continuation. Never replace MCP retrieval with local skill files.\n";
 
     // settingsの読書き（setting / setting_json / put）は親モジュールで共用する。
     /// クライアントごとの同期設定キー。Codexは旧版と同じキーを使い、既存設定をそのまま引き継ぐ。
@@ -705,7 +717,8 @@ mod codex_index {
                         continue;
                     }
                     // コマンドを出すスキルだけ原本を読む（従来どおりポリシー判定の後）。
-                    let Some(entry) = Self::codex_entry(row)? else {
+                    let Some(mut entry) = Self::codex_entry(row, client == SkillClient::Claude)?
+                    else {
                         continue;
                     };
                     let original = &entry.name;
@@ -736,16 +749,38 @@ mod codex_index {
                     } else {
                         ""
                     };
-                    let text = format!(
-                        "---\nname: {}\ndescription: {}\n{inherited}---\nUse Skilvella MCP load_skill with the fixed id {} before following this skill. Read references only through read_skill_file with this id. If this invocation came with arguments (Claude Code appends them as a final `ARGUMENTS:` line), use them as the loaded skill's arguments: fill its argument placeholders, or treat them as its input if it has none.\n\n{MCP_ACCESS}",
-                        serde_json::to_string(&name)?,
-                        serde_json::to_string(&description)?,
-                        serde_json::to_string(&id)?
-                    );
-                    desired.insert(
-                        format!("{name}/SKILL.md"),
-                        frontmatter_policy(client, text, policy.automatic),
-                    );
+                    let name_json = serde_json::to_string(&name)?;
+                    let description_json = serde_json::to_string(&description)?;
+                    let id_json = serde_json::to_string(&id)?;
+                    // `context: fork` のClaude Code入口だけ原本本文を埋め込む。入口全体が
+                    // CONTENT_LIMITを超える場合は従来の案内文に戻す（エラーにしない）。
+                    let embedded = entry
+                        .embedded
+                        .take()
+                        .map(|e| {
+                            let mut body = e.body;
+                            if !body.ends_with('\n') {
+                                body.push('\n');
+                            }
+                            let text = format!(
+                                "---\nname: {name_json}\ndescription: {description_json}\n{}---\n{}\n\n{body}\n{EMBEDDED_NOTES}",
+                                e.frontmatter,
+                                EMBEDDED_PREAMBLE.replace("{}", &id_json)
+                            );
+                            frontmatter_policy(client, text, policy.automatic)
+                        })
+                        .filter(|text| text.len() as u64 <= CONTENT_LIMIT);
+                    let text = match embedded {
+                        Some(text) => text,
+                        None => {
+                            let text = format!(
+                                "---\nname: {}\ndescription: {}\n{inherited}---\nUse Skilvella MCP load_skill with the fixed id {} before following this skill. Read references only through read_skill_file with this id. If this invocation came with arguments (Claude Code appends them as a final `ARGUMENTS:` line), use them as the loaded skill's arguments: fill its argument placeholders, or treat them as its input if it has none.\n\n{MCP_ACCESS}",
+                                name_json, description_json, id_json
+                            );
+                            frontmatter_policy(client, text, policy.automatic)
+                        }
+                    };
+                    desired.insert(format!("{name}/SKILL.md"), text);
                     if invocation_control(client) != InvocationControl::OpenAiYaml {
                         // Codex以外はSKILL.mdのfrontmatter（`frontmatter_policy`）で自動選択を制御する。
                         count += 1;
@@ -881,7 +916,7 @@ mod codex_index {
         /// 原本の `SKILL.md` を読み、索引のリビジョンと一致する場合だけ入口情報を返す。
         /// 不在・frontmatter不正・リビジョン不一致は `None`、それ以外の読取失敗はErr（従来どおり）。
         /// 行は `export_codex` の主クエリで公開条件を満たしたものだけが渡される。
-        fn codex_entry(row: EntryRow) -> Result<Option<Entry>> {
+        fn codex_entry(row: EntryRow, claude: bool) -> Result<Option<Entry>> {
             let EntryRow {
                 source,
                 relative_path,
@@ -907,10 +942,21 @@ mod codex_index {
             if revision(&content) != expected {
                 return Ok(None);
             }
+            let inherited = claude_frontmatter(&content, false);
+            // 本文の埋め込みはClaude Codeの同期だけで使う。
+            let embedded = if claude && inherited.starts_with("context: \"fork\"\n") {
+                embeddable_body(&content).map(|body| Embedded {
+                    body: body.to_owned(),
+                    frontmatter: claude_frontmatter(&content, true),
+                })
+            } else {
+                None
+            };
             Ok(Some(Entry {
                 name,
                 description,
-                claude_frontmatter: claude_frontmatter(&content),
+                claude_frontmatter: inherited,
+                embedded,
                 source,
                 relative_path,
             }))
@@ -1326,11 +1372,42 @@ mod codex_index {
         })
     }
 
+    /// 埋め込む本文（frontmatterの後ろ、改変なし）。空白だけ、または本文が
+    /// Claude Code の実行構文（`!` で始まるインライン・フェンス）や `CLAUDE_SKILL_DIR` を含む場合は `None`。
+    fn embeddable_body(content: &str) -> Option<&str> {
+        let body = super::frontmatter_body(content)?;
+        let exec_inline = body.match_indices("!`").any(|(at, _)| {
+            !body[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        // Claude Code のブロック構文は行頭に限らない（引用・箇条書き・行の途中）。保守的に、
+        // 3個以上の ` または ~ の連続の後ろに、空白（改行を含む）を挟んで `!` が続く箇所を除外する。
+        let exec_fence = ['`', '~'].into_iter().any(|fence| {
+            let mut rest = body;
+            while let Some(at) = rest.find(fence) {
+                let run = rest[at..].chars().take_while(|&c| c == fence).count();
+                rest = &rest[at + run..];
+                if run >= 3 && rest.trim_start().starts_with('!') {
+                    return true;
+                }
+            }
+            false
+        });
+        (!body.trim().is_empty()
+            && !body.contains("CLAUDE_SKILL_DIR")
+            && !exec_inline
+            && !exec_fence)
+            .then_some(body)
+    }
+
     /// 原本のfrontmatterのうち、Claude Code の入口へ引き継ぐ許可リストの項目だけを
     /// `key: <JSON>\n` の行で返す。値は解析結果を型確認して書き直し、原本の行は写さない。
     /// `agent` と `background` は `context: fork` のときだけ出す。型不正・入れ子の値はそのキーだけ捨てる。
+    /// `arguments` は `with_arguments`（本文を埋め込む入口）のときだけ出す。
     /// 解析できない原本は空文字を返す（入口の生成は止めない）。
-    fn claude_frontmatter(content: &str) -> String {
+    fn claude_frontmatter(content: &str, with_arguments: bool) -> String {
         use saphyr::LoadableYamlNode;
         let Ok(yaml) = super::frontmatter_yaml(content) else {
             return String::new();
@@ -1357,6 +1434,19 @@ mod codex_index {
         let effort =
             text("effort").filter(|v| matches!(*v, "low" | "medium" | "high" | "xhigh" | "max"));
         let background = get("background").and_then(|v| v.as_bool());
+        // `arguments` は本文を埋め込む入口だけ。空白区切りの文字列か、文字列の配列。
+        let arguments =
+            get("arguments")
+                .filter(|_| with_arguments)
+                .and_then(|v| match v.as_sequence() {
+                    Some(items) if !items.is_empty() => items
+                        .iter()
+                        .map(|item| plain_text(item.as_str()).filter(|s| !s.trim().is_empty()))
+                        .collect::<Option<Vec<_>>>()
+                        .and_then(|items| serde_json::to_string(&items).ok()),
+                    Some(_) => None,
+                    None => quote(plain_text(v.as_str()).filter(|s| !s.trim().is_empty())),
+                });
         // 出力順は固定。値はすべて検証済みの文字列・真偽値・文字列配列のJSON表記。
         let values = [
             ("context", fork.then(|| "\"fork\"".to_owned())),
@@ -1368,6 +1458,7 @@ mod codex_index {
             ("model", quote(text("model"))),
             ("effort", quote(effort)),
             ("argument-hint", quote(text("argument-hint"))),
+            ("arguments", arguments),
             ("paths", paths),
         ];
         values
@@ -4387,6 +4478,27 @@ fn yaml_exceeds_nesting_limit(yaml: &str) -> bool {
         }
     }
     false
+}
+/// `frontmatter_yaml` と同じ規則（1行目が `---`、最初の `---` だけの行で閉じる）で、
+/// 閉じ区切りの後ろの本文を改変せずに返す。閉じていなければ `None`。
+fn frontmatter_body(content: &str) -> Option<&str> {
+    let eol = |line: &str| {
+        let line = line.strip_suffix('\n').unwrap_or(line);
+        line.strip_suffix('\r').unwrap_or(line).to_owned()
+    };
+    let mut lines = content.split_inclusive('\n');
+    let first = lines.next()?;
+    if eol(first).trim_start_matches('\u{feff}') != "---" {
+        return None;
+    }
+    let mut offset = first.len();
+    for line in lines {
+        offset += line.len();
+        if eol(line) == "---" {
+            return Some(&content[offset..]);
+        }
+    }
+    None
 }
 /// `SKILL.md` 先頭のfrontmatter本文（区切り `---` は含まない）を切り出し、入れ子の深さを検査する。
 fn frontmatter_yaml(content: &str) -> Result<String> {

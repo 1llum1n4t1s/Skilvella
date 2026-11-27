@@ -38,7 +38,7 @@ Setup版は24時間間引きの自動取得と次回起動時の適用を行い�
 
 ## Codexの呼び出し入口
 
-Codex連携は明示的に有効化し、MCPの本文取得へ誘導する短い `SKILL.md` を生成します。所有記録の検査と同期の方針は [codex-entrypoints.md](docs/design/codex-entrypoints.md)、各クライアントの配置は [client-sync.md](docs/design/client-sync.md) です。探索先のリンクと検出表示は [client-links.md](docs/design/client-links.md) です。
+Codex連携は明示的に有効化し、MCPの本文取得へ誘導する短い `SKILL.md` を生成します（Claude Codeの入口のうち原本が `context: fork` を持つものだけは例外で、条件を満たせば原本の本文を埋め込みます。[client-sync.md](docs/design/client-sync.md) を参照）。所有記録の検査と同期の方針は [codex-entrypoints.md](docs/design/codex-entrypoints.md)、各クライアントの配置は [client-sync.md](docs/design/client-sync.md) です。探索先のリンクと検出表示は [client-links.md](docs/design/client-links.md) です。
 
 ## データフローと永続化
 

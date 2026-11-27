@@ -1023,7 +1023,8 @@ fn claude_entry_inherits_only_allowed_frontmatter_and_other_clients_do_not() {
         claude.contains("context: \"fork\"\nagent: \"Explore\"\n"),
         "{claude}"
     );
-    assert!(!claude.contains("PRIVATE ORIGINAL BODY"));
+    // fork の Claude Code 入口だけは原本本文を埋め込む。
+    assert!(claude.contains("PRIVATE ORIGINAL BODY"), "{claude}");
     assert!(claude.contains("`ARGUMENTS:`"));
     // 自動選択の停止行は最後に残り、原本の `disable-model-invocation: false` は通さない。
     assert!(
@@ -1173,7 +1174,8 @@ fn claude_entry_inherits_with_automatic_selection_and_quotes_special_values() {
     );
     let claude = claude_entry_text(&base);
     assert!(!claude.contains("disable-model-invocation"), "{claude}");
-    assert!(claude.contains("`ARGUMENTS:`") && claude.contains("it has none."));
+    assert!(claude.contains("`ARGUMENTS:`") && claude.contains("PRIVATE ORIGINAL BODY"));
+    assert!(!claude.contains("it has none."), "{claude}");
     let doc = entry_frontmatter(&claude);
     assert_eq!(
         doc.as_mapping_get("context").and_then(|v| v.as_str()),
@@ -1197,4 +1199,276 @@ fn claude_entry_inherits_with_automatic_selection_and_quotes_special_values() {
     let claude = claude_entry_text(&base);
     assert!(!claude.contains("agent:"), "{claude}");
     assert!(claude.contains("model: \"opus\"\n---\n"), "{claude}");
+}
+
+// ---- context: fork の Claude Code 入口への本文埋め込み ----
+
+/// Claude Code と Grok だけを有効にし、自動選択＋コマンド候補で公開した状態にする。
+fn embed_setup() -> (PathBuf, Library, String) {
+    let (base, library, id) = setup();
+    publish(&library, &id, true);
+    library.set_codex_policy(&id, true, true).unwrap();
+    library
+        .set_clients_enabled(&[(SkillClient::Claude, true), (SkillClient::Grok, true)])
+        .unwrap();
+    (base, library, id)
+}
+
+/// frontmatter の後ろの本文を丸ごと指定して原本を差し替え、再生成する。
+fn rewrite_body(base: &std::path::Path, library: &Library, frontmatter: &str, body: &str) {
+    fs::write(
+        base.join("source/one/SKILL.md"),
+        format!("---\nname: original\ndescription: A useful skill\n{frontmatter}---\n{body}"),
+    )
+    .unwrap();
+    library.scan().unwrap();
+    library.sync_codex_entries().unwrap();
+}
+
+fn grok_entry_text(base: &std::path::Path) -> String {
+    fs::read_to_string(base.join("home/.grok/skills/skilvella/original/SKILL.md")).unwrap()
+}
+
+const LEGACY_TAIL: &str = "Never replace MCP retrieval with local skill files.\n";
+
+fn assert_legacy(claude: &str) {
+    assert!(claude.contains("load_skill with the fixed id"), "{claude}");
+    assert!(!claude.contains("Skilvella embedded"), "{claude}");
+    assert!(claude.ends_with(LEGACY_TAIL), "{claude}");
+}
+
+#[test]
+fn fork_claude_entry_embeds_the_original_body() {
+    let (base, library, id) = embed_setup();
+    let body = "# Title\n\nUse $ARGUMENTS and read [ref](references/a.md).\n";
+    rewrite_body(
+        &base,
+        &library,
+        "context: fork\nagent: Explore\narguments: topic scope\nargument-hint: \"[topic]\"\n",
+        body,
+    );
+    let claude = claude_entry_text(&base);
+    assert!(claude.contains(body), "{claude}");
+    assert!(claude.contains("read_skill_file"), "{claude}");
+    assert!(claude.contains(&format!("\"{id}\"")), "{claude}");
+    assert!(!claude.contains("load_skill with the fixed id"), "{claude}");
+    assert!(claude.contains("`ARGUMENTS:`"), "{claude}");
+    assert!(claude.ends_with(LEGACY_TAIL), "{claude}");
+    let doc = entry_frontmatter(&claude);
+    let get = |key: &str| doc.as_mapping_get(key);
+    assert_eq!(get("context").and_then(|v| v.as_str()), Some("fork"));
+    assert_eq!(get("agent").and_then(|v| v.as_str()), Some("Explore"));
+    assert_eq!(
+        get("arguments").and_then(|v| v.as_str()),
+        Some("topic scope")
+    );
+    assert_eq!(
+        get("argument-hint").and_then(|v| v.as_str()),
+        Some("[topic]")
+    );
+    let keys: Vec<_> = doc
+        .as_mapping()
+        .unwrap()
+        .keys()
+        .filter_map(|k| k.as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "name",
+            "description",
+            "context",
+            "agent",
+            "argument-hint",
+            "arguments"
+        ]
+    );
+    // 本文は frontmatter の後ろ、前置き文の次に原文のまま置かれる。
+    assert!(claude.contains(&format!("\n\n{body}\n")), "{claude}");
+
+    // 配列の arguments。制御文字・入れ子を含む値は捨てる。
+    rewrite_body(
+        &base,
+        &library,
+        "context: fork\narguments:\n  - topic\n  - scope\n",
+        body,
+    );
+    let doc = entry_frontmatter(&claude_entry_text(&base));
+    let items: Vec<_> = doc
+        .as_mapping_get("arguments")
+        .and_then(|v| v.as_sequence())
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(items, ["topic", "scope"]);
+    rewrite_body(
+        &base,
+        &library,
+        "context: fork\narguments: \"a\\nb\"\n",
+        body,
+    );
+    assert!(!claude_entry_text(&base).contains("arguments:"));
+    rewrite_body(
+        &base,
+        &library,
+        "context: fork\narguments:\n  - a\n  - x: 1\n",
+        body,
+    );
+    assert!(!claude_entry_text(&base).contains("arguments:"));
+}
+
+#[test]
+fn fork_claude_entry_keeps_the_legacy_text_when_body_is_not_embeddable() {
+    let (base, library, _id) = embed_setup();
+    let cases = [
+        "!`date`\nbody\n",
+        "Run !`x` now\n",
+        "Run\t!`x`\n",
+        "```!\ndate\n```\n",
+        "  ~~~~ !\ndate\n~~~~\n",
+        "> ```!\n> date\n> ```\n",
+        "- ```!\n  date\n  ```\n",
+        "Run ```!date``` now\n",
+        "see ${CLAUDE_SKILL_DIR}/a\n",
+        "   \n\n",
+        "",
+    ];
+    for body in cases {
+        rewrite_body(&base, &library, "context: fork\narguments: a b\n", body);
+        let claude = claude_entry_text(&base);
+        assert_legacy(&claude);
+        // 従来方式では arguments を引き継がない。
+        assert!(!claude.contains("\narguments: "), "{body:?}: {claude}");
+        assert!(library.sync_summary().unwrap().last_error.is_empty());
+    }
+    // 英数字・`_` の直後の `!`（例: panic!）や、`!` で始まらないフェンスは除外しない。
+    for body in [
+        "Use `panic!` and my_!`x` here\n",
+        "```rust\nlet a = 1;\n```\n",
+    ] {
+        rewrite_body(&base, &library, "context: fork\n", body);
+        let claude = claude_entry_text(&base);
+        assert!(claude.contains(body), "{claude}");
+        assert!(!claude.contains("load_skill with the fixed id"), "{claude}");
+    }
+    // agent が捨てられても fork なら埋め込む。
+    rewrite_body(&base, &library, "context: fork\nagent: \"a\\nb\"\n", "B\n");
+    let claude = claude_entry_text(&base);
+    assert!(
+        !claude.contains("agent:") && claude.contains("\nB\n"),
+        "{claude}"
+    );
+}
+
+#[test]
+fn fork_claude_entry_embeds_crlf_and_bom_sources_unchanged() {
+    let (base, library, _id) = embed_setup();
+    let source = "\u{feff}---\r\nname: original\r\ndescription: A useful skill\r\ncontext: fork\r\n---\r\nline one\r\nline two";
+    fs::write(base.join("source/one/SKILL.md"), source).unwrap();
+    library.scan().unwrap();
+    library.sync_codex_entries().unwrap();
+    let claude = claude_entry_text(&base);
+    // 改行で終わらない本文には \n だけを補う。CRLFはそのまま。
+    assert!(claude.contains("\n\nline one\r\nline two\n\n"), "{claude}");
+    assert!(!claude.contains("load_skill with the fixed id"), "{claude}");
+    let doc = entry_frontmatter(&claude);
+    assert_eq!(
+        doc.as_mapping_get("context").and_then(|v| v.as_str()),
+        Some("fork")
+    );
+}
+
+#[test]
+fn fork_claude_entry_over_the_size_limit_falls_back_without_a_sync_error() {
+    let (base, library, _id) = embed_setup();
+    let header = "---\nname: original\ndescription: A useful skill\ncontext: fork\n---\n";
+    let limit = 2 * 1024 * 1024;
+    // 原本は上限ちょうど。埋め込むと入口が上限を超える。
+    let body = "x".repeat(limit - header.len() - 1) + "\n";
+    fs::write(base.join("source/one/SKILL.md"), format!("{header}{body}")).unwrap();
+    assert_eq!(header.len() + body.len(), limit);
+    library.scan().unwrap();
+    library.sync_codex_entries().unwrap();
+    let claude = claude_entry_text(&base);
+    assert_legacy(&claude);
+    assert!(!claude.contains("xxxx"));
+    assert!(library.sync_summary().unwrap().last_error.is_empty());
+}
+
+#[test]
+fn embedded_body_does_not_remain_after_unpublishing_or_disabling_commands() {
+    let (base, library, id) = embed_setup();
+    rewrite_body(&base, &library, "context: fork\n", "SECRET EMBEDDED BODY\n");
+    let leaks = |base: &std::path::Path| {
+        let mut found = false;
+        // 退避フォルダー（skilvella-retired）には次の同期まで写しが残る仕様のため、入口の生成先だけ見る。
+        let mut stack = vec![base.join("home/.claude/skilvella/skills")];
+        while let Some(dir) = stack.pop() {
+            let Ok(read) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for item in read.flatten() {
+                let path = item.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if fs::read_to_string(&path)
+                    .is_ok_and(|t| t.contains("SECRET EMBEDDED BODY"))
+                {
+                    found = true;
+                }
+            }
+        }
+        found
+    };
+    assert!(leaks(&base));
+    publish(&library, &id, false);
+    assert!(!leaks(&base));
+    publish(&library, &id, true);
+    assert!(leaks(&base));
+    library.set_codex_policy(&id, false, false).unwrap();
+    library.sync_codex_entries().unwrap();
+    assert!(!leaks(&base));
+}
+
+#[test]
+fn embedded_entry_text_written_by_skilvella_has_no_dollar_sign() {
+    let (base, library, _id) = embed_setup();
+    rewrite_body(&base, &library, "context: fork\n", "BODY\n");
+    let claude = claude_entry_text(&base);
+    assert!(!claude.contains('$'), "{claude}");
+    // 本文に $ があっても、それ以外の生成文には現れない。
+    rewrite_body(&base, &library, "context: fork\n", "cost $ARGUMENTS ${x}\n");
+    let claude = claude_entry_text(&base);
+    assert!(claude.contains("cost $ARGUMENTS ${x}\n"), "{claude}");
+    let without = claude.replacen("cost $ARGUMENTS ${x}\n", "", 1);
+    assert!(!without.contains('$'), "{claude}");
+}
+
+#[test]
+fn non_fork_claude_entries_and_other_clients_keep_the_legacy_bytes() {
+    let (base, library, _id) = embed_setup();
+    rewrite_body(
+        &base,
+        &library,
+        "model: opus\narguments: a b\n",
+        "PRIVATE ORIGINAL BODY\n",
+    );
+    let claude = claude_entry_text(&base);
+    assert_legacy(&claude);
+    assert!(!claude.contains("PRIVATE ORIGINAL BODY") && !claude.contains("\narguments: "));
+    let grok_plain = grok_entry_text(&base);
+    // 継承行を除けば Claude Code の入口は他クライアントと同じ文面。
+    assert_eq!(claude.replace("model: \"opus\"\n", ""), grok_plain);
+    assert!(grok_plain.ends_with(LEGACY_TAIL));
+
+    // fork の原本でも、他クライアントの入口は fork でない原本のときとバイト列が同じ。
+    rewrite_body(
+        &base,
+        &library,
+        "context: fork\narguments: a b\n",
+        "PRIVATE ORIGINAL BODY\n",
+    );
+    assert_eq!(grok_entry_text(&base), grok_plain);
+    assert!(!grok_entry_text(&base).contains("PRIVATE ORIGINAL BODY"));
 }
