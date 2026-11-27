@@ -549,13 +549,13 @@ fn help_follows_the_language_override() {
     // 日本語は原文そのまま、他の言語は辞書の訳。
     assert!(help("ja", "de_DE.UTF-8").contains("使い方: skilvella"));
     assert!(help("en", "ja_JP.UTF-8").contains("Usage: skilvella"));
-    assert!(help("de", "ja_JP.UTF-8").contains("--no-tray"));
     for (language, expected) in [
         ("zh-CN", native_catalog("zh-CN")["使い方:"].clone()),
         ("zh_TW.UTF-8", native_catalog("zh-TW")["使い方:"].clone()),
         ("ko", native_catalog("ko")["使い方:"].clone()),
         ("es", native_catalog("es")["使い方:"].clone()),
         ("fr", native_catalog("fr")["使い方:"].clone()),
+        ("de", native_catalog("de")["使い方:"].clone()),
         ("pt_PT", native_catalog("pt-BR")["使い方:"].clone()),
     ] {
         let text = help(language, "C");

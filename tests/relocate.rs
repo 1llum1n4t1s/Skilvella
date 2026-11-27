@@ -47,36 +47,6 @@ async fn move_folder(f: &Fixture) -> PathBuf {
 }
 
 #[tokio::test]
-async fn moved_folder_stops_sync_but_pages_open_and_remove_recovers() {
-    let f = fixture("relocate-remove");
-    move_folder(&f).await;
-    let stopped = f.state.library.sync_summary().unwrap().last_error;
-    assert!(stopped.contains("Skill source unavailable"), "{stopped}");
-
-    let server = common::HttpServer::start(f.state.clone()).await;
-    let client = common::no_redirect_client();
-    for url in [
-        format!("{}/", server.base),
-        format!("{}/?source={}", server.base, f.alias),
-        format!("{}/settings", server.base),
-    ] {
-        let response = client.get(&url).send().await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{url}");
-    }
-
-    let response = common::post_form(
-        &client,
-        &format!("{}/sources/remove", server.base),
-        &[("csrf", &*f.state.csrf), ("alias", &f.alias)],
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert!(f.state.library.sources().unwrap().is_empty());
-    let recovered = f.state.library.sync_summary().unwrap();
-    assert!(recovered.last_error.is_empty(), "{}", recovered.last_error);
-}
-
-#[tokio::test]
 async fn remove_recovers_even_when_new_location_is_already_added() {
     let f = fixture("relocate-added");
     let to = move_folder(&f).await;
@@ -94,6 +64,15 @@ async fn remove_recovers_even_when_new_location_is_already_added() {
 
     let server = common::HttpServer::start(f.state.clone()).await;
     let client = common::no_redirect_client();
+    // 同期が止まっていても主要な画面は開ける。
+    for url in [
+        format!("{}/", server.base),
+        format!("{}/?source={}", server.base, f.alias),
+        format!("{}/settings", server.base),
+    ] {
+        let response = client.get(&url).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{url}");
+    }
     let response = common::post_form(
         &client,
         &format!("{}/sources/remove", server.base),

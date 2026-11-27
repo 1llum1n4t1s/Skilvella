@@ -1,15 +1,47 @@
 use crate::{AppState, locale};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use std::{collections::HashSet, path::PathBuf, time::Duration};
+use std::{
+    collections::HashSet,
+    path::{Component, Path, PathBuf},
+    sync::{Arc, RwLock},
+    time::Duration,
+};
+
+/// 監視ルートの下で、探索が辿らないフォルダー（`.git` など）の内側にある通知か。
+/// `.git` 自体のような最後の成分は内側とみなさない。
+fn inside_skipped(roots: &[PathBuf], path: &Path) -> bool {
+    for root in roots {
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        if relative.parent().is_some_and(|parent| {
+            parent.components().any(|part| {
+                matches!(part, Component::Normal(name) if crate::library::skipped(&name.to_string_lossy()))
+            })
+        }) {
+            return true;
+        }
+    }
+    false
+}
 
 /// ファイル通知をまとめ、SQLite/ファイル走査はブロッキング専用スレッドへ送る。
 pub fn start(state: AppState) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let roots: Arc<RwLock<Vec<PathBuf>>> = Arc::new(RwLock::new(Vec::new()));
+        let callback_roots = roots.clone();
         let watcher = RecommendedWatcher::new(
             move |event: notify::Result<notify::Event>| match event {
                 Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => {
-                    let _ = tx.try_send(());
+                    let ignorable = !event.need_rescan()
+                        && !event.paths.is_empty()
+                        && callback_roots.read().is_ok_and(|roots| {
+                            event.paths.iter().all(|path| inside_skipped(&roots, path))
+                        });
+                    if !ignorable {
+                        let _ = tx.try_send(());
+                    }
                 }
                 Err(error) => {
                     eprintln!(
@@ -41,7 +73,7 @@ pub fn start(state: AppState) -> tokio::task::JoinHandle<()> {
         let mut watched = HashSet::<PathBuf>::new();
         let mut scan_pending = false;
         loop {
-            match state.run(|lib| lib.sources()).await {
+            match state.run(|lib| lib.source_rows()).await {
                 Ok(sources) => {
                     let desired: HashSet<_> =
                         sources.into_iter().map(|s| PathBuf::from(s.path)).collect();
@@ -70,6 +102,9 @@ pub fn start(state: AppState) -> tokio::task::JoinHandle<()> {
                         }
                     }
                     watched = next;
+                    if let Ok(mut roots) = roots.write() {
+                        *roots = watched.iter().cloned().collect();
+                    }
                 }
                 Err(error) => eprintln!(
                     "{}",

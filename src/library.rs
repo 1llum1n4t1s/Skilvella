@@ -9,7 +9,7 @@ mod codex_index {
     use rusqlite::{Connection, OptionalExtension};
     use serde::{Deserialize, Serialize};
     use std::{
-        collections::{BTreeMap, BTreeSet, HashSet},
+        collections::{BTreeMap, BTreeSet, HashMap, HashSet},
         fs,
         io::Write,
         path::{Path, PathBuf},
@@ -33,6 +33,9 @@ mod codex_index {
         manifest: Manifest,
         path: PathBuf,
     }
+    /// 同期1回の中で、クライアント間で原本の読み取り結果を使い回す表（キーはEntryRowの全列）。
+    type EntryCache = HashMap<(String, String, String, String), Option<Entry>>;
+    #[derive(Clone)]
     struct Entry {
         name: String,
         description: String,
@@ -44,6 +47,7 @@ mod codex_index {
         relative_path: String,
     }
     /// 入口へ埋め込む原本本文と、埋め込み版の入口が引き継ぐfrontmatter行（`arguments` を含む）。
+    #[derive(Clone)]
     struct Embedded {
         body: String,
         frontmatter: String,
@@ -561,14 +565,20 @@ mod codex_index {
         /// 全クライアントを順に同期する。1件の失敗で他のクライアントを止めず、最初の失敗を返す。
         fn sync_codex_locked(&self, c: &Connection) -> Result<()> {
             let mut first_error = None;
+            let mut cache = EntryCache::new();
             for client in SkillClient::ALL {
-                if let Err(error) = self.sync_client_locked(c, client) {
+                if let Err(error) = self.sync_client_locked(c, client, &mut cache) {
                     first_error.get_or_insert(error);
                 }
             }
             first_error.map_or(Ok(()), Err)
         }
-        fn sync_client_locked(&self, c: &Connection, client: SkillClient) -> Result<()> {
+        fn sync_client_locked(
+            &self,
+            c: &Connection,
+            client: SkillClient,
+            cache: &mut EntryCache,
+        ) -> Result<()> {
             // 保存済みの生文字列を1回だけ読み、ここで解析する（JSON不正は従来どおりErr）。
             // 最後に同じ文字列なら書き込まず、変化のない同期でDBを更新しない。
             let saved = setting(c, settings_key(client))?;
@@ -577,7 +587,7 @@ mod codex_index {
                 .map(serde_json::from_str)
                 .transpose()?
                 .unwrap_or_default();
-            let exported = self.export_codex(c, client, settings.enabled);
+            let exported = self.export_codex(c, client, settings.enabled, cache);
             // リンク方式のクライアントは、生成物の公開結果（成功・復旧後のどちらでも）に
             // 合わせてリンクを揃える。生成に失敗した場合も、現在の所有記録との整合を保つ。
             let linked = self.sync_client_links(c, client);
@@ -607,6 +617,7 @@ mod codex_index {
             c: &Connection,
             client: SkillClient,
             enabled: bool,
+            cache: &mut EntryCache,
         ) -> Result<usize> {
             let root = target(c, client)?;
             ensure!(
@@ -713,10 +724,27 @@ mod codex_index {
                         continue;
                     }
                     // 入口を生成するスキル（自動選択のみを含む「検索のみ」以外）だけ原本を読む（従来どおりポリシー判定の後）。
-                    let Some(mut entry) = Self::codex_entry(row, client == SkillClient::Claude)?
-                    else {
+                    // 結果はClaude相当（fork時のみembeddedあり）で計算し、同期1回の中で使い回す。
+                    let key = (
+                        row.source.clone(),
+                        row.root.clone(),
+                        row.relative_path.clone(),
+                        row.revision.clone(),
+                    );
+                    let cached = match cache.get(&key) {
+                        Some(cached) => cached.clone(),
+                        None => {
+                            let computed = Self::codex_entry(row, true)?;
+                            cache.insert(key, computed.clone());
+                            computed
+                        }
+                    };
+                    let Some(mut entry) = cached else {
                         continue;
                     };
+                    if client != SkillClient::Claude {
+                        entry.embedded = None;
+                    }
                     let original = &entry.name;
                     let suffix = &id[..id.len().min(8)];
                     let duplicates = if let Some(names) = &duplicate_names {
@@ -1117,8 +1145,14 @@ mod codex_index {
             let state = self.client_state(client)?;
             let record_path = state.join("links.json");
             reject_links(&record_path)?;
-            let record: LinkRecord = if record_path.try_exists()? {
-                serde_json::from_str(&read_text(&record_path, CONTENT_LIMIT)?)?
+            // 読んだ生文字列を保持し、同じ内容なら書き直さない（mtimeを変えない）。
+            let saved: Option<String> = if record_path.try_exists()? {
+                Some(read_text(&record_path, CONTENT_LIMIT)?)
+            } else {
+                None
+            };
+            let record: LinkRecord = if let Some(text) = &saved {
+                serde_json::from_str(text)?
             } else {
                 LinkRecord {
                     owner: self.db.clone(),
@@ -1201,13 +1235,13 @@ mod codex_index {
             if relocating && !kept.is_empty() {
                 // 旧置き場のリンクを外せなかった場合は、旧記録を保って次回に再試行する。
                 // 1つの記録に新旧2つの置き場を混在させない。
-                save_text(
-                    &record_path,
-                    &serde_json::to_string(&LinkRecord {
-                        names: kept,
-                        ..record
-                    })?,
-                )?;
+                let text = serde_json::to_string(&LinkRecord {
+                    names: kept,
+                    ..record
+                })?;
+                if saved.as_deref() != Some(text.as_str()) {
+                    save_text(&record_path, &text)?;
+                }
                 bail!(
                     "{label}の入口リンクを更新できません: {}",
                     failures.join("; ")
@@ -1270,7 +1304,10 @@ mod codex_index {
                 }
             } else {
                 fs::create_dir_all(&state)?;
-                save_text(&record_path, &serde_json::to_string(&next)?)?;
+                let text = serde_json::to_string(&next)?;
+                if saved.as_deref() != Some(text.as_str()) {
+                    save_text(&record_path, &text)?;
+                }
             }
             if !conflicts.is_empty() {
                 bail!(
@@ -1561,7 +1598,7 @@ mod codex_index {
         {
             use std::os::windows::fs::MetadataExt;
             // ジャンクション・ディレクトリリンクはremove_dir、ファイルリンクはremove_fileで外す。
-            const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+            use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
             if fs::symlink_metadata(path)?.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0 {
                 fs::remove_dir(path)?;
             } else {
@@ -1696,15 +1733,22 @@ mod codex_index {
             agents.join("skilvella-staging"),
             agents.join("skilvella-retired"),
         ];
+        let mut normalized: [Option<PathBuf>; 3] = Default::default();
         let mut sources = c.prepare("SELECT path FROM sources WHERE active=1")?;
         for source in sources.query_map([], |r| r.get::<_, String>(0))? {
             // 登録時に正規化済みのパスを使い、無関係な切断volumeを再解決しない。
             let source = PathBuf::from(source?);
             ensure!(source.is_absolute(), "Invalid managed source path");
-            for target in &targets {
-                let target = super::migration::normalize_path(target)?;
+            for (index, target) in targets.iter().enumerate() {
+                // 正規化はソースが重なりの比較に進んだときだけ、対象ごとに1回行って使い回す。
+                if normalized[index].is_none() {
+                    normalized[index] = Some(super::migration::normalize_path(target)?);
+                }
+                let Some(target) = normalized[index].as_deref() else {
+                    continue;
+                };
                 ensure!(
-                    !super::migration::overlaps(&source, &target),
+                    !super::migration::overlaps(&source, target),
                     "Skill entry export overlaps a managed source: {}",
                     source.display()
                 );
@@ -2590,7 +2634,7 @@ impl Library {
         };
         if settings.mode.is_empty() {
             // 既存登録があるライブラリへ、推測したルートを追加しない。
-            if let Some(source) = Self::sources_on(&tx)?.into_iter().next() {
+            if let Some(source) = Self::source_rows_on(&tx)?.into_iter().next() {
                 settings.mode = "custom".into();
                 settings.custom_path = source.path.clone();
                 settings.path = source.path;
@@ -2771,7 +2815,26 @@ impl Library {
         let c = self.connection()?;
         Self::sources_on(&c)
     }
+    /// 専用フォルダー判定（native項目）を含めない一覧。aliasやpathだけを使う内部呼出し向け。
+    pub(crate) fn source_rows(&self) -> Result<Vec<Source>> {
+        let c = self.connection()?;
+        Self::source_rows_on(&c)
+    }
     fn sources_on(c: &Connection) -> Result<Vec<Source>> {
+        let mut sources = Self::source_rows_on(c)?;
+        for source in &mut sources {
+            match Self::is_native_root(c, Path::new(&source.path)) {
+                Ok(native) => source.native_discovery = native,
+                Err(_) => {
+                    // オフラインvolumeなどの判定不能を、専用フォルダーの保証にしない。
+                    source.native_discovery = true;
+                    source.native_discovery_unknown = true;
+                }
+            }
+        }
+        Ok(sources)
+    }
+    fn source_rows_on(c: &Connection) -> Result<Vec<Source>> {
         // 表示名も同じ一覧クエリで取り、取得元ごとにsettingsを読み直さない。
         let mut statement = c.prepare(
             "SELECT s.alias,s.path,coalesce(k.skill_count,0),coalesce(k.error_count,0),
@@ -2786,7 +2849,7 @@ impl Library {
              LEFT JOIN settings u ON u.key=(?2 || s.alias)
              WHERE s.active=1 ORDER BY s.alias",
         )?;
-        let mut sources = statement
+        let sources = statement
             .query_map(
                 [SOURCE_DISPLAY_NAME_PREFIX, SOURCE_UNAVAILABLE_PREFIX],
                 |r| {
@@ -2803,16 +2866,6 @@ impl Library {
                 },
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for source in &mut sources {
-            match Self::is_native_root(c, Path::new(&source.path)) {
-                Ok(native) => source.native_discovery = native,
-                Err(_) => {
-                    // オフラインvolumeなどの判定不能を、専用フォルダーの保証にしない。
-                    source.native_discovery = true;
-                    source.native_discovery_unknown = true;
-                }
-            }
-        }
         Ok(sources)
     }
     /// 読み取れないフォルダーの印を、値が変わるときだけ書く（変化のない同期・走査でDBを更新しない）。
@@ -3099,7 +3152,7 @@ impl Library {
     }
     fn scan_on(&self, tx: &Connection) -> Result<ScanReport> {
         self.refresh_repository_cache(tx)?;
-        let sources = Self::sources_on(tx)?;
+        let sources = Self::source_rows_on(tx)?;
         let (owned_codex, uncertain, regions) = self.owned_codex_markers();
         let excluded = owned_codex.iter().map(|p| path_key(p)).collect();
         let regions = if uncertain {
@@ -3322,7 +3375,7 @@ impl Library {
 
     // 起動・走査の既存操作ロック内だけで保存し、GETは書き込まない。
     fn refresh_repository_cache(&self, c: &Connection) -> Result<()> {
-        for source in Self::sources_on(c)? {
+        for source in Self::source_rows_on(c)? {
             if let Ok(roots) = Self::repository_roots(c, &source) {
                 put(
                     c,
@@ -3363,7 +3416,7 @@ impl Library {
         let mut groups: std::collections::BTreeMap<(String, String), RepositoryGroup> =
             Default::default();
         let mut roots = std::collections::BTreeMap::new();
-        for source in Self::sources_on(c)? {
+        for source in Self::source_rows_on(c)? {
             match Self::repository_roots(c, &source) {
                 Ok(repositories) => {
                     for repository in &repositories {
@@ -3438,7 +3491,7 @@ impl Library {
 
     pub fn repository_selection(&self, skill: &SkillSummary) -> Result<RepositorySelection> {
         let c = self.connection()?;
-        let source = Self::sources_on(&c)?
+        let source = Self::source_rows_on(&c)?
             .into_iter()
             .find(|source| source.alias == skill.source)
             .context("Source not found")?;
@@ -3559,33 +3612,11 @@ impl Library {
             let score = if words.is_empty() {
                 0
             } else {
-                let haystack = format!(
-                    "{} {} {} {} {}",
-                    s.name,
-                    s.description,
-                    s.tags.join(" "),
-                    s.category,
-                    content
-                )
-                .to_lowercase();
                 // Literal contains is the Unicode-safe fallback for short terms and verifies FTS candidates.
-                if !words.iter().all(|w| haystack.contains(w)) {
-                    continue;
+                match search_score(&s, &content, &words) {
+                    Some(score) => score,
+                    None => continue,
                 }
-                let name = s.name.to_lowercase();
-                let tags = s.tags.join(" ").to_lowercase();
-                words
-                    .iter()
-                    .map(|w| {
-                        if name.contains(w) {
-                            10
-                        } else if tags.contains(w) {
-                            5
-                        } else {
-                            1
-                        }
-                    })
-                    .sum::<usize>()
             };
             matches.push((score, s));
         }
@@ -4064,7 +4095,7 @@ impl Library {
             );
         }
         // キャッシュされた取得元でも、切断中のソースへ設定を書き込まない。
-        for source in Self::sources_on(&tx)? {
+        for source in Self::source_rows_on(&tx)? {
             if scopes.iter().any(|(alias, _)| *alias == source.alias) {
                 Self::detect_repositories(Path::new(&source.path))?;
             }
@@ -4246,6 +4277,44 @@ impl Library {
     }
 }
 
+/// 検索語（小文字化・空白なし）がすべて一致すれば点数（名前10・タグ5・他1の合計）を返す。
+/// 名前・説明・タグ・カテゴリで足りない語がある場合だけ本文を小文字化する。
+fn search_score(s: &SkillSummary, content: &str, words: &[String]) -> Option<usize> {
+    let name = s.name.to_lowercase();
+    let description = s.description.to_lowercase();
+    let tags = s.tags.join(" ").to_lowercase();
+    let category = s.category.to_lowercase();
+    let rest: Vec<&String> = words
+        .iter()
+        .filter(|w| {
+            !(name.contains(w.as_str())
+                || description.contains(w.as_str())
+                || tags.contains(w.as_str())
+                || category.contains(w.as_str()))
+        })
+        .collect();
+    if !rest.is_empty() {
+        let content = content.to_lowercase();
+        if !rest.iter().all(|w| content.contains(w.as_str())) {
+            return None;
+        }
+    }
+    Some(
+        words
+            .iter()
+            .map(|w| {
+                if name.contains(w.as_str()) {
+                    10
+                } else if tags.contains(w.as_str()) {
+                    5
+                } else {
+                    1
+                }
+            })
+            .sum(),
+    )
+}
+
 fn summary_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkillSummary> {
     let raw: String = r.get(5)?;
     Ok(SkillSummary {
@@ -4414,7 +4483,7 @@ fn normalize_tags(tags: &[String]) -> Result<Vec<String>> {
 /// frontmatter の入れ子の上限（解析後の木の深さ。数え方は `yaml_exceeds_nesting_limit` を参照）。
 ///
 /// 根拠: 通常のfrontmatter（name・description・metadata・allowed-tools のマップやリスト）は
-/// 実質10段に届かない。一方、saphyr 0.3.3 は2 MiB スレッド（`spawn_blocking` の既定）で、
+/// 実質10段に届かない。一方、saphyr（0.3.3 で計測）は2 MiB スレッド（`spawn_blocking` の既定）で、
 /// ブロック列を深さ約8000まで入れ子にすると解析または木の解放でスタックあふれを起こす
 /// （深さ3000は通る）。上限64は通常の利用の数倍で、あふれる深さの100分の1以下に収まる。
 const YAML_NESTING_LIMIT: usize = 64;
@@ -4645,7 +4714,9 @@ fn reject_links(path: &Path) -> Result<()> {
                 {
                     use std::os::windows::fs::MetadataExt;
                     ensure!(
-                        meta.file_attributes() & 0x400 == 0,
+                        meta.file_attributes()
+                            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+                            == 0,
                         "Reparse points are forbidden"
                     );
                 }
@@ -4698,7 +4769,8 @@ fn safe_join(root: &Path, relative: &str) -> Result<PathBuf> {
     ensure!(target.starts_with(root), "Path escapes source");
     Ok(target)
 }
-fn skipped(name: &str) -> bool {
+/// 探索が辿らないフォルダー名。監視の通知の除外と共有する。
+pub(crate) fn skipped(name: &str) -> bool {
     name.starts_with(".skilvella-")
         || matches!(
             name.to_ascii_lowercase().as_str(),
@@ -4709,7 +4781,10 @@ fn is_link(meta: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        if meta.file_attributes() & 0x400 != 0 {
+        if meta.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
             return true;
         }
     }
@@ -4889,22 +4964,14 @@ fn atomic_write(path: &Path, content: &str, expected: Option<&str>) -> Result<()
     #[cfg(target_os = "macos")]
     {
         use std::os::fd::AsRawFd;
-        unsafe extern "C" {
-            fn fcopyfile(
-                from: std::ffi::c_int,
-                to: std::ffi::c_int,
-                state: *mut std::ffi::c_void,
-                flags: u32,
-            ) -> std::ffi::c_int;
-        }
         let original = fs::File::open(path)?;
-        // Apple COPYFILE_ACL(1) + XATTR(4)。新しい本文の更新時刻はそのまま保持する。
+        // COPYFILE_ACL + COPYFILE_XATTR。新しい本文の更新時刻はそのまま保持する。
         let copied = unsafe {
-            fcopyfile(
+            libc::fcopyfile(
                 original.as_raw_fd(),
                 file.as_raw_fd(),
                 std::ptr::null_mut(),
-                5,
+                libc::COPYFILE_ACL | libc::COPYFILE_XATTR,
             )
         };
         ensure!(
@@ -4928,17 +4995,7 @@ fn atomic_write(path: &Path, content: &str, expected: Option<&str>) -> Result<()
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
-        #[link(name = "kernel32")]
-        unsafe extern "system" {
-            fn ReplaceFileW(
-                replaced: *const u16,
-                replacement: *const u16,
-                backup: *const u16,
-                flags: u32,
-                exclude: *mut std::ffi::c_void,
-                reserved: *mut std::ffi::c_void,
-            ) -> i32;
-        }
+        use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
         let old: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
         let new: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
         let result = unsafe {

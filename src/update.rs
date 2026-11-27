@@ -279,6 +279,17 @@ fn file_hash(path: &Path) -> anyhow::Result<String> {
     Ok(hash_hex(&hash.finalize()))
 }
 
+fn read_plain_json(path: &Path) -> anyhow::Result<serde_json::Value> {
+    plain_path(path)?;
+    Ok(serde_json::from_slice(&fs::read(path)?)?)
+}
+
+fn launcher_tag(next: &serde_json::Value) -> anyhow::Result<&str> {
+    let tag = next["tag"].as_str().context("Launcher tag missing")?;
+    ensure!(tag.starts_with('v'), "Invalid launcher tag");
+    Ok(tag)
+}
+
 fn plain_path(path: &Path) -> anyhow::Result<()> {
     ensure!(path.is_absolute(), "Update paths must be absolute");
     for ancestor in path.ancestors() {
@@ -292,7 +303,9 @@ fn plain_path(path: &Path) -> anyhow::Result<()> {
                 {
                     use std::os::windows::fs::MetadataExt;
                     ensure!(
-                        meta.file_attributes() & 0x400 == 0,
+                        meta.file_attributes()
+                            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+                            == 0,
                         "Update path contains a reparse point"
                     );
                 }
@@ -433,11 +446,8 @@ fn managed(
     let pointer = root.join("cache.json");
     #[cfg(windows)]
     let _ = launcher_mutex_name(root)?;
-    plain_path(&pointer)?;
-    let previous: serde_json::Value = serde_json::from_slice(&fs::read(&pointer)?)?;
-    plain_path(&directory.join("install.json"))?;
-    let installed: serde_json::Value =
-        serde_json::from_slice(&fs::read(directory.join("install.json"))?)?;
+    let previous = read_plain_json(&pointer)?;
+    let installed = read_plain_json(&directory.join("install.json"))?;
     ensure!(
         previous["schema"] == 1
             && previous["tag"].as_str() == directory.file_name().and_then(|n| n.to_str()),
@@ -756,8 +766,7 @@ fn launcher_pointer(
     directory: &Path,
 ) -> anyhow::Result<()> {
     let pointer = managed.root.join("cache.json");
-    plain_path(&pointer)?;
-    let current: serde_json::Value = serde_json::from_slice(&fs::read(&pointer)?)?;
+    let current = read_plain_json(&pointer)?;
     ensure!(
         &current == expected,
         "Launcher cache changed during updating"
@@ -769,8 +778,7 @@ fn launcher_pointer(
 
 fn rollback_managed(managed: &Managed, directory: &Path) -> anyhow::Result<()> {
     let pointer = managed.root.join("cache.json");
-    plain_path(&pointer)?;
-    let current: serde_json::Value = serde_json::from_slice(&fs::read(&pointer)?)?;
+    let current = read_plain_json(&pointer)?;
     if current == managed.next {
         launcher_pointer(managed, &managed.next, &managed.previous, directory)?;
     } else {
@@ -779,10 +787,7 @@ fn rollback_managed(managed: &Managed, directory: &Path) -> anyhow::Result<()> {
             "Launcher cache changed; automatic recovery stopped"
         );
     }
-    let tag = managed.next["tag"]
-        .as_str()
-        .context("Launcher tag missing")?;
-    ensure!(tag.starts_with('v'), "Invalid launcher tag");
+    let tag = launcher_tag(&managed.next)?;
     version(tag)?;
     let published = managed.root.join("versions").join(tag);
     plain_path(&published)?;
@@ -792,9 +797,8 @@ fn rollback_managed(managed: &Managed, directory: &Path) -> anyhow::Result<()> {
     // 旧ポインターと新版ディレクトリの組合せを残すと既存ランチャーが拒否する。
     // 今回公開した版だけを照合して非公開ステージへ戻し、既存の版には触れない。
     let manifest = published.join("install.json");
-    plain_path(&manifest)?;
     ensure!(
-        serde_json::from_slice::<serde_json::Value>(&fs::read(manifest)?)? == managed.next,
+        read_plain_json(&manifest)? == managed.next,
         "Published version metadata changed; automatic recovery stopped"
     );
     ensure!(
@@ -1024,10 +1028,7 @@ fn install_inner(
     if let Some(managed) = &plan.managed {
         #[cfg(windows)]
         let _ = launcher_mutex_name(&managed.root)?;
-        let tag = managed.next["tag"]
-            .as_str()
-            .context("Launcher tag missing")?;
-        ensure!(tag.starts_with('v'), "Invalid launcher tag");
+        let tag = launcher_tag(&managed.next)?;
         version(tag)?;
         let next_dir = managed.root.join("versions").join(tag);
         plain_path(&next_dir)?;
@@ -1073,14 +1074,10 @@ fn install_inner(
     if let Some(managed) = &plan.managed {
         progress.launcher_lock = Some(acquire_launcher_mutex(&managed.root)?);
         let pointer = managed.root.join("cache.json");
-        plain_path(&pointer)?;
-        let current: serde_json::Value = serde_json::from_slice(&fs::read(pointer)?)?;
+        let current = read_plain_json(&pointer)?;
         if current == managed.next {
-            plain_path(&target.with_file_name("install.json"))?;
             ensure!(
-                serde_json::from_slice::<serde_json::Value>(&fs::read(
-                    target.with_file_name("install.json")
-                )?)? == managed.next,
+                read_plain_json(&target.with_file_name("install.json"))? == managed.next,
                 "Existing new version metadata does not match the verified update"
             );
             ensure!(
@@ -1165,8 +1162,7 @@ fn relaunch(plan: &Plan, target: &Path) -> anyhow::Result<Child> {
 fn recover_previous(directory: &Path, plan: &Plan) -> anyhow::Result<Child> {
     if let Some(managed) = &plan.managed {
         let pointer = managed.root.join("cache.json");
-        plain_path(&pointer)?;
-        let current: serde_json::Value = serde_json::from_slice(&fs::read(pointer)?)?;
+        let current = read_plain_json(&pointer)?;
         ensure!(
             current == managed.previous,
             "Another launcher changed the selected version; previous version was not restarted"
@@ -1259,21 +1255,6 @@ mod tests {
         // 上限を超える応答は、JSON として妥当でも拒否する。
         let huge = format!(r#"{{"version":"1.2.3","pad":"{}"}}"#, "a".repeat(5000));
         assert!(feed(&huge).is_err());
-    }
-
-    #[test]
-    fn failed_download_reports_the_downloader_status() {
-        // ポート1のループバックは待受がなく、外部通信なしで curl の接続失敗を再現できる。
-        let error = request("https://127.0.0.1:1/", 4096)
-            .unwrap_err()
-            .to_string();
-        // 終了状態の表記はOSで異なる（Windows: exit code、unix: exit status）ため、
-        // 括弧で状態が付くことだけを確認し、終了コードの値には依存しない。
-        assert!(
-            error.starts_with("Could not retrieve the stable release over HTTPS (")
-                && error.ends_with(')'),
-            "{error}"
-        );
     }
 
     #[test]

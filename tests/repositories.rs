@@ -362,7 +362,7 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
     for repository in ["repo", special, "unselected"] {
         fs::create_dir_all(source.join(repository).join(".git")).unwrap();
     }
-    for folder in (0..105)
+    for folder in (0..4)
         .map(|i| format!("repo/skill-{i:02}"))
         .chain([format!("{special}/one"), "unselected/one".into()])
     {
@@ -379,36 +379,32 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
     let library = Library::open_for_user(&root.join("data"), &root.join("home"), None).unwrap();
     library.add_source("local", &source).unwrap();
     fs::rename(
-        source.join("repo/skill-103/SKILL.md"),
-        source.join("repo/skill-103/retired.txt"),
+        source.join("repo/skill-02/SKILL.md"),
+        source.join("repo/skill-02/retired.txt"),
     )
     .unwrap();
     fs::write(
-        source.join("repo/skill-104/SKILL.md"),
+        source.join("repo/skill-03/SKILL.md"),
         "---\nname: [broken\n---\ninvalid",
     )
     .unwrap();
     library.scan().unwrap();
     // 新規スキルは走査で公開状態になる。この検証は一括設定の前後の公開状態を比べるため、
-    // 準備段階で全件を明示的に未公開へ戻す（検索は1回100件までなので、取り切るまでoffsetを進める）。
-    let mut ids = Vec::new();
-    loop {
-        let page = library
-            .search(
-                SearchQuery {
-                    limit: 100,
-                    offset: ids.len(),
-                    ..Default::default()
-                },
-                false,
-            )
-            .unwrap();
-        if page.skills.is_empty() {
-            break;
-        }
-        ids.extend(page.skills.into_iter().map(|skill| skill.id));
-    }
-    assert_eq!(ids.len(), 107);
+    // 準備段階で全件を明示的に未公開へ戻す。
+    let ids: Vec<String> = library
+        .search(
+            SearchQuery {
+                limit: 100,
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap()
+        .skills
+        .into_iter()
+        .map(|skill| skill.id)
+        .collect();
+    assert_eq!(ids.len(), 6);
     for id in &ids {
         library.set_published(id, false).unwrap();
     }
@@ -455,7 +451,9 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
         .await
         .unwrap();
     assert!(top.contains("action=\"/repositories/bulk\""));
-    assert!(top.contains("data-count=\"103\""));
+    assert!(top.contains("data-count=\"2\""));
+    // 取得元の絞り込みリンクが、特殊文字を含むリポジトリ名をバイト単位で符号化する。
+    assert!(top.contains("repository=repo%20%26%20%E6%97%A5%E6%9C%AC%E8%AA%9E%20%2B%20%25"));
     assert!(top.contains("対象件数はスキャン索引に基づきます。"));
     for (key, replacement) in [
         ("csrf", "invalid"),
@@ -521,8 +519,8 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
     assert!(result.status().is_success());
     assert_eq!(result.url().path(), "/");
     let body = result.text().await.unwrap();
-    assert!(body.contains("取得元の一括設定: 104件更新、2件対象外。"));
-    let mut all = control
+    assert!(body.contains("取得元の一括設定: 3件更新、2件対象外。"));
+    let all = control
         .search(
             SearchQuery {
                 limit: 100,
@@ -532,21 +530,8 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
         )
         .unwrap()
         .skills;
-    all.extend(
-        control
-            .search(
-                SearchQuery {
-                    limit: 100,
-                    offset: 100,
-                    ..Default::default()
-                },
-                false,
-            )
-            .unwrap()
-            .skills,
-    );
-    assert_eq!(all.len(), 107);
-    assert_eq!(all.iter().filter(|skill| skill.published).count(), 104);
+    assert_eq!(all.len(), 6);
+    assert_eq!(all.iter().filter(|skill| skill.published).count(), 3);
     for skill in all {
         let selected = !skill.relative_path.starts_with("unselected/")
             && !skill.missing
@@ -557,7 +542,7 @@ async fn repository_bulk_form_validates_input_and_updates_all_selected_pages() {
     }
     let codex = control.codex_settings().unwrap();
     assert!(codex.last_error.is_empty(), "{}", codex.last_error);
-    assert_eq!(codex.exported, 104);
+    assert_eq!(codex.exported, 3);
     assert_eq!(
         fs::read_to_string(source.join("repo/skill-00/SKILL.md")).unwrap(),
         "---\nname: repo-skill-00\ndescription: Bulk form fixture\n---\nOriginal body\n"

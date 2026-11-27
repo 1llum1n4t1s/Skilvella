@@ -475,46 +475,17 @@ mod tests {
     }
 
     #[test]
-    fn logon_runs_the_same_executable_without_registering_again() {
-        let executable = Path::new(r"D:\アプリ フォルダー\skilvella.exe");
-        assert_eq!(
-            startup_command(executable).unwrap(),
-            wide(r#""D:\アプリ フォルダー\skilvella.exe" --no-autostart"#),
-        );
-        assert!(startup_command(Path::new("skilvella.exe")).is_err());
-    }
-
-    #[test]
     fn logon_registration_creates_value_and_preserves_existing_entry() -> Result<()> {
-        let directory = env::var_os("SKILVELLA_MIGRATION_TEST_ROOT")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(env::temp_dir)
-            .join(format!("startup-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory)?;
-        let file: Vec<_> = directory
-            .join("user.hiv")
-            .as_os_str()
-            .encode_wide()
-            .chain([0])
-            .collect();
+        // 相対パスは拒否する（Runの値の乗っ取りを防ぐ）。
+        assert!(startup_command(Path::new("skilvella.exe")).is_err());
         // ファイルに閉じた専用ハイブで、実際のユーザーのRunキーを変更せずに検証する。
-        let mut root = null_mut();
-        check(unsafe {
-            RegLoadAppKeyW(
-                file.as_ptr(),
-                &mut root,
-                KEY_ALL_ACCESS,
-                REG_PROCESS_APPKEY,
-                0,
-            )
-        })?;
-        let root = RunKey(root);
+        let root = private_hive("startup")?;
         let executable = Path::new(r"D:\アプリ フォルダー\skilvella.exe");
         ensure_run_value(root.0, executable)?;
         ensure_run_value(root.0, Path::new(r"D:\別の配置\skilvella.exe"))?;
 
         let key = RunKey::open(root.0)?;
-        let expected = startup_command(executable)?;
+        let expected = wide(r#""D:\アプリ フォルダー\skilvella.exe" --no-autostart"#);
         let mut actual = vec![0_u16; expected.len()];
         let mut bytes = size_of_val(actual.as_slice()) as u32;
         let mut kind = 0;

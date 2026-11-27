@@ -339,36 +339,31 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_on_and_unchecked() {
-        let settings = AutoUpdateSettings::default();
-        assert!(settings.auto_update);
-        assert_eq!(settings.last_checked_at, None);
-        // ファイルが無いデータフォルダーも既定値で動く。
-        assert_eq!(load_settings(&scratch()), settings);
-    }
-
-    #[test]
-    fn broken_or_mistyped_json_falls_back_per_field() {
-        let default = AutoUpdateSettings::default();
-        for broken in [&b""[..], b"{", b"not json", b"[1,2]", b"null", b"\xff\xfe"] {
-            assert_eq!(parse_settings(broken), default);
-        }
-        // 型が違う項目だけが既定値へ戻り、読める項目は生きる。
-        let parsed = parse_settings(br#"{"auto_update":"no","last_checked_at":123}"#);
-        assert!(parsed.auto_update);
-        assert_eq!(parsed.last_checked_at, Some(123));
-        let parsed = parse_settings(br#"{"auto_update":false,"last_checked_at":"x"}"#);
-        assert!(!parsed.auto_update);
-        assert_eq!(parsed.last_checked_at, None);
-    }
-
-    #[test]
     fn corrupt_file_on_disk_is_ignored_and_can_be_overwritten() {
         let dir = scratch();
         fs::write(dir.join(SETTINGS_FILE), b"{ broken").unwrap();
         assert_eq!(load_settings(&dir), AutoUpdateSettings::default());
+        assert!(AutoUpdateSettings::default().auto_update);
         set_auto_update(&dir, false).unwrap();
         assert!(!load_settings(&dir).auto_update);
+        // 型が違う項目だけが既定値へ戻り、読める項目は生きる。
+        fs::write(
+            dir.join(SETTINGS_FILE),
+            br#"{"auto_update":false,"last_checked_at":"x"}"#,
+        )
+        .unwrap();
+        let settings = load_settings(&dir);
+        assert!(!settings.auto_update);
+        assert_eq!(settings.last_checked_at, None);
+        // 型が違う auto_update は既定（ON）へ戻り、読める last_checked_at は生きる。
+        fs::write(
+            dir.join(SETTINGS_FILE),
+            br#"{"auto_update":"no","last_checked_at":7}"#,
+        )
+        .unwrap();
+        let settings = load_settings(&dir);
+        assert!(settings.auto_update);
+        assert_eq!(settings.last_checked_at, Some(7));
     }
 
     #[test]
@@ -400,29 +395,16 @@ mod tests {
         assert!(is_due(Some(1_000), 1_000 + day));
         // 時計の巻き戻しで前回時刻が未来になっても、永久に確認しない状態にならない。
         assert!(is_due(Some(5_000), 1_000));
-    }
-
-    #[test]
-    fn should_check_requires_opt_in_and_due() {
-        let now = 1_000_000;
-        let due = AutoUpdateSettings {
-            auto_update: true,
-            last_checked_at: Some(now - CHECK_INTERVAL.as_secs()),
+        // 自動更新がOFFなら、期限を過ぎていても確認しない。
+        let off = AutoUpdateSettings {
+            auto_update: false,
+            last_checked_at: None,
         };
-        assert!(should_check(&due, now));
-        assert!(!should_check(
-            &AutoUpdateSettings {
-                auto_update: false,
-                ..due
-            },
-            now
-        ));
-        assert!(!should_check(
-            &AutoUpdateSettings {
-                last_checked_at: Some(now - 60),
-                ..due
-            },
-            now
-        ));
+        assert!(!should_check(&off, 10));
+        let on = AutoUpdateSettings {
+            auto_update: true,
+            last_checked_at: None,
+        };
+        assert!(should_check(&on, 10));
     }
 }

@@ -1451,6 +1451,16 @@ fn windows_alias_names_are_unpublished_error_rows_and_can_be_unpublished() {
     let (base, library, source) = fixture();
     let extended = source.canonicalize().unwrap();
     let names = ["trail.", "spaced "];
+    // Win32では通常の手段で消せない名前なので、`\\?\` 形式で終了時に片付ける（失敗しても無視）。
+    struct Cleanup(Vec<PathBuf>);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for dir in &self.0 {
+                let _ = fs::remove_dir_all(dir);
+            }
+        }
+    }
+    let _cleanup = Cleanup(names.iter().map(|name| extended.join(name)).collect());
     for name in names {
         let dir = extended.join(name);
         fs::create_dir(&dir).unwrap();

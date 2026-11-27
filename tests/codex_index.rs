@@ -876,6 +876,47 @@ fn claude_links_preserve_user_entries_and_adopt_legacy_codex_links() {
 }
 
 #[test]
+fn claude_links_record_is_not_rewritten_when_unchanged() {
+    let (base, library, id) = setup();
+    publish(&library, &id, true);
+    library.set_codex_policy(&id, false, true).unwrap();
+    library.set_codex_enabled(true).unwrap();
+    library
+        .set_clients_enabled(&[(SkillClient::Claude, true)])
+        .unwrap();
+    let record = base.join("data/claude-index/links.json");
+    let text = fs::read_to_string(&record).unwrap();
+    assert!(text.contains("\"original\""), "{text}");
+    let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    let set_past = || {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&record)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+    };
+    set_past();
+    let before = fs::metadata(&record).unwrap().modified().unwrap();
+
+    // 変化のない再同期では書き直さない。
+    library.sync_codex_entries().unwrap();
+    assert_eq!(fs::read_to_string(&record).unwrap(), text);
+    assert_eq!(fs::metadata(&record).unwrap().modified().unwrap(), before);
+
+    // 内容が変わるときは書き直す（記録にある存在しないリンク名は外される）。
+    fs::write(
+        &record,
+        text.replace("\"original\"", "\"ghost\",\"original\""),
+    )
+    .unwrap();
+    set_past();
+    library.sync_codex_entries().unwrap();
+    assert_eq!(fs::read_to_string(&record).unwrap(), text);
+    assert!(fs::metadata(&record).unwrap().modified().unwrap() > before);
+}
+
+#[test]
 fn claude_links_refuse_a_managed_source_link_directory() {
     let (base, library, _) = setup();
     fs::create_dir_all(base.join("home/.claude/skills/own/x")).unwrap();

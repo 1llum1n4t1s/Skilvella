@@ -40,9 +40,8 @@ const STAGE_FILES: &[&str] = &[
     "managed-version",
     "failed-version",
 ];
-/// 設定ファイルの原子的保存（`auto::save_settings`）が経由する一時ファイルの名前。
-/// `.<設定ファイル名>.<UUID>.tmp`。保存の途中で止まった場合に残りうる。
-const SETTINGS_TMP_PREFIX: &str = ".app-update.json.";
+/// 設定ファイルの原子的保存（`auto::save_settings`）が経由する一時ファイルの末尾。
+/// 名前全体は `.<設定ファイル名>.<UUID>.tmp`。保存の途中で止まった場合に残りうる。
 const TMP_SUFFIX: &str = ".tmp";
 
 /// 清掃の結果。テストと、起動時の診断出力に使う。
@@ -199,7 +198,9 @@ fn sweep_settings_temporaries(data_dir: &Path, now: SystemTime, report: &mut Rep
             continue;
         };
         let Some(id) = name
-            .strip_prefix(SETTINGS_TMP_PREFIX)
+            .strip_prefix('.')
+            .and_then(|rest| rest.strip_prefix(super::auto::SETTINGS_FILE))
+            .and_then(|rest| rest.strip_prefix('.'))
             .and_then(|rest| rest.strip_suffix(TMP_SUFFIX))
         else {
             continue;
@@ -247,7 +248,10 @@ fn is_link(meta: &fs::Metadata) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
         // junction などの reparse point。
-        if meta.file_attributes() & 0x400 != 0 {
+        if meta.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+        {
             return true;
         }
     }

@@ -27,10 +27,7 @@ fn page(text: &str, offset: usize) -> anyhow::Result<(&str, usize)> {
         offset <= text.len() && text.is_char_boundary(offset),
         "Invalid UTF-8 byte offset"
     );
-    let mut end = offset.saturating_add(PAGE_BYTES).min(text.len());
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = text.floor_char_boundary(offset.saturating_add(PAGE_BYTES));
     Ok((&text[offset..end], end))
 }
 

@@ -128,7 +128,7 @@ pub async fn run(
         let mut state = AppState::new(library.clone());
         state.shutdown = shutdown.clone();
         let watcher = watch.then(|| skilvella::watch::start(state.clone()));
-        let codex_index = start_codex_index(state.library.clone());
+        let codex_index = start_codex_index(state.clone());
         let (router, cancel_mcp) = skilvella::server::router_with_shutdown(state, port);
         let (stop_http, requested) = oneshot::channel();
         let mut server = tokio::spawn(async move {
@@ -173,18 +173,15 @@ pub async fn run(
     }
 }
 
-fn start_codex_index(library: Library) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+fn start_codex_index(state: AppState) -> (oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
     let (stop, mut stopped) = oneshot::channel();
     let task = tokio::spawn(async move {
         let mut previous_error = String::new();
         loop {
-            let library = library.clone();
-            // 更新操作と同じLibrary経路を使い、同期を再帰的に呼び出さない。
-            let result = tokio::task::spawn_blocking(move || library.sync_codex_entries()).await;
-            let error = match result {
-                Ok(Ok(())) => String::new(),
-                Ok(Err(error)) => format!("{error:#}"),
-                Err(error) => error.to_string(),
+            // 更新操作と同じLibrary経路を使い、同期を再帰的に呼び出さない（run_mutは同期を二重に走らせる）。
+            let error = match state.run(|lib| lib.sync_codex_entries()).await {
+                Ok(()) => String::new(),
+                Err(error) => format!("{error:#}"),
             };
             if !error.is_empty() && error != previous_error {
                 eprintln!(

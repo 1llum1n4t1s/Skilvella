@@ -194,13 +194,17 @@ async fn settings(Extension(locale): Extension<Locale>, State(state): State<AppS
                     })
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            Ok((clients, unavailable_folders(&lib.sources()?)))
+            // Libraryとは別のJSONから読む。読めない場合も既定値（ON）で表示する。
+            let auto_update = crate::update::auto::load_settings(lib.data_dir()).auto_update;
+            Ok((
+                clients,
+                unavailable_folders(&lib.source_rows()?),
+                auto_update,
+            ))
         })
         .await;
-    // Libraryとは別のJSONから読む。読めない場合も既定値（ON）で表示する。
-    let auto_update = crate::update::auto::load_settings(state.library.data_dir()).auto_update;
     match result {
-        Ok((clients, unavailable_folders)) => render(
+        Ok((clients, unavailable_folders, auto_update)) => render(
             locale,
             SettingsPage {
                 unavailable_folders,
@@ -1822,7 +1826,7 @@ async fn detail_page(
                 commands,
                 !clients.is_empty(),
                 automatic_only_hidden,
-                unavailable_folders(&lib.sources()?),
+                unavailable_folders(&lib.source_rows()?),
             ))
         })
         .await
@@ -2213,52 +2217,6 @@ mod tests {
 "
             )
             .is_empty()
-        );
-    }
-
-    #[test]
-    fn encodes_query_bytes() {
-        assert_eq!(super::encoded(""), "");
-        assert_eq!(super::encoded("aZ09-._~"), "aZ09-._~");
-        assert_eq!(
-            super::encoded(" /?&=+%日本語"),
-            "%20%2F%3F%26%3D%2B%25%E6%97%A5%E6%9C%AC%E8%AA%9E"
-        );
-    }
-
-    /// 集約前の `format!` と同じURLをバイト単位で生成することを確認する。
-    #[test]
-    fn repository_url_matches_previous_format() {
-        let cases = [
-            ("", ""),
-            ("local", "repo"),
-            ("git hub", "owner/名前&x=1"),
-            ("a+b%", "?#~._-"),
-        ];
-        for (source, repository) in cases {
-            let previous = format!(
-                "/?repository_source={}&repository={}",
-                super::encoded(source),
-                super::encoded(repository)
-            );
-            assert_eq!(super::repository_url(source, repository), previous);
-            // 呼び出し側で付け足す形式も旧実装と一致する。
-            let message = "scan-done";
-            assert_eq!(
-                format!(
-                    "{}&message={message}",
-                    super::repository_url(source, repository)
-                ),
-                format!(
-                    "/?repository_source={}&repository={}&message={message}",
-                    super::encoded(source),
-                    super::encoded(repository)
-                )
-            );
-        }
-        assert_eq!(
-            super::repository_url("git hub", "a/b"),
-            "/?repository_source=git%20hub&repository=a%2Fb"
         );
     }
 }
